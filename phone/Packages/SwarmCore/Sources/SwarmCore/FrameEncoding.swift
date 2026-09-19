@@ -76,8 +76,14 @@ public struct EncodedFrame: Sendable, Equatable {
     public var width: Int
     public var height: Int
     public var intrinsics: CameraIntrinsics?
+    /// Device-clock time of the buffer that was actually encoded. Buffers are
+    /// staged at 60 Hz and tickets issued far slower, so this is rarely the
+    /// ticket's own timestamp — and it is the one latency must be measured from.
+    public var captureTimestamp: Double?
 
-    public init(frameID: UInt64, jpeg: Data, width: Int, height: Int, intrinsics: CameraIntrinsics?) {
+    public init(frameID: UInt64, jpeg: Data, width: Int, height: Int, intrinsics: CameraIntrinsics?,
+                captureTimestamp: Double? = nil) {
+        self.captureTimestamp = captureTimestamp
         self.frameID = frameID
         self.jpeg = jpeg
         self.width = width

@@ -161,6 +161,14 @@ public struct RoomAligner: Sendable, Equatable {
         seatAlignment = nil
     }
 
+    /// ARKit threw its map away. Neither the venue frame nor the frame a seat
+    /// tap was made in exists any more. The tapped spot itself is kept, so the
+    /// operator only has to face the stage and confirm again.
+    public mutating func invalidate() {
+        source = .none
+        seatAlignment = nil
+    }
+
     public func project(_ pose: Pose) -> RoomPose? {
         alignment?.project(pose)
     }
