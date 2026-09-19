@@ -23,6 +23,7 @@ FOUND_CONF = 0.8
 CLUSTER_M = 1.5
 FORGET_S = 90          # sightings nobody has reinforced for this long are dropped
 TARGET_HEIGHT_M = 1.0  # rough size of the target (a seated person / an object on a table), for distance
+PERSON_HEIGHT_M = 1.7  # a detected person's box, for distance (real inference boxes whole people)
 FRAME_ASPECT = 4 / 3   # frame height / width (phones stream portrait)
 
 
@@ -48,7 +49,7 @@ class Sightings:
             return None
         cx = box["x"] + box["w"] / 2
         off = math.degrees(math.atan((cx - 0.5) * 2 * math.tan(self.hfov / 2)))
-        d = TARGET_HEIGHT_M / (2 * box["h"] * math.tan(self.vfov / 2))
+        d = box.get("heightM", TARGET_HEIGHT_M) / (2 * box["h"] * math.tan(self.vfov / 2))
         d = max(0.5, min(d, self.room["coneLength"] + 2))
         b = math.radians(pose["heading"] + off)
         return pose["x"] + d * math.sin(b), pose["y"] - d * math.cos(b)

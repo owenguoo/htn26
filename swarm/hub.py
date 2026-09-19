@@ -32,7 +32,7 @@ from .detection import FrameSnapshot, SearchState, DetectionResult
 from .control import Settings, Auth, install_routes, load_env
 from .coverage import Coverage
 from .planner import Planner
-from .sightings import FOUND_CONF, POSSIBLE_CONF, MockDetector, Sightings
+from .sightings import FOUND_CONF, PERSON_HEIGHT_M, POSSIBLE_CONF, MockDetector, Sightings
 from .target import Target
 from .protocol import now_ms, pack, unpack
 
@@ -50,6 +50,7 @@ EXTERNAL_POSE_TTL = 5000  # a pose from the positioning service overrides the se
 REAP_AFTER_MS = 30000    # forget disconnected phones after this long
 PHASES = ("lobby", "calibrate", "search", "found", "end")  # show flow, driven from /console
 SEARCH_PHASES = ("search", "found")  # coverage and candidate detection only run in these
+REAL_NEAR_MISS = 0.15   # similarity this far below the match threshold still hints (heatmap only)
 PING_TTL_MS = 12000
 MESSAGE_TTL_MS = 8000
 WORLD_HZ = 2             # how often phones get the shared picture (mini-map, progress)
@@ -460,8 +461,9 @@ class Hub:
             self.mission.trigger()  # speech can be a request ("I need help here"): look right away
 
     def check_sightings(self, viewers: dict, now: float) -> list[tuple[str, dict]]:
-        """Announce new possible sightings; confirm the find once one is confident enough."""
-        if self.search.mode != "rehearsal" or self.target.found_by:
+        """Announce new possible sightings; in rehearsals, confirm the find once one is confident enough.
+        A real search never finds on its own: the operator confirms (see /api/search/confirm)."""
+        if self.target.found_by:
             return []
         for s in self.sightings.items:
             conf = self.sightings.confidence(s)
@@ -472,6 +474,8 @@ class Hub:
                                   first.id if first else None)
                 if self.mission:
                     self.mission.trigger()  # a sighting to double-check is exactly what autonomy is for
+        if self.search.mode != "rehearsal":
+            return []
         best = self.sightings.best()
         if not best or self.sightings.confidence(best) < FOUND_CONF:
             return []
@@ -483,6 +487,32 @@ class Hub:
         prob = self.coverage.prob
         mass = {name: sum(prob[i] for i, _, _ in cells) for name, cells in self.planner.sector_cells.items()}
         return [{"sector": s, "share": round(m, 3)} for s, m in sorted(mass.items(), key=lambda kv: -kv[1])[:n]]
+
+    def real_evidence(self, accepted) -> int:
+        """A real detection result as search evidence: people who look like the reference raise the
+        probability where they stand and can become possible sightings; near misses nudge the heatmap
+        (worth another look); everyone else is someone else. Placed from the pose the phone had when the
+        frame was taken. Evidence only: it never confirms a find or claims a position (the operator does)."""
+        pose = accepted.pose
+        if self.search.mode != "real" or self.phase != "search" or not pose or pose.get("heading") is None:
+            return 0
+        threshold = self.search.threshold
+        boxes = []
+        for b in accepted.result.boxes:
+            if b.similarity >= threshold:  # a match: 0.55 at the threshold, up to 0.95
+                score = 0.55 + 0.4 * min(1.0, (b.similarity - threshold) / max(1 - threshold, 0.05))
+            elif b.similarity >= threshold - REAL_NEAR_MISS:  # close: a faint hint, heatmap only
+                score = 0.1 + 0.25 * (b.similarity - (threshold - REAL_NEAR_MISS)) / REAL_NEAR_MISS
+            else:
+                continue
+            score *= 0.6 + 0.4 * b.detectionScore  # a shaky detection counts for less
+            boxes.append({"x": b.x, "y": b.y, "w": b.w, "h": b.h, "score": round(score, 3), "heightM": PERSON_HEIGHT_M})
+        placed = self.sightings.ingest(accepted.result.phoneId, pose, boxes, now_ms() / 1000)
+        for x, y, score in placed:
+            self.coverage.boost(x, y, score)
+        if placed and self.mission:
+            self.mission.trigger()
+        return len(placed)
 
     def new_search(self) -> None:
         self.sightings.reset()
@@ -987,7 +1017,9 @@ async def post_detections(body: dict, request: Request) -> dict:
                 raise HTTPException(409, 'search changed')
             if phone.ws:
                 await phone.ws.send_json({'type': 'command', 'cmd': 'detections', **result.model_dump(), 'threshold': hub.search.threshold, 'ttlMs': 1500})
-    return {'ok': True, 'boxes': len(result.boxes)}
+    accepted = hub.search.latest.get(result.phoneId)
+    evidence = hub.real_evidence(accepted) if accepted and accepted.result.seq == result.seq else 0
+    return {'ok': True, 'boxes': len(result.boxes), 'evidence': evidence}
 
 
 @app.get("/api/qr.svg")
