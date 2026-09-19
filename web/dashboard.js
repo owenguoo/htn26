@@ -2,7 +2,7 @@ import { makeView, drawRoom, drawCone } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
-const THUMB_FPS = Number(params.get('thumb_fps')) || 3;
+const THUMB_FPS = Number(params.get('thumb_fps')) || 10;
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -20,6 +20,7 @@ let planner = null;         // sector assignments + log from the hub
 let target = null;          // mock candidate from the hub
 let phase = null;           // show phase from the hub
 let pings = [];             // active pings from the hub
+let sightings = [];         // possible sightings from detections
 let dragPos = null;         // candidate position while the operator drags it
 let frameCount = 0;         // thumbnails received, for a sanity check in the console
 
@@ -51,6 +52,7 @@ function onJson(msg) {
     target = msg.target || null;
     phase = msg.phase || null;
     pings = msg.pings || [];
+    sightings = msg.sightings || [];
     renderPlanner();
     const seen = new Set();
     for (const p of msg.phones) {
@@ -145,6 +147,9 @@ function renderTiles() {
     if (!p.pose) tags.push(['NO SEAT', 'warn']);
     else if (!p.sim && !p.calibrated && p.pose.source === 'seat') tags.push(['UNCAL', 'warn']);
     t.tags.innerHTML = tags.map(([s, c]) => `<span class="tag ${c}">${s}</span>`).join('');
+    const cap = t.el.querySelector('.cap');
+    cap.textContent = p.caption ? p.caption.text : p.speaking ? '🎙 …' : '';
+    cap.classList.toggle('on', !!(p.caption || p.speaking));
   }
   // keep tiles in join order
   const ordered = [...phones.values()].sort((a, b) => a.index - b.index);
@@ -171,7 +176,7 @@ function createTile(p) {
   const el = document.createElement('div');
   el.className = 'tile';
   el.innerHTML = `<img alt=""><div class="placeholder">waiting for video…</div><div class="bar"></div>
-    <div class="tags"></div><div class="meta"><div class="who"></div><div class="nums"></div></div>`;
+    <div class="tags"></div><div class="cap"></div><div class="meta"><div class="who"></div><div class="nums"></div></div>`;
   const t = {
     el, img: el.querySelector('img'), placeholder: el.querySelector('.placeholder'),
     who: el.querySelector('.who'), nums: el.querySelector('.nums'), tags: el.querySelector('.tags'), url: null,
@@ -198,8 +203,9 @@ function renderStats() {
   $('#candBtn').textContent = target ? 'Remove candidate' : 'Add candidate';
   const unplaced = live.filter((p) => !p.pose).length;
   $('#legend').innerHTML = [
-    `<span><i class="sw" style="background:${COV_COLORS[0]}"></i>Not looked</span>`,
-    `<span><i class="sw" style="background:${COV_COLORS[1]}"></i>Looked at</span>`,
+    `<span><i class="sw" style="background:${heatColor(0)}"></i>Ruled out</span>`,
+    `<span><i class="sw" style="background:${heatColor(0.6)}"></i>Possible</span>`,
+    `<span><i class="sw" style="background:${heatColor(1)}"></i>Most likely</span>`,
     '<span>Cone = camera view (55° FOV)</span>',
     unplaced ? `<span style="color:var(--warn)">${unplaced} phone${unplaced > 1 ? 's' : ''} not placed yet</span>` : '',
   ].join('');
@@ -224,8 +230,7 @@ new ResizeObserver(resizeMap).observe($('#mapWrap'));
 // ---- candidate: drag it around the floor plan
 let lastDragSend = 0;
 function candidatePx() {
-  const t = dragPos || target;
-  return t ? view.toPx(t.x, t.y) : null;
+  return null; // the audience screen never shows (or lets anyone drag) the hidden candidate; use /console
 }
 function roomPoint(e) {
   const r = canvas.getBoundingClientRect();
@@ -264,9 +269,32 @@ $('#candBtn').addEventListener('click', () => {
 });
 $('#respN').addEventListener('change', (e) => send({ type: 'target', responders: Number(e.target.value) }));
 
+function drawSightings() {
+  if (target?.foundBy) return;
+  for (const sg of sightings) {
+    if (sg.confidence < 0.4) continue;
+    const [x, y] = view.toPx(sg.x, sg.y);
+    const k = (performance.now() / 700) % 1;
+    ctx.save();
+    ctx.strokeStyle = '#ff5d73';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 5]);
+    ctx.lineDashOffset = -k * 11;
+    ctx.beginPath(); ctx.arc(x, y, 16, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ff5d73';
+    ctx.font = '800 12px ui-sans-serif, system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`POSSIBLE ${Math.round(sg.confidence * 100)}%`, x, y - 26);
+    ctx.restore();
+  }
+}
+
+// The audience only sees evidence: the hidden candidate is never drawn, only the confirmed find.
 function drawCandidate() {
-  if (!target) return;
-  const t = dragPos || target;
+  if (!target?.foundBy || !target.fix) return;
+  const t = { x: target.fix[0], y: target.fix[1] };
   const [cx, cy] = view.toPx(t.x, t.y);
   ctx.save();
   // responders: line to the candidate with distance
@@ -295,21 +323,8 @@ function drawCandidate() {
     const finder = phones.get(target.foundBy);
     ctx.font = '800 12px ui-sans-serif, system-ui';
     ctx.textAlign = 'center';
-    ctx.fillText(`FOUND by #${finder?.index ?? '?'}`, cx, cy - 18);
-  } else {
-    // hidden candidate: only the operator knows where it is
-    ctx.setLineDash([3, 3]);
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.font = '800 12px ui-sans-serif, system-ui';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('?', cx, cy + 1);
-    ctx.font = '600 10px ui-sans-serif, system-ui';
-    ctx.fillText('candidate · drag me', cx, cy - 18);
+    const sure = target.confidence != null ? ` · ${Math.round(target.confidence * 100)}%` : '';
+    ctx.fillText(`FOUND by #${finder?.index ?? '?'}${sure}`, cx, cy - 18);
   }
   ctx.restore();
 }
@@ -338,15 +353,25 @@ function lerpAngle(a, b, k) {
 }
 
 // 0 = not looked (black), 1 = looked (red)
-const COV_COLORS = ['#000000', '#c93a3a'];
+
+// probability heatmap: dark = ruled out, red → yellow = where the candidate most likely is
+function heatColor(level) {
+  const stops = [[0, [0, 0, 0]], [0.35, [110, 14, 20]], [0.7, [230, 60, 40]], [1, [255, 214, 90]]];
+  let i = 1;
+  while (i < stops.length - 1 && level > stops[i][0]) i++;
+  const [a, ca] = stops[i - 1], [b, cb] = stops[i];
+  const t = Math.max(0, Math.min(1, (level - a) / (b - a)));
+  const c = ca.map((v, k) => Math.round(v + (cb[k] - v) * t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
 
 function drawCoverage() {
-  if (!coverage) return;
-  const { cols, rows, cell, x0, cells } = coverage;
+  if (!coverage?.heat) return;
+  const { cols, rows, cell, x0, heat } = coverage;
   const s = cell * view.scale;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      ctx.fillStyle = COV_COLORS[cells.charCodeAt(r * cols + c) - 48];
+      ctx.fillStyle = heatColor(parseInt(heat[r * cols + c], 36) / 35);
       const [px, py] = view.toPx(x0 + c * cell, r * cell);
       ctx.fillRect(px, py, s + 0.5, s + 0.5); // +0.5 hides hairline seams between cells
     }
@@ -393,6 +418,7 @@ function drawMap() {
     ctx.fillText(String(p.index), px + 8, py);
     ctx.globalAlpha = 1;
   }
+  drawSightings();
   drawCandidate();
   drawPings();
 }

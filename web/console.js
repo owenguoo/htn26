@@ -16,7 +16,7 @@ let lastDragSend = 0;
 // ---------------------------------------------------------------- socket
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=1`);
+  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=2`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => setConn(true);
   ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
@@ -92,6 +92,8 @@ function renderMetrics() {
   $('#mLive').textContent = live.length;
   $('#mPlaced').textContent = live.filter((p) => p.pose).length;
   $('#mFps').textContent = live.reduce((s, p) => s + p.fps, 0).toFixed(1);
+  const mbps = live.reduce((s, p) => s + (p.kbps || 0), 0) / 1000;
+  $('#mFpsK').textContent = `Frames / s · ${mbps.toFixed(1)} Mbps in`;
   const lats = live.map((p) => p.latencyMs).filter((x) => x != null).sort((a, b) => a - b);
   $('#mLat').textContent = lats.length ? `${lats[Math.floor(lats.length / 2)]}ms` : '–';
   $('#mSearched').textContent = `${Math.round((st.coverage?.searched || 0) * 100)}%`;
@@ -111,12 +113,17 @@ function renderControls() {
     const f = phones.get(t.foundBy);
     const arrived = Object.values(t.responders).filter(Boolean).length;
     const total = Object.keys(t.responders).length;
-    s.textContent = `Found by #${f?.index ?? '?'} in ${(t.searchMs / 1000).toFixed(1)}s · ${arrived}/${total} responders arrived`;
+    const sure = t.confidence != null ? ` (${Math.round(t.confidence * 100)}% sure)` : '';
+    s.textContent = `Found by #${f?.index ?? '?'}${sure} in ${(t.searchMs / 1000).toFixed(1)}s · ${arrived}/${total} responders arrived`;
   } else {
-    s.textContent = `Hidden at (${t.x.toFixed(1)}, ${t.y.toFixed(1)}) · searching`;
+    const top = (st.sightings || []).reduce((a, b) => (b.confidence > (a?.confidence ?? 0) ? b : a), null);
+    s.textContent = `Hidden at (${t.x.toFixed(1)}, ${t.y.toFixed(1)}) · `
+      + (top && top.confidence >= 0.4 ? `possible sighting ${Math.round(top.confidence * 100)}%` : 'searching');
   }
   $('#respN').textContent = t ? t.respondersWanted : respondersPref;
   $('#lookingFor').textContent = st.lookingFor ? `Looking for: ${st.lookingFor}` : '';
+  const top = st.likely?.[0];
+  $('#likely').textContent = top ? `Most likely: ${top.sector} · ${Math.round(top.share * 100)}%` : '';
   const m = st.mission || {};
   $('#mcModel').textContent = m.ready ? m.model : (m.why || '');
   renderAutonomy(m);
@@ -135,6 +142,8 @@ function phoneStatus(p) {
   else if (p.stale) out.push(['Stale', '']);
   if (p.pitch != null && Math.abs(p.pitch) > 65) out.push([p.pitch < 0 ? 'Floor' : 'Ceiling', '']);
   if (p.hidden) out.push(['Hidden', '']);
+  if (p.speaking) out.push(['🎙 Speaking', 'w']);
+  if (p.oldPage && !p.sim && p.connected) out.push(['Old page · reload', 'r']);
   return out;
 }
 
@@ -160,7 +169,8 @@ function renderPhones() {
     tr.classList.toggle('off', !p.connected);
     tr.querySelector('.thumb').classList.toggle('hidden', p.hidden);
     tr.querySelector('.idx').textContent = p.index;
-    tr.querySelector('.name').innerHTML = `${escapeHtml(p.name || 'Phone')} <span class="faint">${escapeHtml(p.device || '')}</span>`;
+    tr.querySelector('.name').innerHTML = `${escapeHtml(p.name || 'Phone')} <span class="faint">${escapeHtml(p.device || '')}</span>`
+      + (p.caption ? `<div class="cap">“${escapeHtml(p.caption.text)}”</div>` : '');
     const pose = p.pose;
     tr.querySelector('.pos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : '–';
     tr.querySelector('.hd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
@@ -182,6 +192,7 @@ $('#phones').addEventListener('click', (e) => {
 
 // ---------------------------------------------------------------- expanded feed
 let viewing = null; // phone id shown large
+let showHud = (() => { try { return localStorage.getItem('swarm.hud') !== '0'; } catch { return true; } })();
 
 function openViewer(id) {
   viewing = id;
@@ -195,6 +206,7 @@ function openViewer(id) {
 
 function closeViewer() {
   viewing = null;
+  clearHud();
   $('#viewer').classList.remove('on');
   send({ type: 'focus', phoneId: null });
 }
@@ -210,6 +222,9 @@ function renderViewer() {
   const p = phones.get(viewing);
   if (!p) { closeViewer(); return; }
   $('#vNum').textContent = `#${p.index}`;
+  const cap = $('#vCap');
+  cap.textContent = p.caption ? p.caption.text : p.speaking ? '…' : '';
+  cap.classList.toggle('on', !!(p.caption || p.speaking));
   $('#vName').textContent = p.name || 'Phone';
   $('#vDevice').textContent = p.device || '';
   $('#vBadges').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
@@ -225,6 +240,146 @@ function renderViewer() {
 }
 
 $('#vClose').addEventListener('click', closeViewer);
+$('#vHud').addEventListener('click', toggleHud);
+$('#vHud').classList.toggle('on', showHud);
+function toggleHud() {
+  showHud = !showHud;
+  try { localStorage.setItem('swarm.hud', showHud ? '1' : '0'); } catch {}
+  $('#vHud').classList.toggle('on', showHud);
+}
+
+// ---------------------------------------------------------------- phone HUD mirror
+// Redraws what's on the viewed phone's screen over its feed, from the description the phone sends.
+const CARD = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+const TONES = { ok: ['#7ae582', '#04210a'], alert: ['#ff5d73', '#ffffff'], warn: ['#ffb703', '#1a1200'] };
+
+function clearHud() {
+  const c = $('#vHudCanvas');
+  c.getContext('2d').clearRect(0, 0, c.width, c.height);
+}
+
+function drawHud() {
+  requestAnimationFrame(drawHud);
+  if (!viewing) return;
+  const c = $('#vHudCanvas');
+  const img = $('#vImg');
+  const ctx = c.getContext('2d');
+  const box = img.getBoundingClientRect(), host = c.parentElement.getBoundingClientRect();
+  const W = box.width, H = box.height;
+  const dpr = window.devicePixelRatio || 1;
+  c.style.left = `${box.left - host.left}px`;
+  c.style.top = `${box.top - host.top}px`;
+  c.style.width = `${W}px`;
+  c.style.height = `${H}px`;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) {
+    c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const hud = phones.get(viewing)?.hud;
+  if (!showHud || !hud || !W || !img.getAttribute('src')) return;
+
+  // the phone's screen shows a crop of the frame: dim what the person can't see
+  let sx = 0, sy = 0, sw = W, sh = H;
+  if (hud.screen) {
+    const [a, b, e, f] = hud.screen;
+    sx = Math.max(0, a * W); sy = Math.max(0, b * H);
+    sw = Math.min(W, e * W) - sx; sh = Math.min(H, f * H) - sy;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, sy); ctx.fillRect(0, sy + sh, W, H - sy - sh);
+    ctx.fillRect(0, sy, sx, sh); ctx.fillRect(sx + sw, sy, W - sx - sw, sh);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1);
+  }
+  const k = sw / 390; // scale phone-sized HUD elements to the drawn screen (≈ iPhone width in CSS px)
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // detection boxes and AR markers live in frame coordinates
+  for (const d of hud.dets || []) {
+    ctx.strokeStyle = '#ff5d73';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(d.x * W, d.y * H, d.w * W, d.h * H);
+  }
+  for (const m of hud.ar || []) {
+    const x = m.x * W, y = m.y * H, r = Math.max(6, m.r * sh);
+    ctx.fillStyle = m.color;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    pill(ctx, x, y - r - 13 * k, m.label, 'rgba(0,0,0,0.7)', '#fff', 12 * k);
+  }
+
+  // screen-space HUD, stacked from the top of the phone's screen
+  let top = sy + 8 * k;
+  if (hud.compass) { drawTape(ctx, sx + 8 * k, top, sw - 16 * k, 40 * k, hud.compass, k); top += 48 * k; }
+  if (hud.banner) {
+    const [bg, fg] = TONES[hud.banner.tone] || TONES.warn;
+    pill(ctx, sx + sw / 2, top + 16 * k, hud.banner.text, bg, fg, 15 * k, true);
+    top += 40 * k;
+  }
+  if (hud.lookingFor) { pill(ctx, sx + sw / 2, top + 12 * k, hud.lookingFor, 'rgba(12,17,32,0.85)', '#eef2ff', 12 * k); top += 30 * k; }
+  if (hud.toast) { pill(ctx, sx + sw / 2, top + 14 * k, hud.toast, 'rgba(255,255,255,0.95)', '#05070f', 13 * k, true); top += 36 * k; }
+  if (hud.card) {
+    const cy = sy + sh * 0.42;
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.beginPath(); ctx.roundRect(sx + 16 * k, cy - 40 * k, sw - 32 * k, 80 * k, 14 * k); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `700 ${18 * k}px Geist, system-ui`;
+    ctx.fillText(hud.card.title, sx + sw / 2, cy - 12 * k);
+    ctx.fillStyle = '#a1a1a1';
+    ctx.font = `${12 * k}px Geist, system-ui`;
+    ctx.fillText(hud.card.text, sx + sw / 2, cy + 14 * k);
+  }
+}
+
+function pill(ctx, x, y, text, bg, fg, size, bold = false) {
+  ctx.font = `${bold ? 700 : 600} ${size}px Geist, system-ui`;
+  const w = ctx.measureText(text).width + size * 1.4, h = size * 1.9;
+  ctx.fillStyle = bg;
+  ctx.beginPath(); ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2); ctx.fill();
+  ctx.fillStyle = fg;
+  ctx.fillText(text, x, y + 0.5);
+}
+
+function drawTape(ctx, x0, y0, w, h, cmp, k) {
+  const SPAN = 120, ppd = w / SPAN, cx = x0 + w / 2;
+  ctx.save();
+  ctx.fillStyle = 'rgba(12,17,32,0.82)';
+  ctx.beginPath(); ctx.roundRect(x0, y0, w, h, 10 * k); ctx.fill(); ctx.clip();
+  for (let d = Math.ceil((cmp.center - SPAN / 2) / 5) * 5; d <= cmp.center + SPAN / 2; d += 5) {
+    const x = cx + (d - cmp.center) * ppd;
+    const dd = ((d % 360) + 360) % 360;
+    const major = dd % 15 === 0;
+    ctx.strokeStyle = major ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = major ? 1.5 : 1;
+    ctx.beginPath(); ctx.moveTo(x, y0 + h - (major ? 10 : 6) * k); ctx.lineTo(x, y0 + h - 2); ctx.stroke();
+    if (major) {
+      const card = cmp.abs ? CARD[dd] : null;
+      ctx.fillStyle = card ? '#fff' : 'rgba(255,255,255,0.55)';
+      ctx.font = `${card ? 800 : 600} ${(card ? 11 : 9) * k}px system-ui`;
+      ctx.fillText(card ?? String(dd), x, y0 + h - 18 * k);
+    }
+  }
+  for (const m of cmp.markers) {
+    const edge = Math.abs(m.off) > SPAN / 2 - 8;
+    const x = edge ? (m.off > 0 ? x0 + w - 18 * k : x0 + 18 * k) : cx + m.off * ppd;
+    const label = edge ? (m.off > 0 ? `${m.label} ▶` : `◀ ${m.label}`) : m.label;
+    ctx.font = `800 ${(m.big ? 10 : 9) * k}px system-ui`;
+    const tw = ctx.measureText(label).width + 10 * k;
+    const bx = Math.max(x0 + 2, Math.min(x0 + w - tw - 2, x - tw / 2));
+    ctx.fillStyle = m.color;
+    ctx.beginPath(); ctx.roundRect(bx, y0 + 2 * k, tw, 14 * k, 7 * k); ctx.fill();
+    ctx.fillStyle = '#05070f';
+    ctx.fillText(label, bx + tw / 2, y0 + 9.5 * k);
+  }
+  ctx.restore();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.moveTo(cx - 5 * k, y0 + h); ctx.lineTo(cx + 5 * k, y0 + h); ctx.lineTo(cx, y0 + h - 6 * k); ctx.fill();
+}
+requestAnimationFrame(drawHud);
 $('#vHide').addEventListener('click', () => {
   const p = phones.get(viewing);
   if (p) send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
@@ -285,6 +440,7 @@ function onMission(ev) {
 
 // ---------------------------------------------------------------- autonomy
 let recsKey = '';
+let explaining = null; // id of the autonomy action whose evidence is shown on the map
 
 function renderAutonomy(m) {
   const on = !!m.autonomy;
@@ -299,15 +455,139 @@ function renderAutonomy(m) {
     : `Autonomous${m.lastThinkMs ? ` · reviews take ${(m.lastThinkMs / 1000).toFixed(1)}s` : ''}`;
   $('#aiUsage').textContent = `${m.calls || 0} calls · ${((m.tokens || 0) / 1000).toFixed(1)}k tokens`;
 
-  // live feed of what autonomy did (newest first, last minute)
-  const recs = (m.recs || []).filter((r) => r.ageS < 60).slice(0, 4);
-  const key = JSON.stringify(recs.map((r) => r.id));
+  // live feed of what autonomy did (newest first, last minute), plus the one being explained
+  const all = m.recs || [];
+  let recs = all.filter((r) => r.ageS < 60).slice(0, 4);
+  const sel = all.find((r) => r.id === explaining);
+  if (explaining && !sel) explaining = null; // aged out of the hub's history
+  if (sel && !recs.includes(sel)) recs = [sel, ...recs.slice(0, 3)];
+  const key = JSON.stringify([explaining, recs.map((r) => r.id)]);
   if (key === recsKey) return; // unchanged: don't rebuild
   recsKey = key;
-  $('#recs').innerHTML = recs.map((r) => `<div class="rec"><span class="sev ${r.severity}"></span>
+  $('#recs').innerHTML = recs.map((r) => `<div class="rec ${r.id === explaining ? 'sel' : ''}" data-rec="${r.id}">
+      <span class="sev ${r.severity}"></span>
       <div><div class="t">${escapeHtml(r.title)}</div><div class="why">${escapeHtml(r.reason)}</div>
-      <div class="acts">${r.results.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join('')}</div></div>
+      <div class="acts">${r.results.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join('')}</div>
+      ${r.id === explaining ? evidenceHtml(r.evidence) : ''}</div>
       <span class="state ${r.status === 'failed' ? '' : 'auto'}">${r.status === 'failed' ? '✕ failed' : '⚡ done'}</span></div>`).join('');
+}
+
+// ---------------------------------------------------------------- explain a decision
+// Click an autonomy action: its card lists what it was based on (captured when it was decided),
+// and the map highlights the same evidence. Click again or press Esc to clear.
+function evidenceHtml(ev) {
+  if (!ev) return '<div class="evidence">No evidence was recorded for this action.</div>';
+  const pos = (x, y) => (x != null ? `(${x.toFixed(1)}, ${y.toFixed(1)})` : '');
+  const rows = [];
+  if (ev.phones?.length) {
+    rows.push(['Ordered', ev.phones.map((p) => {
+      const d = ev.point && p.x != null ? ` · ${Math.hypot(ev.point[0] - p.x, ev.point[1] - p.y).toFixed(1)} m away` : '';
+      return `#${p.index} at ${pos(p.x, p.y)}${d}`;
+    }).join('; ')]);
+  }
+  if (ev.point) rows.push(['Target', `${ev.sector ? `sector ${ev.sector} ` : ''}${pos(ev.point[0], ev.point[1])}`]);
+  for (const s of ev.speech || []) rows.push(['Heard', `#${s.index} ${pos(s.x, s.y)}: “${s.text}”`]);
+  if (ev.sighting) rows.push(['Sighting', `${Math.round(ev.sighting.confidence * 100)}% at ${pos(ev.sighting.x, ev.sighting.y)}`]);
+  if (ev.likely?.length) rows.push(['Most likely then', ev.likely.map((l) => `${l.sector} ${Math.round(l.share * 100)}%`).join(' · ')]);
+  return `<div class="evidence">${rows.map(([k, v]) => `<div><span class="k">${k}</span>${escapeHtml(v)}</div>`).join('')}
+    <div class="explain-hint">Highlighted on the map · click again or Esc to clear</div></div>`;
+}
+
+$('#recs').addEventListener('click', (e) => {
+  const card = e.target.closest('[data-rec]');
+  if (!card) return;
+  const id = Number(card.dataset.rec);
+  explaining = explaining === id ? null : id;
+  recsKey = ''; // rebuild the feed now
+  if (st?.mission) renderAutonomy(st.mission);
+});
+
+function drawExplain() {
+  const r = explaining && st.mission?.recs?.find((x) => x.id === explaining);
+  const ev = r?.evidence;
+  if (!ev) return;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.45)'; // dim everything else so the evidence stands out
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '500 11px "Geist Mono", ui-monospace, monospace';
+  // what was most likely at the time
+  const size = st.planner?.sectorSize || 2.5, x0 = -room.width / 2;
+  for (const l of ev.likely || []) {
+    const c = l.sector.charCodeAt(0) - 65, row = Number(l.sector.slice(1)) - 1;
+    const [ax, ay] = view.toPx(x0 + c * size, row * size);
+    const [bx, by] = view.toPx(x0 + (c + 1) * size, (row + 1) * size);
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ax, ay, bx - ax, by - ay);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText(`${l.sector} ${Math.round(l.share * 100)}%`, (ax + bx) / 2, (ay + by) / 2);
+  }
+  // the sighting it was reacting to
+  if (ev.sighting) {
+    const [sx, sy] = view.toPx(ev.sighting.x, ev.sighting.y);
+    ctx.strokeStyle = '#ff4d4d';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(sx, sy, 15, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ff4d4d';
+    ctx.fillText(`sighting ${Math.round(ev.sighting.confidence * 100)}%`, sx, sy - 24);
+  }
+  // who was sent, from where they were at the time, to where
+  let tx = null, ty = null;
+  if (ev.point) {
+    [tx, ty] = view.toPx(ev.point[0], ev.point[1]);
+    if (ev.sector) {
+      const c = ev.sector.charCodeAt(0) - 65, row = Number(ev.sector.slice(1)) - 1;
+      const [ax, ay] = view.toPx(x0 + c * size, row * size);
+      const [bx, by] = view.toPx(x0 + (c + 1) * size, (row + 1) * size);
+      ctx.strokeStyle = '#ededed';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(ax, ay, bx - ax, by - ay);
+    }
+  }
+  for (const p of ev.phones || []) {
+    if (p.x == null) continue;
+    const [px, py] = view.toPx(p.x, p.y);
+    if (tx != null) {
+      ctx.strokeStyle = '#ededed';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, ty); ctx.stroke();
+    }
+    ctx.strokeStyle = '#ededed';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ededed';
+    ctx.fillText(`#${p.index}`, px, py - 18);
+  }
+  if (tx != null) {
+    ctx.fillStyle = '#ededed';
+    ctx.beginPath(); ctx.arc(tx, ty, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(tx, ty, 11, 0, Math.PI * 2); ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  // what someone said that prompted it
+  for (const s of ev.speech || []) {
+    if (s.x == null) continue;
+    const [px, py] = view.toPx(s.x, s.y);
+    const text = `“${s.text.length > 44 ? `${s.text.slice(0, 43)}…` : s.text}”`;
+    ctx.font = '500 12px Geist, system-ui';
+    const w = ctx.measureText(text).width + 16;
+    const bx = Math.max(4, Math.min(W - w - 4, px - w / 2)), by = Math.max(4, py - 46);
+    ctx.fillStyle = '#ededed';
+    ctx.beginPath(); ctx.roundRect(bx, by, w, 24, 6); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(px - 5, by + 24); ctx.lineTo(px + 5, by + 24); ctx.lineTo(px, by + 30); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.fillText(text, bx + w / 2, by + 12.5);
+    ctx.strokeStyle = '#ededed';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 $('#autoSw').addEventListener('click', () => send({ type: 'autonomy', enabled: !st?.mission?.autonomy }));
@@ -338,9 +618,11 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { closeViewer(); return; }
     if (e.key === 'ArrowRight') { stepViewer(1); return; }
     if (e.key === 'ArrowLeft') { stepViewer(-1); return; }
+    if (e.key === 'h' || e.key === 'H') { toggleHud(); return; }
   }
   if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea')) return;
   if (e.key === '/') { e.preventDefault(); $('#mcInput').focus(); return; }
+  if (e.key === 'Escape' && explaining) { explaining = null; recsKey = ''; if (st?.mission) renderAutonomy(st.mission); return; }
   if (e.key === 'm' || e.key === 'M') { send({ type: 'autonomy', enabled: !st?.mission?.autonomy }); return; }
   const n = Number(e.key);
   if (n >= 1 && n <= PHASES.length) send({ type: 'phase', phase: PHASES[n - 1][0] });
@@ -368,14 +650,15 @@ function draw() {
   if (!view || !st) return;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
 
-  // searched floor: faint white
+  // probability heatmap: brighter = the candidate is more likely here (relative to the hottest cell)
   const cov = st.coverage;
-  if (cov) {
+  if (cov?.heat) {
     const s = cov.cell * view.scale;
-    ctx.fillStyle = 'rgba(255,255,255,0.13)';
     for (let r = 0; r < cov.rows; r++) {
       for (let c = 0; c < cov.cols; c++) {
-        if (cov.cells.charCodeAt(r * cov.cols + c) !== 49) continue;
+        const level = parseInt(cov.heat[r * cov.cols + c], 36) / 35;
+        if (level < 0.02) continue;
+        ctx.fillStyle = `rgba(255,255,255,${(0.04 + 0.4 * level * level).toFixed(3)})`;
         const [px, py] = view.toPx(cov.x0 + c * cov.cell, r * cov.cell);
         ctx.fillRect(px, py, s + 0.5, s + 0.5);
       }
@@ -409,8 +692,10 @@ function draw() {
     drawCone(ctx, view, p.pose.x, p.pose.y, p.pose.heading, room.cameraFovDeg, room.coneLength,
       p.connected ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.04)');
   }
+  drawSightings();
   drawCandidate();
   drawPings();
+  drawExplain();
   for (const p of list) {
     const [px, py] = view.toPx(p.pose.x, p.pose.y);
     ctx.globalAlpha = p.connected ? 1 : 0.35;
@@ -445,11 +730,41 @@ function drawPings() {
   }
 }
 
+function drawSightings() {
+  if (st.target?.foundBy) return;
+  for (const sg of st.sightings || []) {
+    if (sg.confidence < 0.4) continue;
+    const [x, y] = view.toPx(sg.x, sg.y);
+    const k = (performance.now() / 700) % 1;
+    ctx.save();
+    ctx.strokeStyle = '#ff4d4d';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.lineDashOffset = -k * 8;
+    ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ff4d4d';
+    ctx.font = '500 11px "Geist Mono", ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${Math.round(sg.confidence * 100)}% ?`, x, y - 22);
+    ctx.restore();
+  }
+}
+
 function drawCandidate() {
   const t = st.target;
   if (!t) return;
-  const pos = dragPos || t;
-  const [cx, cy] = view.toPx(pos.x, pos.y);
+  // the mock candidate (rehearsals): where it really is, draggable
+  if (t.x != null || dragPos) {
+    const [mx, my] = view.toPx((dragPos || t).x, (dragPos || t).y);
+    ctx.strokeStyle = t.foundBy ? 'rgba(237,237,237,0.4)' : '#ededed';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(mx, my, 7, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(mx - 3, my); ctx.lineTo(mx + 3, my); ctx.moveTo(mx, my - 3); ctx.lineTo(mx, my + 3); ctx.stroke();
+  }
+  if (!t.foundBy || !t.fix) return;
+  const [cx, cy] = view.toPx(t.fix[0], t.fix[1]); // where the confirmed sighting is
   for (const [pid, arrived] of Object.entries(t.responders || {})) {
     const p = phones.get(pid);
     if (!p?.pose) continue;
@@ -460,19 +775,12 @@ function drawCandidate() {
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(cx, cy); ctx.stroke();
     ctx.setLineDash([]);
   }
-  if (t.foundBy) {
-    const k = (performance.now() / 1100) % 1;
-    ctx.strokeStyle = `rgba(255,77,77,${1 - k})`;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(cx, cy, 7 + k * 26, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = '#ff4d4d';
-    ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
-  } else {
-    ctx.strokeStyle = '#ededed';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy); ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3); ctx.stroke();
-  }
+  const k = (performance.now() / 1100) % 1;
+  ctx.strokeStyle = `rgba(255,77,77,${1 - k})`;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(cx, cy, 7 + k * 26, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#ff4d4d';
+  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
 }
 
 // drag the candidate
@@ -482,7 +790,7 @@ function roomPoint(e) {
   return { x: Math.max(-room.width / 2, Math.min(room.width / 2, x)), y: Math.max(0, Math.min(room.depth, y)) };
 }
 function nearCandidate(e) {
-  if (!st?.target || !view) return false;
+  if (!st?.target || st.target.x == null || !view) return false;
   const r = canvas.getBoundingClientRect();
   const [cx, cy] = view.toPx(st.target.x, st.target.y);
   return Math.hypot(cx - (e.clientX - r.left), cy - (e.clientY - r.top)) <= 14;
