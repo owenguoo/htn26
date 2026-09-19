@@ -15,7 +15,7 @@
 
 /* Begin PBXFileReference section */
 		141BE85673A1D7CFB5CE3F07 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		2D812EE175604B7393968D43 /* Markers */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Markers; path = Resources/Markers; sourceTree = SOURCE_ROOT; };
+		2D812EE175604B7393968D43 /* Markers */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Markers; path = "mobile/modules/swarm-sight/ios/Resources/Markers"; sourceTree = SOURCE_ROOT; };
 		8BCD5BC4CDFDF0918087C782 /* SwarmSight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwarmSight.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6346E8A533AB5823AD3F27F /* markers-print.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = "markers-print.pdf"; path = "Resources/markers-print.pdf"; sourceTree = SOURCE_ROOT; };
 		FEA3CD2C29190FF061EE5105 /* venue.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = venue.json; path = Fixtures/venue.json; sourceTree = SOURCE_ROOT; };
@@ -27,6 +27,12 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = SwarmSight;
 			sourceTree = "<group>";
+		};
+		67D99A50C43AB7AF1197937B /* Core */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			name = Core;
+			path = "mobile/modules/swarm-sight/ios/Core";
+			sourceTree = SOURCE_ROOT;
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
@@ -66,6 +72,7 @@
 			isa = PBXGroup;
 			children = (
 				67D99A50C43AB7AF1197937A /* SwarmSight */,
+				67D99A50C43AB7AF1197937B /* Core */,
 				F82C405233B0537C3EF35AFC /* Resources */,
 				328EC33DF3954DC9B83FA285 /* Products */,
 			);
@@ -88,6 +95,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				67D99A50C43AB7AF1197937A /* SwarmSight */,
+				67D99A50C43AB7AF1197937B /* Core */,
 			);
 			name = SwarmSight;
 			packageProductDependencies = (

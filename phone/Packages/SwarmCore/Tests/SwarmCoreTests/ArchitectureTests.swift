@@ -19,6 +19,14 @@ struct ArchitectureTests {
             .deletingLastPathComponent()  // repo root
     }
 
+    /// The native shell: the Expo module (where the code lives) and what is
+    /// left of the plain-Swift app target (its entry point, until it is retired).
+    private static let shellRoots = ["mobile/modules/swarm-sight/ios", "SwarmSight"]
+
+    private func shellFiles() -> [(url: URL, source: String)] {
+        Self.shellRoots.flatMap { swiftFiles(under: $0) }
+    }
+
     private func swiftFiles(under relativePath: String) -> [(url: URL, source: String)] {
         let root = repositoryRoot.appendingPathComponent(relativePath)
         guard let enumerator = FileManager.default.enumerator(atPath: root.path) else { return [] }
@@ -81,8 +89,7 @@ struct ArchitectureTests {
         // literal, which is code as far as the scanner is concerned — and the
         // first run of this test caught itself, which is at least a working
         // demonstration that the scan is not vacuous.
-        let importers = (swiftFiles(under: "SwarmSight")
-                         + swiftFiles(under: "Packages/SwarmCore/Sources"))
+        let importers = (shellFiles() + swiftFiles(under: "Packages/SwarmCore/Sources"))
             .filter { _, source in
                 codeLines(source).contains { $0.text.contains("import ARKit") }
             }
@@ -99,7 +106,7 @@ struct ArchitectureTests {
         let pattern = try! NSRegularExpression(
             pattern: #"[A-Za-z0-9_\)\]]\!(?![=\w])"#)
         var offences: [String] = []
-        for path in ["Packages/SwarmCore/Sources", "SwarmSight"] {
+        for path in ["Packages/SwarmCore/Sources"] + Self.shellRoots {
             for (url, source) in swiftFiles(under: path) {
                 for line in codeLines(source) {
                     let range = NSRange(line.text.startIndex..., in: line.text)
@@ -116,7 +123,7 @@ struct ArchitectureTests {
     /// off by tens of degrees indoors. Gravity fixes pitch and roll; the marker
     /// fixes yaw.
     @Test func neverUsesGravityAndHeading() {
-        for (url, source) in swiftFiles(under: "SwarmSight") {
+        for (url, source) in shellFiles() {
             for line in codeLines(source) where line.text.contains("gravityAndHeading") {
                 Issue.record("\(url.lastPathComponent):\(line.number) uses .gravityAndHeading")
             }
@@ -128,7 +135,7 @@ struct ArchitectureTests {
     @Test func everyDeviceDependentFileSaysWhatAHumanMustCheck() {
         let deviceDependent = ["ARKitPoseProvider.swift", "FrameEncoder.swift",
                                "LiDARDepthSource.swift", "Haptics.swift"]
-        for (url, source) in swiftFiles(under: "SwarmSight")
+        for (url, source) in shellFiles()
         where deviceDependent.contains(url.lastPathComponent) {
             let name = url.lastPathComponent
             #expect(source.contains("DEVICE-VERIFY:"),
@@ -154,11 +161,11 @@ struct ArchitectureTests {
     /// missing file.
     @Test func everyVenueMarkerHasArtwork() throws {
         let venue = try Venue.load(from: Fixtures.url("venue.json"))
-        let directory = repositoryRoot.appendingPathComponent("Resources/Markers")
+        let directory = repositoryRoot.appendingPathComponent("mobile/modules/swarm-sight/ios/Resources/Markers")
         for marker in venue.markers {
             let url = directory.appendingPathComponent("\(marker.id).png")
             #expect(FileManager.default.fileExists(atPath: url.path),
-                    "no artwork for \(marker.id): expected Resources/Markers/\(marker.id).png")
+                    "no artwork for \(marker.id): expected mobile/modules/swarm-sight/ios/Resources/Markers/\(marker.id).png")
         }
     }
 

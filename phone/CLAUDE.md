@@ -27,8 +27,20 @@ fields are ignored, never errors.
 - All logic lives in `Packages/SwarmCore`. It must not import ARKit, UIKit,
   SwiftUI, CoreMotion or CoreHaptics. It must build and test with `swift test`
   on macOS with no simulator and no device.
-- ARKit appears in exactly one file: `ARKitPoseProvider.swift` in the app
-  target. It conforms to `PoseProvider` and does nothing but adapt.
+- ARKit appears in exactly one file: `ARKitPoseProvider.swift`, in
+  `mobile/modules/swarm-sight/ios/Core`. It conforms to `PoseProvider` and does
+  nothing but adapt.
+- **Two shells, one body.** `mobile/` is the Expo SDK 57 app; its local module
+  `swarm-sight` holds all native code (`ios/Core`: adapters + SwiftUI operator
+  view, shared; `ios/Expo`: the module API and the hosting view). The plain
+  Xcode target `SwarmSight.xcodeproj` compiles the same `ios/Core` and stays
+  until the Expo build has passed the device checklist. **JS never touches
+  frames, poses at rate, or the socket** — `ArchitectureTests` enforces it.
+- The pod is `SwarmSightNative`, never `SwarmSight`: a pod sharing the app
+  target's module name makes the module class vanish from Release builds.
+- `ios/` and `android/` under `mobile/` are generated (CNG) and ignored.
+  Anything that would be a click in Xcode goes in `app.json` or
+  `plugins/withSwarmSight.js`. Prebuild needs `LANG=en_US.UTF-8`.
 - If you want ARKit inside SwarmCore, the abstraction is wrong. Widen the
   protocol instead.
 - No third-party dependencies. Swift 6, strict concurrency. Actors for the
@@ -44,6 +56,7 @@ Your only valid evidence is:
 ```
 cd phone/Packages/SwarmCore && swift test
 xcodebuild -project phone/SwarmSight.xcodeproj -scheme SwarmSight -destination 'platform=iOS Simulator,name=iPhone 16' build
+phone/Scripts/verify.sh --expo --e2e   # all of the above + expo typecheck/lint/Release build
 phone/Scripts/e2e-hub.sh     # replays a walk through SwarmClient into the real hub, asserts /api/state
 ```
 
@@ -186,6 +199,10 @@ phone reporting where it was thirty seconds ago.
 - ARSession pauses on backgrounding. Detect and re-enter `recalibrating`.
 
 ## Info.plist — silent failures if missing
+
+For the Expo app these live in `mobile/app.json` under `ios.infoPlist` (the
+generated plist is wiped by every prebuild); for the Xcode target, in
+`Resources/Info.plist`.
 
 `NSCameraUsageDescription`, `NSLocalNetworkUsageDescription` plus
 `NSBonjourServices` (iOS local-network permission bites everyone when the

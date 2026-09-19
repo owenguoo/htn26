@@ -33,7 +33,7 @@ from PIL import Image
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 VENUE = os.path.join(REPO, "Fixtures", "venue.json")
-PNG_DIR = os.path.join(REPO, "Resources", "Markers")
+PNG_DIR = os.path.join(REPO, "mobile", "modules", "swarm-sight", "ios", "Resources", "Markers")
 PDF_PATH = os.path.join(REPO, "Resources", "markers-print.pdf")
 
 GRID = 16          # coarse cells across the marker

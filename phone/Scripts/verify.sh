@@ -25,7 +25,23 @@ Scripts/preflight.sh --core >/dev/null 2>&1 || {
 }
 xcodebuild -scheme SwarmSight -destination 'platform=iOS Simulator,name=iPhone 16' build
 
-if [ "${1:-}" = "--e2e" ]; then
+echo
+echo "=== expo shell: typecheck + lint ==="
+(cd mobile && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint)
+
+if [ "${1:-}" = "--expo" ] || [ "${2:-}" = "--expo" ]; then
+  echo
+  echo "=== expo shell: prebuild + Release simulator build (slow) ==="
+  Scripts/preflight.sh >/dev/null 2>&1 || { Scripts/preflight.sh; exit 1; }
+  # CocoaPods crashes on a non-UTF-8 locale.
+  export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+  (cd mobile && pnpm expo prebuild -p ios --clean >/dev/null)
+  (cd mobile/ios && xcodebuild -workspace SwarmSight.xcworkspace -scheme SwarmSight -configuration Release \
+      -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath ../../build/expo-dd build \
+      | grep -E '^\*\* BUILD|[^-]error: ')
+fi
+
+if [ "${1:-}" = "--e2e" ] || [ "${2:-}" = "--e2e" ]; then
   echo
   echo "=== gate 3/3: replayed phone against the real hub in this checkout ==="
   Scripts/e2e-hub.sh
