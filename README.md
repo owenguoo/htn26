@@ -8,7 +8,7 @@ feed and a floor plan with each phone's position and view cone.
 ```bash
 uv sync
 ./scripts/make-cert.sh          # once: self-signed HTTPS so iPhones allow the camera on your Wi-Fi
-uv run python -m swarm.hub      # console: http://localhost:8000/console
+uv run python -m swarm.hub      # console: http://localhost:8000/
 ```
 
 Phones: scan the QR code from the console's **Join QR** button (or open `https://<laptop-ip>:8443/`), tap through the
