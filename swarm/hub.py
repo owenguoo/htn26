@@ -57,6 +57,7 @@ class Phone:
     calibrated: bool = False
     external_pose: dict | None = None
     gps: dict | None = None          # latest browser geolocation fix
+    debug: dict | None = None        # latest diagnostics the phone reported
     # latest frame (latest wins, never queued)
     frame: bytes | None = None
     frame_seq: int = -1
@@ -96,6 +97,7 @@ class Phone:
             "latencyMs": None if self.latency_ms is None else round(self.latency_ms),
             "stale": self.frame is None or now - self.frame_at > STALE_MS,
             "frames": self.frames_total,
+            "debug": self.debug,
             "gps": None if not self.gps else {**self.gps, "ageMs": round(now - self.gps["t"])},
         }
 
@@ -186,6 +188,12 @@ class Hub:
             phone.seat = _seat(msg["seat"])
         elif kind == "name":
             phone.name = str(msg.get("name") or "")[:24]
+        elif kind == "slam":
+            # phone-side world tracking (8th Wall): already in room meters
+            self._apply_orientation(phone, msg)
+            self.set_external_pose({**msg, "phoneId": phone.id, "source": "slam"})
+        elif kind == "debug":
+            phone.debug = {k: v for k, v in msg.items() if k != "type"}
         elif kind == "gps":
             self._on_gps(phone, msg)
         elif kind == "pong":

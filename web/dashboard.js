@@ -123,6 +123,7 @@ function renderTiles() {
     if (p.pitch != null && Math.abs(p.pitch) > 65) tags.push([p.pitch < 0 ? 'FLOOR' : 'CEILING', 'warn']); // not counted as coverage
     const job = planner?.assignments?.[p.id];
     if (job) tags.push([`→ ${job.sector}`, job.onTarget ? 'ok' : 'warn']);
+    if (p.pose?.source === 'slam') tags.push(['SLAM', 'ok']);
     if (!p.pose) tags.push(['NO SEAT', 'warn']);
     else if (!p.sim && !p.calibrated && p.pose.source === 'seat') tags.push(['UNCAL', 'warn']);
     t.tags.innerHTML = tags.map(([s, c]) => `<span class="tag ${c}">${s}</span>`).join('');
