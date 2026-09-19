@@ -93,7 +93,7 @@ class FakeWorker:
 @asynccontextmanager
 async def system(monkeypatch, worker_url, key='test-model-key'):
     hub = module.Hub()
-    settings = Settings(inference_url=worker_url, inference_key=key, bridge_key='test-bridge-key', operator_code='test-code')
+    settings = Settings(inference_url=worker_url, inference_key=key, bridge_key='test-bridge-key')
     auth = Auth(settings)
     monkeypatch.setattr(module, 'hub', hub)
     monkeypatch.setattr(module, 'auth', auth)
@@ -104,7 +104,6 @@ async def system(monkeypatch, worker_url, key='test-model-key'):
     app.add_api_websocket_route('/ws/dashboard', module.ws_dashboard)
     app.add_api_route('/api/detections', module.post_detections, methods=['POST'])
     async with server(app) as url, httpx.AsyncClient(base_url=url, timeout=5) as client:
-        await client.post('/api/session', json={'code': 'test-code'})
         bridge = Bridge(Settings(inference_url=worker_url, inference_key=key,
             hub_url=url, bridge_key='test-bridge-key'), client)
         task = asyncio.create_task(bridge.run())
@@ -142,9 +141,8 @@ async def replay(monkeypatch, worker_url, reference, present, absent, box, key='
         registered = await client.put('/api/search/reference', params={'box': box}, content=reference)
         assert registered.status_code == 200, registered.text
         await wait_active(bridge)
-        headers = {'Cookie': f'{Auth.cookie}={client.cookies[Auth.cookie]}'}
         async with connect(url + '/ws/phone') as phone, connect(url + '/ws/dashboard?role=console',
-                additional_headers=headers, origin=url.replace('ws:', 'http:')) as console:
+                origin=url.replace('ws:', 'http:')) as console:
             welcome = await join(phone, 'replay')
             await console.send(json.dumps(dict(type='hide', phoneId='replay', hidden=True)))
             await receive_json(console, lambda m: m.get('type') == 'state' and

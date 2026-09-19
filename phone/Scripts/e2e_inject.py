@@ -20,8 +20,9 @@ async def main() -> None:
     ap.add_argument("--hold", type=float, default=0.5, help="seconds to keep the socket open")
     args = ap.parse_args()
 
+    origin = f"http://127.0.0.1:{args.port}"
     async with websockets.connect(f"ws://127.0.0.1:{args.port}/ws/dashboard?role=console",
-                                  max_size=None) as ws:
+                                  max_size=None, origin=origin) as ws:
         if args.what == "flash":
             msg = {"type": "command", "target": args.phone,
                    "cmd": {"cmd": "flash", "color": "#ff5d73", "text": "e2e", "ttlMs": 1500}}

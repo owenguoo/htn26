@@ -13,8 +13,6 @@ const phones = new Map();    // id → summary
 const thumbs = new Map();    // id → object URL
 const sourceFrames = new Map();
 let snapshotAt = 0;
-let authenticated = false;
-let sessionGeneration = 0;
 let drawReference = null;
 let searchBusy = false;
 let dragPos = null;          // candidate position while dragging
@@ -874,16 +872,12 @@ async function searchApi(path, options = {}) {
   const response = await fetch(path, {credentials: 'same-origin', ...options});
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401) { authenticated = false; renderSearch(); }
     throw new Error(typeof body.detail === 'string' ? body.detail : `Request failed (${response.status})`);
   }
   return body;
 }
 
 function renderSearch() {
-  $('#loginForm').hidden = authenticated;
-  $('#logout').hidden = !authenticated;
-  $('#searchTools').hidden = !authenticated;
   $('#searchTools').disabled = searchBusy;
   const search = st?.search;
   $('#searchStatus').textContent = search ? `${search.mode === 'real' ? 'Real search' : 'Rehearsal'} · Worker: ${search.status.replaceAll('_', ' ')} · ${search.referenceAvailable ? 'Reference registered' : 'No reference'} · ${search.active ? 'Searching' : 'Paused'}` : 'Waiting for hub connection';
@@ -898,25 +892,6 @@ async function searchAction(action) {
   finally { searchBusy = false; renderSearch(); }
 }
 
-$('#loginForm').addEventListener('submit', (event) => {
-  event.preventDefault();
-  searchAction(async () => {
-    sessionGeneration++;
-    await searchApi('/api/session', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code: $('#operatorCode').value})});
-    $('#operatorCode').value = '';
-    authenticated = true;
-    $('#searchMessage').textContent = 'Signed in';
-    ws?.close();
-  });
-});
-$('#logout').addEventListener('click', () => searchAction(async () => {
-  sessionGeneration++;
-  await searchApi('/api/session', {method: 'DELETE'});
-  authenticated = false;
-  $('#searchMessage').textContent = 'Signed out';
-  clearReferencePreview();
-  ws?.close();
-}));
 function clearReferencePreview() {
   drawReference = null;
   $('#referencePreview').hidden = true;
@@ -1051,7 +1026,7 @@ function renderAnalysis() {
     $('#analysisMeta').textContent = 'No current result';
     return;
   }
-  if (authenticated && result.matched) {
+  if (result.matched) {
     const identity = {phoneId: result.phoneId, streamId: result.streamId, seq: result.seq, searchRevision: result.searchRevision};
     confirm.hidden = false;
     confirm.disabled = searchBusy;
@@ -1088,15 +1063,4 @@ function renderAnalysis() {
 }
 setInterval(() => { if (viewing) renderAnalysis(); }, 100);
 new ResizeObserver(() => drawReference?.()).observe($('#referencePreview'));
-async function loadSession() {
-  const generation = sessionGeneration;
-  try {
-    const session = await searchApi('/api/session');
-    if (generation !== sessionGeneration) return;
-    authenticated = session.authenticated;
-    renderSearch();
-  } catch (error) {
-    if (generation === sessionGeneration) $('#searchMessage').textContent = error.message;
-  }
-}
-loadSession();
+renderSearch();

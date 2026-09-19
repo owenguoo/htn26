@@ -348,6 +348,7 @@ public enum HubFrame {
 // MARK: - Hub → phone
 
 public struct HubWelcome: Sendable, Equatable, Decodable {
+    public var streamId: String? = nil
     public var phoneId: String
     public var index: Int
     /// `#rrggbb`. Also the default flash colour.
@@ -410,6 +411,8 @@ public struct HubDetectionBox: Sendable, Equatable, Codable {
     public var h: Double
     public var label: String?
     public var score: Double?
+    public var detectionScore: Double? = nil
+    public var similarity: Double? = nil
 
     public init(x: Double, y: Double, w: Double, h: Double, label: String? = nil, score: Double? = nil) {
         self.x = x
@@ -419,6 +422,15 @@ public struct HubDetectionBox: Sendable, Equatable, Codable {
         self.label = label
         self.score = score
     }
+}
+
+public struct HubDetectionContext: Sendable, Equatable {
+    public var streamId: String?
+    public var seq: UInt64?
+    public var searchRevision: String?
+    public var threshold: Double?
+    public var clear: Bool
+    public var rehearsal: Bool
 }
 
 public enum HubCommand: Sendable, Equatable {
@@ -437,7 +449,7 @@ public enum HubCommand: Sendable, Equatable {
     case rate(fps: Double?)
     case ping(id: Int, x: Double, y: Double, label: String, ttlMs: Double)
     case message(text: String, ttlMs: Double)
-    case detections(boxes: [HubDetectionBox], ttlMs: Double)
+    case detections(boxes: [HubDetectionBox], ttlMs: Double, context: HubDetectionContext? = nil)
     case hud(on: Bool)
     case unknown(cmd: String)
 
@@ -449,7 +461,7 @@ public enum HubCommand: Sendable, Equatable {
         case .rate: "rate"
         case .ping: "ping"
         case .message: "message"
-        case .detections: "detections"
+        case .detections(_, _, let context): context?.rehearsal == true ? "rehearsal_detections" : "detections"
         case .hud: "hud"
         case .unknown(let cmd): cmd
         }
@@ -532,6 +544,10 @@ public enum HubInbound: Sendable, Equatable {
         var y: Double?
         var label: String?
         var boxes: [HubDetectionBox]?
+        var streamId: String?
+        var seq: UInt64?
+        var searchRevision: String?
+        var threshold: Double?
         var on: Bool?
 
         var command: HubCommand {
@@ -561,8 +577,11 @@ public enum HubInbound: Sendable, Equatable {
                 return .ping(id: id, x: x, y: y, label: label ?? "Check here", ttlMs: ttlMs ?? 12_000)
             case "message":
                 return .message(text: text ?? "", ttlMs: ttlMs ?? 8000)
-            case "detections":
-                return .detections(boxes: boxes ?? [], ttlMs: ttlMs ?? 1500)
+            case "detections", "rehearsal_detections":
+                return .detections(boxes: boxes ?? [], ttlMs: ttlMs ?? 1500,
+                    context: HubDetectionContext(streamId: streamId, seq: seq,
+                        searchRevision: searchRevision, threshold: threshold,
+                        clear: clear ?? false, rehearsal: cmd == "rehearsal_detections"))
             case "hud":
                 return .hud(on: on ?? false)
             default:

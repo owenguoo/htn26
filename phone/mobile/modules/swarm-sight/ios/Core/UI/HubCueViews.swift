@@ -47,23 +47,26 @@ struct ToastView: View {
 /// Boxes from `/api/detections`: fractions of the frame the hub received, which
 /// is the portrait JPEG — the capture rotated upright.
 struct DetectionBoxesView: View {
-    let boxes: [HubDetectionBox]
+    let cue: DetectionsCue
     let captureSize: CGSize
 
     var body: some View {
         GeometryReader { geometry in
             let transform = ImageToViewTransform(capture: captureSize, view: geometry.size)
-            ForEach(Array(boxes.enumerated()), id: \.offset) { _, box in
+            ForEach(Array(cue.boxes.enumerated()), id: \.offset) { _, box in
+                let likely = cue.rehearsal || (box.similarity.map { $0 >= (cue.threshold ?? 1) } ?? false)
+                let tint: Color = cue.rehearsal ? .yellow : (likely ? .red : .white)
                 let rect = transform.rect(uprightFractionX: box.x, y: box.y, width: box.w, height: box.h)
                 ZStack(alignment: .topLeading) {
                     Rectangle()
-                        .stroke(Color.yellow, lineWidth: 3)
+                        .stroke(tint, lineWidth: 3)
                     if let label = box.label {
-                        Text(box.score.map { "\(label) \(Int(($0 * 100).rounded()))%" } ?? label)
+                        Text(cue.rehearsal ? "Rehearsal · \(label)" :
+                            String(format: "%@ · Similarity %.2f · confidence %.0f%%", label, box.similarity ?? 0, (box.detectionScore ?? 0) * 100))
                             .font(.caption2.weight(.bold))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
-                            .background(Color.yellow)
+                            .background(tint)
                             .foregroundStyle(.black)
                     }
                 }

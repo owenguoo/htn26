@@ -887,8 +887,8 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
     try:
         while True:
             msg = await ws.receive_json()
-            if not auth.operator(ws) or not auth.same_origin(ws):
-                await sub.send_json({"error": "operator authentication required"})
+            if not auth.same_origin(ws):
+                await sub.send_json({"error": "same-origin request required"})
                 continue
             if msg.get("type") == "command":
                 await hub.command(str(msg.get("target", "all")), msg.get("cmd") or {})
@@ -938,7 +938,7 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
 async def ws_dashboard(ws: WebSocket) -> None:
     """Projector and operator console. The console (role=console) still sees hidden feeds."""
     fps = float(ws.query_params.get("thumb_fps", 10))
-    console = ws.query_params.get("role") == "console" and auth.operator(ws) and auth.same_origin(ws)
+    console = ws.query_params.get("role") == "console" and auth.same_origin(ws)
     await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url},
                             skip_hidden=not console)
 
@@ -946,7 +946,7 @@ async def ws_dashboard(ws: WebSocket) -> None:
 @app.websocket("/ws/frames")
 async def ws_frames(ws: WebSocket) -> None:
     """For inference/positioning teammates: every phone's latest frame + pose, up to `fps` per phone."""
-    if not auth.bridge(ws) and not (auth.operator(ws) and auth.same_origin(ws)):
+    if not auth.bridge(ws) and not auth.same_origin(ws):
         await ws.close(code=1008)
         return
     fps = float(ws.query_params.get("fps", 5))
@@ -1057,7 +1057,6 @@ def lan_ip() -> str:
 
 
 def main() -> None:
-    print(f"Operator code: {settings.operator_code}")
     load_env()
     from .mission import MissionControl  # after load_env so it sees the API key
     hub.mission = MissionControl(hub, ROOM)

@@ -45,7 +45,7 @@ public struct OperatorView: View {
             }
 
             if let detections = overlay.detections {
-                DetectionBoxesView(boxes: detections.boxes, captureSize: captureSize)
+                DetectionBoxesView(cue: detections, captureSize: captureSize)
             }
             PingMarkersView(pings: overlay.pings, captureSize: captureSize)
 

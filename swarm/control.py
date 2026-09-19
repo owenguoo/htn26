@@ -1,12 +1,10 @@
-"""Operator sessions and private inference configuration, without model dependencies."""
+"""Browser controls and private inference configuration, without model dependencies."""
 from __future__ import annotations
 
-import hashlib
 import hmac
 import ipaddress
 import math
 import os
-import secrets
 import time
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
@@ -16,7 +14,7 @@ from pathlib import Path
 if TYPE_CHECKING:
     from .hub import Hub
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, Response
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 
 
 @dataclass(frozen=True)
@@ -24,7 +22,6 @@ class Settings:
     inference_url: str = field(default_factory=lambda: os.getenv('SWARM_INFERENCE_URL', '').rstrip('/'))
     inference_key: str = field(default_factory=lambda: os.getenv('SWARM_INFERENCE_API_KEY', ''))
     bridge_key: str = field(default_factory=lambda: os.getenv('SWARM_BRIDGE_KEY', ''))
-    operator_code: str = field(default_factory=lambda: os.getenv('SWARM_OPERATOR_CODE', '') or secrets.token_urlsafe(18))
     hub_url: str = field(default_factory=lambda: os.getenv('SWARM_HUB_URL', 'http://127.0.0.1:8000').rstrip('/'))
     max_phones: int = field(default_factory=lambda: int(os.getenv('SWARM_MAX_PHONES', '64')))
 
@@ -51,24 +48,8 @@ class Settings:
 
 
 class Auth:
-    cookie = 'swarm_operator'
-
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.secret = secrets.token_bytes(32)
-
-    def token(self) -> str:
-        expires = str(int(time.time()) + 12 * 3600)
-        return expires + '.' + hmac.new(self.secret, expires.encode(), hashlib.sha256).hexdigest()
-
-    def operator(self, request: Request | WebSocket) -> bool:
-        token = request.cookies.get(self.cookie, '')
-        try:
-            expires, signature = token.split('.')
-            expected = hmac.new(self.secret, expires.encode(), hashlib.sha256).hexdigest()
-            return int(expires) > time.time() and hmac.compare_digest(expected, signature)
-        except (ValueError, TypeError):
-            return False
 
     @staticmethod
     def same_origin(request: Request | WebSocket) -> bool:
@@ -87,9 +68,7 @@ class Auth:
         if not self.bridge(request):
             raise HTTPException(401, 'bridge authentication required')
 
-    def require_operator(self, request: Request | WebSocket) -> None:
-        if not self.operator(request):
-            raise HTTPException(401, 'operator authentication required')
+    def require_same_origin(self, request: Request | WebSocket) -> None:
         if not self.same_origin(request):
             raise HTTPException(403, 'same-origin request required')
 
@@ -121,32 +100,10 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
 
     hub.search_state = state
 
-    @app.get('/api/session')
-    async def session(request: Request):
-        return {'authenticated': auth.operator(request)}
-
-    @app.post('/api/session')
-    async def login(request: Request, response: Response):
-        if not auth.same_origin(request):
-            raise HTTPException(403, 'same-origin request required')
-        body = await request.json()
-        code = body.get('code') if isinstance(body, dict) else None
-        if not isinstance(code, str) or len(code) > 256 or not hmac.compare_digest(code.encode(), auth.settings.operator_code.encode()):
-            raise HTTPException(401, 'invalid operator code')
-        response.set_cookie(auth.cookie, auth.token(), httponly=True, samesite='strict',
-                            secure=request.url.scheme == 'https', max_age=12 * 3600)
-        return {'authenticated': True}
-
-    @app.delete('/api/session')
-    async def logout(request: Request, response: Response):
-        auth.require_operator(request)
-        response.delete_cookie(auth.cookie)
-        return {'authenticated': False}
-
     @app.get('/api/search')
     async def search(request: Request):
-        if not auth.bridge(request) and not auth.operator(request):
-            raise HTTPException(401, 'authentication required')
+        if not auth.bridge(request):
+            auth.require_same_origin(request)
         hub.search.expire(time.time() * 1000)
         return state()
 
@@ -177,7 +134,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
 
     @app.post('/api/search/reference/people')
     async def people(request: Request):
-        auth.require_operator(request)
+        auth.require_same_origin(request)
         if gate.locked():
             raise HTTPException(429, 'reference control busy')
         async with gate:
@@ -188,7 +145,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
     @app.put('/api/search/reference')
     async def reference(request: Request):
         nonlocal status_value, status_at
-        auth.require_operator(request)
+        auth.require_same_origin(request)
         boxes = request.query_params.getlist('box')
         if len(boxes) == 1:
             boxes = boxes[0].split(',')
@@ -222,7 +179,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
     @app.delete('/api/search/reference')
     async def clear(request: Request):
         nonlocal status_value
-        auth.require_operator(request)
+        auth.require_same_origin(request)
         hub.search.set_reference(None)
         status_value = 'unavailable' if auth.settings.enabled else 'disabled'
         # Take the gate before awaiting overlays so registration cannot overtake deletion.
@@ -238,7 +195,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
 
     @app.put('/api/search/threshold')
     async def threshold(request: Request):
-        auth.require_operator(request)
+        auth.require_same_origin(request)
         from pydantic import ValidationError
         try:
             body = Threshold.model_validate(await request.json())
@@ -250,7 +207,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
 
     @app.post('/api/search/confirm')
     async def confirm(request: Request):
-        auth.require_operator(request)
+        auth.require_same_origin(request)
         from pydantic import ValidationError
 
         class Confirmation(BaseModel):
@@ -277,7 +234,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
 
     @app.post('/api/search/rehearsal')
     async def rehearsal(request: Request):
-        auth.require_operator(request)
+        auth.require_same_origin(request)
         await clear(request)
         hub.target.remove()
         hub.search.mode = 'rehearsal'

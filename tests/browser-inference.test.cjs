@@ -50,7 +50,7 @@ test('console never substitutes a live thumbnail for missing exact source and ig
   const render = code.slice(code.indexOf('function renderAnalysis()'),code.indexOf('\nsetInterval(() => { if (viewing)'));
   const sandbox = vm.createContext({});
   vm.runInContext(source + `
-    let analysisKey=null, viewing='p', snapshotAt=0, authenticated=false, searchBusy=false;
+    let analysisKey=null, viewing='p', snapshotAt=0, searchBusy=false;
     const performance={now:()=>100};
     const nodes={'#confirmSighting':{},'#analyzedFrame':{hidden:false,getContext:()=>({drawImage(){},strokeRect(){}})},'#analysisMeta':{textContent:''}};
     const $=s=>nodes[s];
@@ -75,21 +75,12 @@ test('reference numbers remain readable at a 210 by 280 CSS pixel portrait previ
   assert.ok(vm.runInContext("parseFloat(ctx.font.split(' ')[1])*210/960 >= 14",sandbox));
   assert.equal(vm.runInContext('ctx.label',sandbox),'1');
 });
-test('a deferred initial session response cannot overwrite newer login or logout', async () => {
-  const code = fs.readFileSync('web/console.js','utf8');
-  assert.ok(code.includes('async function loadSession()'));
-  const fn = code.slice(code.indexOf('async function loadSession()'),code.indexOf('\nloadSession();'));
-  const handlers = code.slice(code.indexOf("$('#loginForm').addEventListener"), code.indexOf('function clearReferencePreview()'));
-  for (const action of ['login','logout']) {
-    const sandbox = vm.createContext({});
-    vm.runInContext(`let authenticated=${action === 'logout'},sessionGeneration=0;let resolve,pendingAction;const listeners={};const searchApi=(path,options)=>options ? Promise.resolve({}) : new Promise(r=>resolve=r);const renderSearch=()=>{};const $=id=>({value:'test',addEventListener:(event,fn)=>listeners[id]=fn});const searchAction=fn=>pendingAction=fn();const ws=null;const clearReferencePreview=()=>{};`+fn+handlers,sandbox);
-    const pending = vm.runInContext('loadSession()',sandbox);
-    vm.runInContext(`listeners['${action === 'login' ? '#loginForm' : '#logout'}']({preventDefault(){}})`,sandbox);
-    await vm.runInContext('pendingAction',sandbox);
-    vm.runInContext(`resolve({authenticated:${action === 'logout'}})`,sandbox);
-    await pending;
-    assert.equal(vm.runInContext('authenticated',sandbox),action === 'login');
-  }
+test('reference controls are visible without an operator session', () => {
+  const html=fs.readFileSync('web/console.html','utf8');
+  const code=fs.readFileSync('web/console.js','utf8');
+  assert.doesNotMatch(html, /id="(?:loginForm|operatorCode|logout)"/);
+  assert.match(html, /<fieldset id="searchTools" style=/);
+  assert.doesNotMatch(code, /api\/session|authenticated|sessionGeneration/);
 });
 test('overlapping reference boxes keep every numeric marker visible', () => {
   const code = fs.readFileSync('web/console.js','utf8');
@@ -115,7 +106,7 @@ test('confirmation button captures exact sighting identity and hides on expiry',
   const render=code.slice(code.indexOf('function renderAnalysis()'),code.indexOf('\nsetInterval(() => { if (viewing)'));
   const sandbox=vm.createContext({});
   vm.runInContext(source+`
-    let analysisKey=null,viewing='p',snapshotAt=0,authenticated=true,searchBusy=false;
+    let analysisKey=null,viewing='p',snapshotAt=0,searchBusy=false;
     let clock=100, submitted;
     const performance={now:()=>clock};
     const nodes={'#confirmSighting':{},'#analyzedFrame':{hidden:true},'#analysisMeta':{},'#searchMessage':{}};

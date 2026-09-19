@@ -179,7 +179,7 @@ struct HubWireTests {
             .ping(id: 5, x: 1, y: 2, label: "Check here", ttlMs: 12_000)))
         #expect(try message("cmd-message") == .command(.message(text: "Spread out", ttlMs: 8000)))
         #expect(try message("cmd-hud") == .command(.hud(on: true)))
-        guard case .command(.detections(let boxes, let ttl))? = try message("cmd-detections") else {
+        guard case .command(.detections(let boxes, let ttl, _))? = try message("cmd-detections") else {
             Issue.record("detections did not decode")
             return
         }

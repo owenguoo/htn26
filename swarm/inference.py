@@ -70,7 +70,8 @@ class Bridge:
     async def health(self) -> None:
         state = self.state.copy()
         revision = state.get('searchRevision')
-        if not revision or not state.get('enabled') or not state.get('targetVersion'):
+        if not revision or not state.get('enabled') or (
+                not state.get('targetVersion') and state.get('status') == 'reference_unavailable'):
             return
         value = 'unavailable'
         try:
@@ -78,10 +79,10 @@ class Bridge:
                 self.settings.inference_url + '/v1/targets/active', timeout=2,
                 headers={'Authorization': f'Bearer {self.settings.inference_key}'})
             if response.status_code == 404:
-                value = 'reference_unavailable'
+                value = 'reference_unavailable' if state.get('targetVersion') else 'available'
             else:
                 response.raise_for_status()
-                value = ('available' if response.json()['target_version'] == state['targetVersion']
+                value = ('available' if not state.get('targetVersion') or response.json()['target_version'] == state['targetVersion']
                          else 'reference_unavailable')
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
             pass
