@@ -17,6 +17,8 @@ public final class AppCoordinator {
     public private(set) var lastError: String?
     public private(set) var isRunning = false
 
+    /// What the camera sees, behind the overlay.
+    public let preview = CameraPreviewSource()
     private var model = OverlayModel()
     private let haptics = HapticPlayer()
     private let encoder = CoreImageFrameEncoder()
@@ -73,7 +75,13 @@ public final class AppCoordinator {
         let provider = ARKitPoseProvider(configuration: .init(venue: venue))
         self.provider = provider
         let encoder = self.encoder
-        await provider.setPixelBufferSink { buffer in encoder.stage(buffer) }
+        let preview = self.preview
+        await provider.setPixelBufferSink { buffer in
+            // The preview only reads; the encoder takes ownership. Sequential,
+            // never concurrent, which is the invariant PixelBufferHandoff names.
+            preview.offer(buffer, now: CACurrentMediaTime())
+            encoder.stage(buffer)
+        }
 
         let transport = Transport(
             configuration: .init(url: orchestrator),
@@ -167,7 +175,13 @@ public final class AppCoordinator {
             return
         }
         let encodedAt = clock()
-        let chunk = FrameAssembly.chunk(deviceID: deviceID, ticket: frameTicket, encoded: encoded,
+        // Stamp capture from the buffer that was actually encoded, not from the
+        // pose that triggered the ticket: buffers are staged at 60 Hz and
+        // tickets issued at 10 Hz, so they are rarely the same frame.
+        var corrected = frameTicket
+        corrected.trace = LatencyTrace(frameID: frameTicket.frameID)
+        corrected.trace.stamp(.capture, at: encoder.lastEncodedTimestamp + offset)
+        let chunk = FrameAssembly.chunk(deviceID: deviceID, ticket: corrected, encoded: encoded,
                                         quality: await pipeline.currentConfiguration().quality,
                                         encodedAt: encodedAt, sentAt: clock())
         await transport.send(.frame(chunk))

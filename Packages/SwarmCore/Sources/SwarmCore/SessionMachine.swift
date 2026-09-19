@@ -390,7 +390,10 @@ public actor SessionMachine {
             // full, for as long as the interruption lasts.
             advance(to: now)
             quality = .notAvailable
-            transition(to: .lost)
+            // Nothing is lost if nothing was ever found: an interruption during
+            // calibration leaves us still waiting for a first marker, and moving
+            // to `.lost` would claim a venue-frame pose that does not exist.
+            transition(to: calibration.hasOrigin ? .lost : .calibrating)
         case .interruptionEnded:
             // The map is gone. Nothing is trustworthy until a marker is seen,
             // including anything sighted just before the interruption.
@@ -598,6 +601,13 @@ public actor SessionMachine {
         // not leave the pill blaming the clock.
         diagnostics.isBlockedOnClockSync = configuration.requireClockSync && !clock.isSynchronized
         guard state.hasVenueFramePose, let pose = lastPose else { return }
+        // The state enum is not the invariant. `.lost` and `.recalibrating` both
+        // claim to have a venue-frame pose, but an interruption during
+        // calibration reaches `.lost` without any marker ever having been seen,
+        // and `.recalibrating` follows an interruption that threw the origin
+        // away. Either way the position is in an arbitrary frame, and a server
+        // fusing it gets a confident wrong answer.
+        guard calibration.hasOrigin else { return }
         guard !diagnostics.isBlockedOnClockSync else { return }
 
         let poseInterval = 1.0 / max(0.001, configuration.rates.poseHz)

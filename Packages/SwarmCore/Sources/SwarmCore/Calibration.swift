@@ -258,5 +258,11 @@ public struct CalibrationEngine: Sendable {
     /// thrown away its map and the next marker must re-establish everything.
     public mutating func invalidateOrigin() {
         hasOrigin = false
+        // The age goes too. After an interruption ARKit has thrown its map away,
+        // so the venue frame that correction established no longer exists —
+        // reporting "corrected 30 s ago" against a frame that is gone is worse
+        // than reporting nothing, because the server cannot tell the difference.
+        lastCorrectionTime = nil
+        lastCorrectionMarker = nil
     }
 }

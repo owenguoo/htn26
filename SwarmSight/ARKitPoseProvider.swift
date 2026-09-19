@@ -325,7 +325,7 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
         }
         // The pixel buffer is retained; the frame is not. CoreVideo buffers are
         // reference-counted independently of the ARFrame that vended them.
-        let pixelBuffer = PixelBufferHandoff(frame.capturedImage)
+        let pixelBuffer = PixelBufferHandoff(frame.capturedImage, deviceTimestamp: timestamp)
 
         Task { [provider] in
             await provider.stage(pixelBuffer: pixelBuffer)

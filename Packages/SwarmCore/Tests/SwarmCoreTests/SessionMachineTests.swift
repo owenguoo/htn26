@@ -92,6 +92,74 @@ struct SessionMachineTests {
         }
     }
 
+    /// Seen on a real device: the orchestrator logging "pose arrived with no
+    /// correction age — its origin is arbitrary and must not be fused", over and
+    /// over. An interruption during calibration reached `.lost`, which claims to
+    /// have a venue-frame pose, and poses escaped in an arbitrary frame.
+    @Test func anInterruptionBeforeAnyMarkerDoesNotLetPosesEscape() async throws {
+        var blind = try Fixtures.trajectory("trajectory-walk-2min.json")
+        blind.markerEvents = []
+        let venue = try Venue.load(from: Fixtures.url("venue.json"))
+        let provider = MockPoseProvider(trajectory: blind, configuration: .init(
+            injections: [600: [.interrupted], 900: [.interruptionEnded]]))
+        let machine = SessionMachine(configuration: .init(deviceID: "phone-a"),
+                                     venue: venue, provider: provider, clock: syncedClock())
+
+        let stream = await machine.start()
+        let collector = Task {
+            var events: [SessionEvent] = []
+            for await event in stream { events.append(event) }
+            return events
+        }
+        try await machine.permissionsGranted()
+        let events = await collector.value
+
+        #expect(events.poses.isEmpty,
+                "\(events.poses.count) poses escaped with no origin ever established")
+        #expect(!events.states.contains(.lost),
+                "went to lost having never had anything to lose: \(events.states)")
+    }
+
+    /// After an interruption ARKit has thrown its map away, so the venue frame
+    /// that the last correction established is gone with it. Reporting
+    /// "corrected 30 s ago" against a frame that no longer exists is worse than
+    /// reporting nothing, because the server cannot tell the difference.
+    @Test func posesStopAfterAnInterruptionUntilAMarkerIsSeenAgain() async throws {
+        let trajectory = try Fixtures.trajectory("trajectory-walk-2min.json")
+        let venue = try Venue.load(from: Fixtures.url("venue.json"))
+        var single = trajectory
+        single.markerEvents = Array(trajectory.markerEvents.prefix(1))
+        let provider = MockPoseProvider(trajectory: single, configuration: .init(
+            injections: [3_000: [.interrupted], 3_100: [.interruptionEnded]]))
+        let machine = SessionMachine(configuration: .init(deviceID: "phone-a"),
+                                     venue: venue, provider: provider, clock: syncedClock())
+
+        let stream = await machine.start()
+        let collector = Task {
+            var events: [SessionEvent] = []
+            for await event in stream { events.append(event) }
+            return events
+        }
+        try await machine.permissionsGranted()
+        let events = await collector.value
+        let poses = events.poses
+
+        #expect(!poses.isEmpty, "nothing was emitted before the interruption either")
+        #expect(events.states.contains(.recalibrating))
+        #expect(poses.allSatisfy { $0.lastCorrectionAge != nil },
+                "a pose went out with no correction age")
+        // During the interruption the origin is still notionally valid and ARKit
+        // has simply stopped talking, so the last known pose keeps going out
+        // flagged stale — that is what greys the cone rather than removing it.
+        // It is `interruptionEnded` that throws the map away, and from there
+        // nothing may be sent until a marker re-establishes the frame.
+        let firstSampleTime = try #require(trajectory.samples.first?.t)
+        let mapDiscarded = firstSampleTime + 3_100.0 / 60.0
+        let afterwards = poses.filter { $0.deviceTimestamp > mapDiscarded + 0.5 }
+        #expect(afterwards.isEmpty,
+                "\(afterwards.count) poses went out after the origin was thrown away")
+    }
+
     // MARK: - Confidence
 
     @Test func confidenceDecaysWhileDegradedAndRecoversAfterwards() async throws {

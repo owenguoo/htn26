@@ -11,9 +11,13 @@ struct OverlayView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            // The thing the overlay overlays. Without it the operator is aiming
+            // a camera they cannot see through.
+            CameraPreviewView(source: coordinator.preview)
 
             if let arrow = coordinator.overlay.arrow {
+                // A scrim, so white chevrons stay legible over a bright room.
+                Color.black.opacity(0.35).ignoresSafeArea()
                 ArrowView(arrow: arrow)
             }
 

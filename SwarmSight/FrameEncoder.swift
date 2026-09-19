@@ -1,6 +1,7 @@
 import CoreImage
 import CoreVideo
 import Foundation
+import Metal
 import SwarmCore
 import UIKit
 
@@ -30,15 +31,28 @@ public final class CoreImageFrameEncoder: FrameEncoding, @unchecked Sendable {
     private var pending: PixelBufferHandoff?
 
     public init() {
-        // Software rendering off, colour management off: neither buys anything
-        // for a JPEG the server is going to run a detector over, and both cost
-        // milliseconds per frame.
-        context = CIContext(options: [
-            .useSoftwareRenderer: false,
+        // Colour management off: it buys nothing for a JPEG a detector will run
+        // over, and costs milliseconds a frame.
+        //
+        // Backed by Metal explicitly. `useSoftwareRenderer: false` alone does
+        // not guarantee a GPU context, and the YCbCr conversion plus downscale
+        // is exactly the work a GPU does for free and a CPU does slowly — this
+        // is the single biggest term in the capture-to-encode budget.
+        let options: [CIContextOption: Any] = [
             .workingColorSpace: NSNull(),
             .outputColorSpace: NSNull(),
-        ])
+            .cacheIntermediates: false,
+        ]
+        if let device = MTLCreateSystemDefaultDevice() {
+            context = CIContext(mtlDevice: device, options: options)
+        } else {
+            context = CIContext(options: options.merging([.useSoftwareRenderer: false]) { a, _ in a })
+        }
     }
+
+    /// The device timestamp of the buffer the last `encode` consumed, so the
+    /// caller can stamp the trace from the frame that was actually encoded.
+    public private(set) var lastEncodedTimestamp: Double = 0
 
     /// Hands the encoder the buffer for the next `encode` call. Called from the
     /// ARSession delegate queue; the buffer is retained here and the `ARFrame`
@@ -62,6 +76,7 @@ public final class CoreImageFrameEncoder: FrameEncoding, @unchecked Sendable {
 
     public func encode(_ request: FrameEncodeRequest) async throws -> EncodedFrame {
         guard let handoff = takePending() else { throw EncodeError.noStagedFrame }
+        lastEncodedTimestamp = handoff.deviceTimestamp
         return try await withCheckedThrowingContinuation { continuation in
             queue.async { [context] in
                 do {
