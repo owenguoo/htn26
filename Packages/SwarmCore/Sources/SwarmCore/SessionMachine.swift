@@ -143,6 +143,10 @@ public struct SessionDiagnostics: Sendable, Equatable {
 /// the length of the demo.
 public actor SessionMachine {
     public struct Rates: Sendable, Equatable {
+        /// Frames and depth chunks are considered only when a pose is emitted,
+        /// so `poseHz` is an upper bound on both. At the defaults — 10 Hz poses
+        /// against 1.5 fps frames — that is slack of nearly seven to one; set
+        /// `poseHz` below `frameFPS` and the frame rate silently follows it down.
         public var poseHz: Double
         public var frameFPS: Double
         public var depthHz: Double
@@ -176,6 +180,11 @@ public actor SessionMachine {
         /// Poses are not sent before the clock is synchronised: the server
         /// cannot tell an unsynchronised timestamp from a synchronised one, and
         /// fusing on device uptime is worse than fusing on nothing.
+        ///
+        /// Turning this off does not make the timestamps good — it makes the
+        /// phone send `serverTimestamp` values that are really device uptime,
+        /// which the server will happily fuse and get wrong. It exists for
+        /// bench testing against a server that does not answer pings.
         public var requireClockSync: Bool
         /// Frames to skip after the world origin moves.
         ///
@@ -339,6 +348,7 @@ public actor SessionMachine {
         snapshot.poseAge = lastPoseTime.map { max(0, now - $0) } ?? 0
         snapshot.isStale = isStale
         snapshot.motionWhileLost = motionWhileLost
+        snapshot.isBlockedOnClockSync = configuration.requireClockSync && !clock.isSynchronized
         return snapshot
     }
 
@@ -544,18 +554,19 @@ public actor SessionMachine {
     // MARK: - Throttled emission
 
     private func emitIfDue() {
+        // Updated before the state guard, so a session waiting for a marker does
+        // not leave the pill blaming the clock.
+        diagnostics.isBlockedOnClockSync = configuration.requireClockSync && !clock.isSynchronized
         guard state.hasVenueFramePose, let pose = lastPose else { return }
-        if configuration.requireClockSync && !clock.isSynchronized {
-            diagnostics.isBlockedOnClockSync = true
-            return
-        }
-        diagnostics.isBlockedOnClockSync = false
+        guard !diagnostics.isBlockedOnClockSync else { return }
 
         let poseInterval = 1.0 / max(0.001, configuration.rates.poseHz)
         guard now >= nextPoseDue else { return }
-        // Advance from the due time, not from now, so a late sample does not
-        // permanently shift the cadence.
-        nextPoseDue = max(now, nextPoseDue == -.infinity ? now : nextPoseDue) + poseInterval
+        // The next slot is measured from now, not from the slot that was missed.
+        // Measuring from the missed slot would make the phone emit a burst of
+        // back-dated poses the moment tracking recovered after a long gap, which
+        // is the opposite of useful: they all describe the same instant.
+        nextPoseDue = now + poseInterval
 
         let update = makePoseUpdate(pose: pose)
         diagnostics.posesEmitted += 1

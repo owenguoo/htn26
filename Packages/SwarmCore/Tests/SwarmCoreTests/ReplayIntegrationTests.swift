@@ -175,6 +175,35 @@ struct ReplayIntegrationTests {
         await machine.stop()
     }
 
+    /// A session stuck in calibrating with a perfectly good clock must not blame
+    /// the clock. The status pill is the only thing an operator has to tell
+    /// "point at a marker" apart from "the clock has not converged", and getting
+    /// that backwards sends them to debug the wrong thing.
+    @Test func calibratingWithAGoodClockDoesNotBlameTheClock() async throws {
+        var blind = try Fixtures.trajectory("trajectory-walk-2min.json")
+        blind.markerEvents = []
+        let venue = try Venue.load(from: Fixtures.url("venue.json"))
+        let provider = MockPoseProvider(trajectory: blind)
+        let machine = SessionMachine(configuration: .init(deviceID: "phone-a"),
+                                     venue: venue, provider: provider, clock: syncedClock())
+
+        let stream = await machine.start()
+        let collector = Task {
+            var events: [SessionEvent] = []
+            for await event in stream { events.append(event) }
+            return events
+        }
+        try await machine.permissionsGranted()
+        let events = await collector.value
+
+        #expect(events.poses.isEmpty, "nothing should be sent from an arbitrary frame")
+        let diagnostics = await machine.currentDiagnostics()
+        #expect(diagnostics.state == .calibrating)
+        #expect(!diagnostics.isBlockedOnClockSync,
+                "the pill blamed the clock for what is a missing marker")
+        await machine.stop()
+    }
+
     /// The same replay with a converged clock: every pose carries a server
     /// timestamp that is the device timestamp plus one constant offset, and the
     /// two orderings agree.
