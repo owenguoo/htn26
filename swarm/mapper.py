@@ -45,6 +45,8 @@ class Mapper:
         self.room = room
         self.out_dir = out_dir
         self.enabled = False
+        self.mode = os.environ.get("MAP_MODE", "joint")
+        self.joint_frames = max(12, min(32, int(os.environ.get("MAP_JOINT_FRAMES", "24"))))
         self.native_only = os.environ.get("MAP_NATIVE_ONLY") == "1"
         self.include_sims = os.environ.get("MAP_INCLUDE_SIMS") == "1"  # sim frames are drawings: off
         self.keyframes: list[dict] = []
@@ -202,7 +204,8 @@ class Mapper:
     def status(self) -> dict:
         return {"enabled": self.enabled, "configured": bool(self.url), "workerOk": self.worker_ok,
                 "running": self.running, "keyframes": len(self.keyframes), "maxKeyframes": MAX_ARCHIVE,
-                "batchSize": self.batch_size, "maxBatch": SECTION_FRAMES, "sections": len(self.sections),
+                "batchSize": self.batch_size, "maxBatch": self.joint_frames if self.mode == "joint" else SECTION_FRAMES,
+                "mode": self.mode, "sections": len(self.sections),
                 "selectionMs": self.selection_ms,
                 "selection": self.selector.status(),
                 "selectionHints": {p.id: {"name": p.name or f"Phone {p.index}", "message": self.selection_hints[p.id]}
@@ -303,8 +306,9 @@ class Mapper:
             self.running = False
 
     async def _rebuild(self) -> None:
-        frames = section_batch(self.keyframes, self.placed, self.pending)
-        if len(self.sections) >= MAX_SECTIONS:
+        frames = (working_batch(self.keyframes, self.previous_batch, self.pending, self.joint_frames)
+                  if self.mode == "joint" else section_batch(self.keyframes, self.placed, self.pending))
+        if self.mode != "joint" and len(self.sections) >= MAX_SECTIONS:
             self.error = "Section limit reached; current coverage preserved. Start a new scan for another area."
             return
         self.batch_size = len(frames)
@@ -324,7 +328,7 @@ class Mapper:
         try:
             await self._ensure_tunnel()
             head = json.dumps({"frames": [{"id": k["id"], "size": len(k["jpeg"]), "up": k.get("up")} for k in frames],
-                               "maxPoints": 150000}).encode()
+                               "maxPoints": 150000, "voxelResolution": 80 if self.mode == "joint" else 128}).encode()
             body = struct.pack(">I", len(head)) + head + b"".join(k["jpeg"] for k in frames)
             raw = await asyncio.to_thread(_post, f"{self.url}/reconstruct", body)
             (n,) = struct.unpack(">I", raw[:4])
@@ -341,7 +345,9 @@ class Mapper:
             return
         if self.sections:
             try:
-                transform, alignment = register(meta["cameras"], self.placed)
+                references = ({k: v for k, v in self.placed.items() if k in self.previous_batch}
+                              if self.mode == "joint" else self.placed)
+                transform, alignment = register(meta["cameras"], references)
             except ValueError as exc:
                 self.blocked_batch = signature
                 self.error = str(exc)
@@ -356,8 +362,14 @@ class Mapper:
             alignment["method"] = "initial visual anchor; camera-height scale estimate"
         alignment["leveledBy"] = meta.get("leveledBy")
         alignment["floorBy"] = meta.get("floorBy")
-        for key, value in place(transform, meta["cameras"]).items():
-            self.placed.setdefault(key, value)  # accepted anchors never drift
+        if self.mode == "joint":
+            # The next update registers to this coherent reconstruction, not stale
+            # camera estimates accumulated across independent sections.
+            self.placed = place(transform, meta["cameras"])
+            alignment["method"] = "joint room reconstruction"
+        else:
+            for key, value in place(transform, meta["cameras"]).items():
+                self.placed.setdefault(key, value)
         self.blocked_batch = None
         if self.fit_pivot is None:
             self.fit_pivot = [sum(v[i] for v in self.placed.values()) / len(self.placed) for i in (0, 2)]
@@ -368,13 +380,16 @@ class Mapper:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         path = self.out_dir / f"scan-{self.version}.glb"
         path.write_bytes(glb)
+        if self.mode == "joint":
+            self.sections = []
+            self.consolidated = None
         self.sections.append({"url": f"/web/models/live/{path.name}",
                               "autoTransform": transform, "frames": self.previous_batch[:],
                               "version": self.version})
         secs = round(time.time() - t0, 1)
         self.last = {"version": self.version, "url": f"/web/models/live/{path.name}", "transform": self.display(transform),
                      "autoTransform": transform, "fit": dict(self.fit),
-                     "alignment": alignment, "frames": meta["frames"], "points": meta["points"],
+                     "mode": self.mode, "alignment": alignment, "frames": meta["frames"], "points": meta["points"],
                      "faces": meta.get("faces"), "representation": meta.get("representation", "points"),
                      "colorSpace": meta.get("colorSpace"), "quality": meta.get("quality"),
                      "phones": len({k["pid"] for k in frames}), "seconds": secs,

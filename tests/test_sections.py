@@ -50,7 +50,7 @@ class SectionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         from swarm.hub import Hub, ROOM
         from swarm.mapper import Mapper
         with tempfile.TemporaryDirectory() as directory:
-            hub=Hub(); mapper=Mapper(hub,ROOM,Path(directory));mapper.url='http://test'
+            hub=Hub(); mapper=Mapper(hub,ROOM,Path(directory));mapper.url='http://test';mapper.mode='sections'
             cameras=SectionsTests().cameras()
             mapper.keyframes=[{'id':c['id'],'pid':'phone','jpeg':jpeg(texture()),
                 'links':{f'k{j}':.5 for j in range(i)},'quality':100,'t':i}

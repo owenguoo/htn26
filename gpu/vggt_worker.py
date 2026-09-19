@@ -57,7 +57,7 @@ def load(checkpoint: Path) -> None:
     print(f"model loaded in {stats['loadedSeconds']}s", flush=True)
 
 
-def reconstruct(jpegs: list[bytes], ids: list[str], max_points: int, ups: list | None = None) -> tuple[dict, bytes]:
+def reconstruct(jpegs: list[bytes], ids: list[str], max_points: int, ups: list | None = None, voxel_resolution: int = 128) -> tuple[dict, bytes]:
     started = time.monotonic()
     with tempfile.TemporaryDirectory() as tmp:
         paths = []
@@ -87,7 +87,7 @@ def reconstruct(jpegs: list[bytes], ids: list[str], max_points: int, ups: list |
     rgb = np.transpose(array(prediction["images"]), (0, 2, 3, 1))
     if representation == 'surface':
         from surface import build_surface
-        meta, glb = build_surface(depth, confidence, rgb, extrinsic, intrinsic, ids, ups,
+        meta, glb = build_surface(depth, confidence, rgb, extrinsic, intrinsic, ids, ups, voxel_resolution=voxel_resolution,
                                   max_faces=max(20000, min(300000, max_points * 2)))
         meta.update(source="VGGT-Omega-1B-512", inferenceSeconds=round(inference_s, 3),
                     totalSeconds=round(time.monotonic() - started, 3), peakAllocatedGB=round(peak_gb, 2),
@@ -191,7 +191,8 @@ class Handler(BaseHTTPRequestHandler):
             with lock:  # one reconstruction at a time on the GPU
                 stats["busy"] = True
                 try:
-                    meta, glb = reconstruct(jpegs, ids, int(header.get("maxPoints", 150000)), ups)
+                    meta, glb = reconstruct(jpegs, ids, int(header.get("maxPoints", 150000)), ups,
+                                            max(64, min(128, int(header.get("voxelResolution", 128)))))
                 finally:
                     stats["busy"] = False
             stats["runs"] += 1
