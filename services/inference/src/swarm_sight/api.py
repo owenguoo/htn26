@@ -97,6 +97,12 @@ def create_app(
     ) -> None:
         if authenticate_demo(request, settings):
             return
+        # A gateway owns Authorization; the worker still checks its own secret.
+        worker_key = request.headers.get("x-swarm-api-key", "")
+        if worker_key and secrets.compare_digest(
+            worker_key.encode(), settings.api_key.get_secret_value().encode()
+        ):
+            return
         expected = "Bearer " + settings.api_key.get_secret_value()
         if credentials is None or not secrets.compare_digest(
             request.headers.get("authorization", "").encode(), expected.encode()
@@ -105,7 +111,13 @@ def create_app(
 
     @asynccontextmanager
     async def upload(request: Request):
-        content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        # Baseten's gateway rewrites Content-Type; preserve the original image type.
+        content_type = (
+            request.headers.get("x-swarm-content-type", request.headers.get("content-type", ""))
+            .split(";")[0]
+            .strip()
+            .lower()
+        )
         if content_type not in {"image/jpeg", "image/png"}:
             raise HTTPException(415, "Send a raw JPEG or PNG body")
         if app.state.uploads >= settings.max_uploads:

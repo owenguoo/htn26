@@ -41,11 +41,10 @@ def test_real_similarity_cannot_create_mock_find_or_dispatch():
 def test_confirmation_auth_exact_identity_unknown_position_and_phase():
     hub = Hub()
     app = FastAPI()
-    install_routes(app, hub, Auth(Settings(operator_code='test')))
+    install_routes(app, hub, Auth(Settings()))
     with TestClient(app) as client:
         body = sighting(hub)
-        assert client.post('/api/search/confirm', json=body).status_code == 401
-        client.post('/api/session', json={'code': 'test'})
+        assert client.post('/api/search/confirm', json=body, headers={'Origin': 'https://evil.test'}).status_code == 403
         assert client.post('/api/search/confirm', json=body | {'seq': 2}).status_code == 409
         response = client.post('/api/search/confirm', json=body)
         assert response.status_code == 200
@@ -85,10 +84,9 @@ def test_stale_reconnect_reset_and_threshold_invalidate_confirmation():
 def test_real_mode_stays_after_clear_and_explicit_rehearsal_restores_mock():
     hub = Hub()
     app = FastAPI()
-    install_routes(app, hub, Auth(Settings(operator_code='test')))
+    install_routes(app, hub, Auth(Settings()))
     with TestClient(app) as client:
         sighting(hub)
-        client.post('/api/session', json={'code': 'test'})
         assert client.delete('/api/search/reference').status_code == 200
         hub.target.place(0, 0)
         assert hub.target.pos is None
@@ -225,10 +223,9 @@ def test_invalidated_confirmation_keeps_authoritative_phase_without_success(monk
         monkeypatch.setattr(hub, 'clear_detection_overlays', clear)
         monkeypatch.setattr(hub.planner, 'note', lambda text, *args: notes.append(text))
         app = FastAPI()
-        auth = Auth(Settings(operator_code='test'))
+        auth = Auth(Settings())
         install_routes(app, hub, auth)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test',
-                                     cookies={auth.cookie: auth.token()}) as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
             confirmation = asyncio.create_task(client.post('/api/search/confirm', json=body))
             await paused.wait()
             if newer == 'search':

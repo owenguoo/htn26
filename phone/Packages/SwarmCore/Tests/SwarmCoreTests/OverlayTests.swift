@@ -278,9 +278,9 @@ struct OverlayTests {
 
     @Test func detectionsReplaceEachOtherAndExpire() {
         var model = OverlayModel()
-        model.apply(.detections(HubDetections(boxes: [HubDetectionBox(x: 0, y: 0, w: 1, h: 1)],
-                                              ttlMs: 1500)), heading: nil, now: 0)
-        model.apply(.detections(HubDetections(boxes: [], ttlMs: 1500)), heading: nil, now: 1)
+        model.apply(.detections(boxes: [HubDetectionBox(x: 0, y: 0, w: 1, h: 1)], ttlMs: 1500),
+                    heading: nil, now: 0)
+        model.apply(.detections(boxes: [], ttlMs: 1500), heading: nil, now: 1)
         #expect(model.state.detections?.boxes.isEmpty == true)
         tick(&model, pose: nil, now: 2.6)
         #expect(model.state.detections == nil)

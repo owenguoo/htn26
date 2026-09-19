@@ -518,6 +518,8 @@ public actor SwarmClient {
         let sentAt = dependencies.uptime()
         frameSendTimes.append(sentAt)
         frameSendTimes.removeAll { sentAt - $0 > 2 }
+        // Detection expiry follows capture time in the local monotonic clock.
+        model.recordDetectionCapture(seq: ticket.frameID, at: sentAt - max(0, now - capturedAt))
         await transport.send(message)
     }
 

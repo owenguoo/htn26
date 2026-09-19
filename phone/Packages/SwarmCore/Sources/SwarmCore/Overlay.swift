@@ -341,6 +341,8 @@ public struct ToastCue: Sendable, Equatable {
 }
 
 public struct DetectionsCue: Sendable, Equatable {
+    public var threshold: Double? = nil
+    public var rehearsal = false
     public var boxes: [HubDetectionBox]
     public var until: Double
 
@@ -464,6 +466,19 @@ public struct OverlayModel: Sendable {
         case compass(kind: String, label: String?, bearing: Double, until: Double)
     }
 
+    private var detectionStream: String?
+    private var detectionRevision: String?
+    private var detectionSeq: UInt64?
+    private var detectionCaptures: [UInt64: Double] = [:]
+
+    public mutating func recordDetectionCapture(seq: UInt64, at time: Double) {
+        detectionCaptures = detectionCaptures.filter { time - $0.value < 1.5 }
+        detectionCaptures[seq] = time
+        if detectionCaptures.count > 32, let oldest = detectionCaptures.keys.min() {
+            detectionCaptures.removeValue(forKey: oldest)
+        }
+    }
+
     private var guide: Guide?
     private var cueSerial: UInt64 = 0
     private var wasOnTarget = false
@@ -481,6 +496,11 @@ public struct OverlayModel: Sendable {
     // MARK: - Hub messages
 
     public mutating func apply(_ welcome: HubWelcome) {
+        detectionStream = welcome.streamId
+        detectionRevision = nil
+        detectionSeq = nil
+        detectionCaptures.removeAll()
+        state.detections = nil
         state.index = welcome.index
         state.colorHex = welcome.color
         state.room = welcome.room ?? state.room
@@ -550,9 +570,27 @@ public struct OverlayModel: Sendable {
             state.toast = ToastCue(text: text, until: now + ttlMs / 1000)
             cue(haptic: "message", intensity: 0.8)
             cue(sound: "message")
-        case .detections(let detections):
-            state.detections = DetectionsCue(boxes: detections.boxes,
-                                             until: now + detections.ttlMs / 1000)
+        case .detections(let boxes, let ttlMs, let context):
+            var until = now + ttlMs / 1000
+            if let context {
+                if context.clear {
+                    detectionRevision = context.searchRevision
+                    detectionSeq = nil
+                    state.detections = nil
+                    return true
+                }
+                guard let stream = context.streamId, stream == detectionStream,
+                      let seq = context.seq, detectionSeq.map({ seq > $0 }) ?? true,
+                      let revision = context.searchRevision,
+                      detectionRevision == nil || detectionRevision == revision,
+                      let captured = detectionCaptures[seq], now - captured < 1.5 else { return false }
+                detectionRevision = revision
+                detectionSeq = seq
+                until = min(until, captured + 1.5)
+            }
+            state.detections = DetectionsCue(boxes: boxes, until: until)
+            state.detections?.threshold = context?.threshold
+            state.detections?.rehearsal = context?.rehearsal ?? false
         case .rate, .hud, .unknown:
             return false
         }

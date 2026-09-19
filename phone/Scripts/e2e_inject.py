@@ -3,19 +3,14 @@
     uv run python phone/Scripts/e2e_inject.py --port 8077 --phone swarm-replay-e2e flash
     uv run python phone/Scripts/e2e_inject.py --port 8077 --phone swarm-replay-e2e focus   # → rate + hud
 
-The hub only takes commands from a signed-in operator on its own origin, so this
-signs in first (`POST /api/session` with the operator code) and presents the
-session cookie and a matching Origin on the socket — exactly what the console
-page does. The code comes from --code or $SWARM_OPERATOR_CODE.
+The hub accepts dashboard commands from the console origin, so this connects
+with the same origin header as the browser console.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-import os
-import urllib.request
-
 import websockets
 
 
@@ -25,21 +20,11 @@ async def main() -> None:
     ap.add_argument("--phone", required=True)
     ap.add_argument("what", choices=("flash", "message", "focus", "ping"))
     ap.add_argument("--hold", type=float, default=0.5, help="seconds to keep the socket open")
-    ap.add_argument("--code", default=os.environ.get("SWARM_OPERATOR_CODE", ""))
     args = ap.parse_args()
 
     origin = f"http://127.0.0.1:{args.port}"
-    request = urllib.request.Request(f"{origin}/api/session", method="POST",
-                                     data=json.dumps({"code": args.code}).encode(),
-                                     headers={"content-type": "application/json", "origin": origin})
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            cookie = response.headers.get("set-cookie", "").split(";")[0]
-    except urllib.error.HTTPError as e:
-        raise SystemExit(f"operator sign-in failed ({e.code}): pass --code or set SWARM_OPERATOR_CODE") from e
-
-    async with websockets.connect(f"ws://127.0.0.1:{args.port}/ws/dashboard?role=console", max_size=None,
-                                  origin=origin, additional_headers={"Cookie": cookie}) as ws:
+    async with websockets.connect(f"ws://127.0.0.1:{args.port}/ws/dashboard?role=console",
+                                  max_size=None, origin=origin) as ws:
         if args.what == "flash":
             msg = {"type": "command", "target": args.phone,
                    "cmd": {"cmd": "flash", "color": "#ff5d73", "text": "e2e", "ttlMs": 1500}}

@@ -179,15 +179,14 @@ struct HubWireTests {
             .ping(id: 5, x: 1, y: 2, label: "Check here", ttlMs: 12_000)))
         #expect(try message("cmd-message") == .command(.message(text: "Spread out", ttlMs: 8000)))
         #expect(try message("cmd-hud") == .command(.hud(on: true)))
-        guard case .command(.detections(let detections))? = try message("cmd-detections") else {
+        guard case .command(.detections(let boxes, let ttl, _))? = try message("cmd-detections") else {
             Issue.record("detections did not decode")
             return
         }
-        #expect(detections.ttlMs == 1500)
-        #expect(detections.boxes.count == 2)
-        #expect(detections.boxes[0].label == "backpack")
-        #expect(detections.boxes[1].label == nil)
-        #expect(!detections.isRehearsal)
+        #expect(ttl == 1500)
+        #expect(boxes.count == 2)
+        #expect(boxes[0].label == "backpack")
+        #expect(boxes[1].label == nil)
     }
 
     // MARK: Detections — the shapes `swarm/` really emits
@@ -216,34 +215,34 @@ struct HubWireTests {
     /// `score`, so every box decoded with a nil confidence and the overlay drew a
     /// bare "person" tag with nothing to grade it by.
     @Test func aRealDetectionCarriesDetectionScoreAndSimilarity() throws {
-        guard case .command(.detections(let d))? = HubInbound.decode(Data(Self.realDetections.utf8)) else {
+        guard case .command(.detections(let boxes, let ttl, let context))? = HubInbound.decode(Data(Self.realDetections.utf8)) else {
             Issue.record("the hub's own detections shape did not decode")
             return
         }
-        #expect(d.boxes.count == 2)
-        #expect(d.boxes[0].detectionScore == 0.87)
-        #expect(d.boxes[0].similarity == 0.42)
-        #expect(d.boxes[0].confidence == 0.87)
-        #expect(d.boxes[0].label == "person")
+        #expect(boxes.count == 2)
+        #expect(boxes[0].detectionScore == 0.87)
+        #expect(boxes[0].similarity == 0.42)
+        #expect(boxes[0].confidence == 0.87)
+        #expect(boxes[0].label == "person")
         // Negative similarity is legal (`Field(ge=-1)`): it is a person who is
         // definitely not the one being looked for.
-        #expect(d.boxes[1].similarity == -0.31)
-        #expect(d.threshold == 0.35)
-        #expect(d.ttlMs == 1500)
-        #expect(!d.isRehearsal)
+        #expect(boxes[1].similarity == -0.31)
+        #expect(context?.threshold == 0.35)
+        #expect(ttl == 1500)
+        #expect(context?.rehearsal == false)
     }
 
     /// The freshness keys `web/inference-ui.js` `acceptDetection` gates on. No
     /// gate exists on this side yet; decoding them is what lets one be added
     /// without changing the wire type again.
     @Test func aRealDetectionCarriesTheFreshnessKeys() throws {
-        guard case .command(.detections(let d))? = HubInbound.decode(Data(Self.realDetections.utf8)) else {
+        guard case .command(.detections(_, _, let context))? = HubInbound.decode(Data(Self.realDetections.utf8)) else {
             Issue.record("the hub's own detections shape did not decode")
             return
         }
-        #expect(d.streamId == "abc-7")
-        #expect(d.seq == 41)
-        #expect(d.searchRevision == "rev-3")
+        #expect(context?.streamId == "abc-7")
+        #expect(context?.seq == 41)
+        #expect(context?.searchRevision == "rev-3")
     }
 
     /// `rehearsal_detections` used to fall through to `.unknown` and its boxes
@@ -255,16 +254,16 @@ struct HubWireTests {
             Issue.record("rehearsal_detections did not decode: \(String(describing: decoded))")
             return
         }
-        guard case .detections(let d) = command else {
+        guard case .detections(let boxes, _, let context) = command else {
             Issue.record("rehearsal_detections decoded as \(command), not detections")
             return
         }
-        #expect(d.isRehearsal)
-        #expect(d.boxes.count == 1)
-        #expect(d.boxes[0].detectionScore == 0.62)
-        #expect(d.boxes[0].similarity == 0.11)
-        #expect(d.threshold == nil, "the rehearsal path sends no threshold")
-        #expect(d.streamId == "abc-7")
+        #expect(context?.rehearsal == true)
+        #expect(boxes.count == 1)
+        #expect(boxes[0].detectionScore == 0.62)
+        #expect(boxes[0].similarity == 0.11)
+        #expect(context?.threshold == nil, "the rehearsal path sends no threshold")
+        #expect(context?.streamId == "abc-7")
         // `debug.lastCommand` must report the cmd the hub actually sent, or the
         // console's tooltip says the phone got something it never got.
         #expect(command.name == "rehearsal_detections")
@@ -274,23 +273,24 @@ struct HubWireTests {
     /// client has no use for, and a zero TTL so the overlay goes on the next tick.
     @Test func theDetectionClearMessageDecodesToNoBoxesAndNoLifetime() throws {
         let json = #"{"type":"command","cmd":"detections","boxes":[],"searchRevision":"rev-3","clear":true,"ttlMs":0}"#
-        guard case .command(.detections(let d))? = HubInbound.decode(Data(json.utf8)) else {
+        guard case .command(.detections(let boxes, let ttl, let context))? = HubInbound.decode(Data(json.utf8)) else {
             Issue.record("the clear message did not decode")
             return
         }
-        #expect(d.boxes.isEmpty)
-        #expect(d.ttlMs == 0)
-        #expect(d.searchRevision == "rev-3")
+        #expect(boxes.isEmpty)
+        #expect(ttl == 0)
+        #expect(context?.searchRevision == "rev-3")
+        #expect(context?.clear == true)
     }
 
     /// Detections ride back out to the console in `HubHUDMirror.dets`, so the
     /// box has to survive a decode-then-encode without losing what grades it.
     @Test func aBoxRoundTripsThroughTheConsoleMirrorWithoutLosingItsScores() throws {
-        guard case .command(.detections(let d))? = HubInbound.decode(Data(Self.realDetections.utf8)) else {
+        guard case .command(.detections(let boxes, _, _))? = HubInbound.decode(Data(Self.realDetections.utf8)) else {
             Issue.record("the hub's own detections shape did not decode")
             return
         }
-        let encoded = try HubWire.makeEncoder().encode(d.boxes[0])
+        let encoded = try HubWire.makeEncoder().encode(boxes[0])
         let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(object["detectionScore"] as? Double == 0.87)
         #expect(object["similarity"] as? Double == 0.42)
@@ -298,17 +298,17 @@ struct HubWireTests {
         // Nothing sent it, so nothing should appear: a null `score` would have
         // the console believing the hub speaks a field it does not.
         #expect(object["score"] == nil)
-        #expect(try JSONDecoder().decode(HubDetectionBox.self, from: encoded) == d.boxes[0])
+        #expect(try JSONDecoder().decode(HubDetectionBox.self, from: encoded) == boxes[0])
     }
 
     /// Everything else `DetectionResult.model_dump()` splats in — `phoneId`,
     /// `targetVersion`, `queueMs` — must stay non-fatal.
     @Test func theFieldsThisClientDoesNotUseAreIgnoredNotFatal() throws {
-        guard case .command(.detections(let d))? = HubInbound.decode(Data(Self.realDetections.utf8)) else {
+        guard case .command(.detections(let boxes, _, _))? = HubInbound.decode(Data(Self.realDetections.utf8)) else {
             Issue.record("the hub's own detections shape did not decode")
             return
         }
-        #expect(d.boxes.count == 2, "an unknown sibling field must not cost us the boxes")
+        #expect(boxes.count == 2, "an unknown sibling field must not cost us the boxes")
     }
 
     /// `hub.py:845` puts `streamId` in every `welcome`, and it changes on every

@@ -395,18 +395,18 @@ public enum HubFrame {
 // MARK: - Hub → phone
 
 public struct HubWelcome: Sendable, Equatable, Decodable {
-    public var phoneId: String
-    public var index: Int
-    /// `#rrggbb`. Also the default flash colour.
-    public var color: String
     /// The hub's identifier for *this* run of this phone's camera stream
     /// (`hub.py` `ws_phone`, sent in every `welcome`). It changes when the phone
     /// reconnects, and `swarm/detection.py` stamps it into every result. It is
     /// the key a detection-freshness gate matches on: a box carrying the
     /// previous stream's id describes a frame from before the reconnect and must
     /// not be drawn over the live camera. Decoded here so that gate has
-    /// something to compare against; nothing consumes it yet.
-    public var streamId: String?
+    /// something to compare against.
+    public var streamId: String? = nil
+    public var phoneId: String
+    public var index: Int
+    /// `#rrggbb`. Also the default flash colour.
+    public var color: String
     public var room: HubRoom?
     public var phase: String?
 }
@@ -493,39 +493,13 @@ public struct HubDetectionBox: Sendable, Equatable, Codable {
     public var confidence: Double? { detectionScore ?? score }
 }
 
-/// The payload of `cmd: "detections"` and `cmd: "rehearsal_detections"`.
-///
-/// One type for both because a phone draws them identically; `isRehearsal` only
-/// decides which `cmd` string goes back in `debug.lastCommand`.
-///
-/// The freshness keys are carried but not yet acted on. `web/inference-ui.js`
-/// `acceptDetection` drops a result whose `streamId` is not the current stream,
-/// whose `seq` has gone backwards, or whose `searchRevision` has moved on. Until
-/// a gate exists on this side the fields have to at least survive decoding, or
-/// building one later means changing the wire type again.
-public struct HubDetections: Sendable, Equatable {
-    public var boxes: [HubDetectionBox]
-    public var ttlMs: Double
+public struct HubDetectionContext: Sendable, Equatable {
     public var streamId: String?
-    public var seq: Int?
+    public var seq: UInt64?
     public var searchRevision: String?
-    /// Similarity at or above which a box is the target (`detections` only).
     public var threshold: Double?
-    /// True for `cmd: "rehearsal_detections"`, which the hub sends from
-    /// `ingest_detections` while the search is in rehearsal mode. It carries no
-    /// `threshold` and its boxes are simulated.
-    public var isRehearsal: Bool
-
-    public init(boxes: [HubDetectionBox], ttlMs: Double, streamId: String? = nil, seq: Int? = nil,
-                searchRevision: String? = nil, threshold: Double? = nil, isRehearsal: Bool = false) {
-        self.boxes = boxes
-        self.ttlMs = ttlMs
-        self.streamId = streamId
-        self.seq = seq
-        self.searchRevision = searchRevision
-        self.threshold = threshold
-        self.isRehearsal = isRehearsal
-    }
+    public var clear: Bool
+    public var rehearsal: Bool
 }
 
 public enum HubCommand: Sendable, Equatable {
@@ -544,7 +518,7 @@ public enum HubCommand: Sendable, Equatable {
     case rate(fps: Double?)
     case ping(id: Int, x: Double, y: Double, label: String, ttlMs: Double)
     case message(text: String, ttlMs: Double)
-    case detections(HubDetections)
+    case detections(boxes: [HubDetectionBox], ttlMs: Double, context: HubDetectionContext? = nil)
     case hud(on: Bool)
     case unknown(cmd: String)
 
@@ -556,7 +530,7 @@ public enum HubCommand: Sendable, Equatable {
         case .rate: "rate"
         case .ping: "ping"
         case .message: "message"
-        case .detections(let detections): detections.isRehearsal ? "rehearsal_detections" : "detections"
+        case .detections(_, _, let context): context?.rehearsal == true ? "rehearsal_detections" : "detections"
         case .hud: "hud"
         case .unknown(let cmd): cmd
         }
@@ -640,7 +614,7 @@ public enum HubInbound: Sendable, Equatable {
         var label: String?
         var boxes: [HubDetectionBox]?
         var streamId: String?
-        var seq: Int?
+        var seq: UInt64?
         var searchRevision: String?
         var threshold: Double?
         var on: Bool?
@@ -672,16 +646,11 @@ public enum HubInbound: Sendable, Equatable {
                 return .ping(id: id, x: x, y: y, label: label ?? "Check here", ttlMs: ttlMs ?? 12_000)
             case "message":
                 return .message(text: text ?? "", ttlMs: ttlMs ?? 8000)
-            // Two `cmd` names for one thing: `POST /api/detections` relays real
-            // results, `ingest_detections` relays rehearsal ones. The hub owns
-            // both spellings and we may not change it, so absorb both here —
-            // `rehearsal_detections` used to fall through to `.unknown` and the
-            // boxes were dropped without a trace.
             case "detections", "rehearsal_detections":
-                return .detections(HubDetections(boxes: boxes ?? [], ttlMs: ttlMs ?? 1500,
-                                                 streamId: streamId, seq: seq,
-                                                 searchRevision: searchRevision, threshold: threshold,
-                                                 isRehearsal: cmd == "rehearsal_detections"))
+                return .detections(boxes: boxes ?? [], ttlMs: ttlMs ?? 1500,
+                    context: HubDetectionContext(streamId: streamId, seq: seq,
+                        searchRevision: searchRevision, threshold: threshold,
+                        clear: clear ?? false, rehearsal: cmd == "rehearsal_detections"))
             case "hud":
                 return .hud(on: on ?? false)
             default:

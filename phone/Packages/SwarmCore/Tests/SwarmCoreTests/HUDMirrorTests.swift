@@ -111,8 +111,8 @@ struct HUDMirrorTests {
         let searching = overlay { model in
             model.apply(world, now: 0)
             model.apply(.message(text: "Spread out", ttlMs: 8000), heading: nil, now: 0)
-            model.apply(.detections(HubDetections(
-                boxes: [HubDetectionBox(x: 0.1, y: 0.2, w: 0.3, h: 0.4, label: "bag")], ttlMs: 1500)),
+            model.apply(.detections(
+                boxes: [HubDetectionBox(x: 0.1, y: 0.2, w: 0.3, h: 0.4, label: "bag")], ttlMs: 1500),
                         heading: nil, now: 0)
         }
         let hud = mirror(searching)

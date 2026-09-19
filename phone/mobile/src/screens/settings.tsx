@@ -173,7 +173,11 @@ export default function Settings() {
             systemImage="rectangle.portrait.and.arrow.right"
             role="destructive"
             onPress={() => void leave()}
-            modifiers={[tint(colors.problem)]}
+            // `role="destructive"` reddens the title but leaves the SF Symbol on
+            // the accent colour, so the row reads half-destructive. `tint` does
+            // not reach it either — in a Form row that drives the accent, not the
+            // label's foreground. `foregroundStyle` colours glyph and text alike.
+            modifiers={[foregroundStyle(colors.problem), tint(colors.problem)]}
           />
         </Section>
       </Form>

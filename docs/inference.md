@@ -21,7 +21,6 @@ Do not put these values in browser JavaScript or URLs.
 SWARM_API_KEY=replace-with-worker-secret
 SWARM_INFERENCE_API_KEY=replace-with-worker-secret
 SWARM_BRIDGE_KEY=replace-with-different-bridge-secret
-SWARM_OPERATOR_CODE=replace-with-operator-login-code
 SWARM_INFERENCE_URL=http://127.0.0.1:8001
 SWARM_HUB_URL=http://127.0.0.1:8000
 SWARM_BACKEND=yoloe
@@ -51,7 +50,7 @@ uv run python -m swarm.inference
 ```
 
 Wait for `curl --fail http://127.0.0.1:8001/readyz` to succeed.
-Open `http://localhost:8000/console`, log in with the operator code, upload a reference, select exactly one detected person, and register it.
+Open `http://localhost:8000/console`, upload a reference, select exactly one detected person, and register it.
 Join phones through the dashboard QR code over HTTPS, with camera permission.
 The bridge samples each phone at one FPS; focused console video can run at fifteen FPS.
 The bridge permits four global requests, at most one in flight and one latest pending frame per phone, with a default 64-phone admission bound (`SWARM_MAX_PHONES`, maximum 256).
@@ -76,7 +75,7 @@ The image runs as UID 1000; bind-mounted cache directories must be writable by t
 The `/data` volume retains detector weights, Hugging Face weights, and Ultralytics configuration.
 References and frames stay ephemeral in process memory and are not restored from that cache.
 A worker restart loses the active reference; the operator must upload it again.
-A hub restart also clears references, stream identities, and operator sessions.
+A hub restart also clears references and stream identities.
 The bridge reconnects with bounded backoff after transport loss.
 Authenticated reference-health polling continues without frames and while paused; a silent bridge becomes unavailable after ten seconds.
 A missing reference invalidates the hub reference rather than recreating it.
@@ -86,12 +85,13 @@ A missing reference invalidates the hub reference rather than recreating it.
 `/ws/phone`, the phone page, and the read-only projector remain available without service keys.
 Private frame subscribers use `Authorization: Bearer <SWARM_BRIDGE_KEY>` on `/ws/frames?fps=1`.
 The same bearer is required for `POST /api/detections`, `POST /api/pose`, and bridge search/status calls.
-Operators use same-origin HTTP-only session cookies for console controls.
+The console has no sign-in; anyone who can reach the hub can use its controls.
+Browser controls require same-origin requests.
 The hub sends the worker key only to the configured inference service.
 
 A frame packet retains the existing uint32-big-endian JSON-length, JSON-header, JPEG encoding.
 Its header includes `phoneId`, `streamId`, `seq`, `t` (milliseconds), `width`, `height`, `searchRevision`, and the captured frame's `pose`.
-Echo the frame identity exactly; `targetVersion` comes from authenticated `GET /api/search`.
+Echo the frame identity exactly; `targetVersion` comes from `GET /api/search`.
 Example detection callback body:
 
 ```json

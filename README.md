@@ -56,7 +56,8 @@ Frames are held in memory only (latest per phone) and never written to disk.
 ## Inference service
 
 Person search uses three processes: the hub, lightweight bridge, and isolated Python 3.12 YOLOE + OSNet worker.
-Follow [deployment and verification](docs/inference.md) to configure the matching worker keys, operator login, cache, and CPU/GPU settings.
+For the hosted GPU worker, see [Baseten deployment](docs/baseten.md).
+Follow [deployment and verification](docs/inference.md) to configure the matching worker keys, cache, and CPU/GPU settings.
 After that setup, run these in separate terminals from the repository root:
 
 ```bash

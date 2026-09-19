@@ -7,11 +7,11 @@ from swarm import hub as module
 from swarm.protocol import pack
 
 
-def test_public_mutations_require_auth():
+def test_service_keys_and_browser_origin_checks_remain():
     with TestClient(module.app) as client:
         assert client.post('/api/detections', json={}).status_code == 401
         assert client.post('/api/pose', json={}).status_code == 401
-        assert client.delete('/api/search/reference').status_code == 401
+        assert client.delete('/api/search/reference', headers={'Origin': 'https://evil.test'}).status_code == 403
         with client.websocket_connect('/ws/dashboard?role=console') as ws:
             ws.receive_json()
             ws.send_json({'type': 'phase', 'phase': 'end'})
@@ -19,7 +19,7 @@ def test_public_mutations_require_auth():
                 message = ws.receive_json()
                 if message.get('type') != 'state':
                     break
-            assert message.get('error') == 'operator authentication required'
+            assert message.get('error') == 'same-origin request required'
         assert module.hub.phase == 'search'
 
 
@@ -42,18 +42,16 @@ def test_latest_pending_fairness_and_bound():
     asyncio.run(run())
 
 
-def test_operator_session_origin_and_all_subscriber_routes(monkeypatch):
+def test_console_needs_no_login_but_keeps_origin_and_service_checks(monkeypatch):
     from swarm.control import Auth, Settings, install_routes
     from fastapi import FastAPI
     hub = module.Hub()
-    settings = Settings(operator_code='test', bridge_key='bridge')
+    settings = Settings(bridge_key='bridge')
     auth = Auth(settings)
     app = FastAPI()
     install_routes(app, hub, auth)
     with TestClient(app) as client:
-        assert not client.get('/api/session').json()['authenticated']
-        assert client.post('/api/session', json={'code': 'test'}, headers={'Origin': 'https://evil.test'}).status_code == 403
-        assert client.post('/api/session', json={'code': 'test'}).status_code == 200
+        assert client.get('/api/session').status_code == 404
         assert client.get('/api/search').status_code == 200
         assert client.put('/api/search/threshold', json={'threshold': .8}, headers={'Origin': 'https://evil.test'}).status_code == 403
         assert client.put('/api/search/threshold', json={'threshold': .8}).status_code == 200
@@ -62,7 +60,7 @@ def test_operator_session_origin_and_all_subscriber_routes(monkeypatch):
     with TestClient(module.app) as client:
         with client.websocket_connect('/ws/frames', headers={'Authorization': 'Bearer bridge'}) as ws:
             ws.send_json({'type': 'phase', 'phase': 'end'})
-            assert ws.receive_json()['error'] == 'operator authentication required'
+            assert ws.receive_json()['error'] == 'same-origin request required'
         assert module.hub.phase == 'search'
 
 
@@ -144,11 +142,10 @@ def test_reference_clear_wins_slow_upload(monkeypatch):
         transport = httpx.MockTransport(worker)
         monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=transport, **kwargs))
         hub = module.Hub()
-        auth = Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge', operator_code='code'))
+        auth = Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge'))
         app = FastAPI()
         install_routes(app, hub, auth)
         async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-            await client.post('/api/session', json={'code': 'code'})
             registration = asyncio.create_task(client.put('/api/search/reference?box=0,0,10,10', content=b'jpg'))
             await entered.wait()
             clear = asyncio.create_task(client.delete('/api/search/reference'))
@@ -297,11 +294,10 @@ def test_reference_clear_wins_while_request_body_streams(monkeypatch):
         real_client = httpx.AsyncClient
         monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(worker), **kwargs))
         hub = module.Hub()
-        auth = Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge', operator_code='code'))
+        auth = Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge'))
         app = FastAPI()
         install_routes(app, hub, auth)
         async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-            await client.post('/api/session', json={'code': 'code'})
             registration = asyncio.create_task(client.put('/api/search/reference?box=0,0,10,10', content=body()))
             await asyncio.wait_for(streaming.wait(), 1)
             revision = hub.search.revision
@@ -336,9 +332,8 @@ def test_reference_delete_holds_gate_while_clearing_overlays(monkeypatch):
                 await release_clear.wait()
         monkeypatch.setattr(hub, 'clear_detection_overlays', clear_overlays)
         app = FastAPI()
-        install_routes(app, hub, Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge', operator_code='code')))
+        install_routes(app, hub, Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge')))
         async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
-            await client.post('/api/session', json={'code': 'code'})
             clear = asyncio.create_task(client.delete('/api/search/reference'))
             await asyncio.wait_for(clearing.wait(), 1)
             registration = await client.put('/api/search/reference?box=0,0,10,10', content=b'jpg')
@@ -419,9 +414,8 @@ def test_disabled_reference_failure_preserves_disabled():
     from fastapi import FastAPI
     hub = module.Hub()
     app = FastAPI()
-    install_routes(app, hub, Auth(Settings(inference_url='', operator_code='code')))
+    install_routes(app, hub, Auth(Settings(inference_url='')))
     with TestClient(app) as client:
-        client.post('/api/session', json={'code': 'code'})
         assert client.put('/api/search/reference?box=0,0,10,10', content=b'jpg').status_code == 503
         assert client.get('/api/search').json()['status'] == 'disabled'
 
@@ -449,3 +443,76 @@ def test_slow_health_response_cannot_publish_new_generation():
             await task
             assert posted == []
     asyncio.run(run())
+
+
+def test_worker_health_without_reference_is_available_but_keeps_reference_loss():
+    from swarm.control import Settings
+    from swarm.inference import Bridge
+    import json
+    async def run():
+        statuses = []
+        code = 404
+        async def boundary(request):
+            if request.method == 'GET':
+                assert request.headers['authorization'] == 'Bearer secret'
+                return httpx.Response(code, json={'detail': 'No reference'})
+            statuses.append(json.loads(request.content)['status'])
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(boundary)) as client:
+            bridge = Bridge(Settings(inference_url='http://127.0.0.1:8001', inference_key='secret'), client)
+            bridge.state = dict(enabled=True, searchRevision='r', targetVersion=None, status='unavailable')
+            await bridge.health()
+            assert statuses == ['available']
+            code = 401
+            await bridge.health()
+            assert statuses[-1] == 'unavailable'
+            bridge.state['status'] = 'reference_unavailable'
+            code = 404
+            await bridge.health()
+            assert statuses[-1] == 'unavailable'
+    asyncio.run(run())
+
+
+def test_reference_photo_upload_detects_people_without_login(monkeypatch):
+    from swarm.control import Auth, Settings, install_routes
+    from fastapi import FastAPI
+    async def run():
+        frames = []
+        photo = b'reference-image-bytes'
+        detected = {'width': 100, 'height': 200, 'detections': [
+            {'label': 'person', 'score': .9, 'box': [10, 20, 80, 190]}]}
+        async def worker(request):
+            assert request.url.path == '/v1/detect'
+            assert request.headers['authorization'] == 'Bearer worker-key'
+            assert request.content == photo
+            assert request.url.params['labels'] == 'person'
+            assert request.url.params['phone_id'] == 'reference'
+            assert float(request.url.params['captured_at']) > 0
+            frames.append(request.url.params['frame_id'])
+            return httpx.Response(200, json=detected)
+        real_client = httpx.AsyncClient
+        transport = httpx.MockTransport(worker)
+        monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=transport, **kwargs))
+        app = FastAPI()
+        install_routes(app, module.Hub(), Auth(Settings(
+            inference_url='http://127.0.0.1:8001', inference_key='worker-key', bridge_key='bridge')))
+        async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            for _ in range(2):
+                response = await client.post('/api/search/reference/people', content=photo,
+                                             headers={'Content-Type': 'image/jpeg', 'Origin': 'http://test'})
+                assert response.status_code == 200
+                assert response.json() == detected
+        assert len(set(frames)) == 2
+    asyncio.run(run())
+
+
+def test_baseten_headers_keep_gateway_and_worker_credentials_separate():
+    from swarm.control import Settings
+    local = Settings(inference_key='worker')
+    assert local.inference_headers == {'Authorization': 'Bearer worker'}
+    cloud = Settings(inference_key='worker', baseten_key='gateway')
+    assert cloud.inference_headers == {
+        'Authorization': 'Bearer gateway', 'X-Swarm-Api-Key': 'worker',
+        'X-Swarm-Content-Type': 'image/jpeg',
+    }
+    assert 'gateway' not in repr(cloud)
