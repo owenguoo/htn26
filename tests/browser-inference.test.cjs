@@ -31,7 +31,7 @@ test('zero detections replace previous overlay and a clear allows the new refere
   run("acceptDetection(z,{clear:true,searchRevision:'next'},600)");
   assert.equal(run("acceptDetection(z,{streamId:'s',seq:2,searchRevision:'next',boxes:[]},700).until"),1600);
 });
-test('phone cover-fit maps portrait, landscape and rotation', () => {
+test('phone cover-fit maps portrait, landscape, rotation and synthetic frames', () => {
   const phone = fs.readFileSync('web/phone.js','utf8');
   const fn = phone.slice(phone.indexOf('function frameToScreen('),phone.indexOf('\n}', phone.indexOf('function frameToScreen(')) + 2);
   const ctx = vm.createContext({});
@@ -40,6 +40,7 @@ test('phone cover-fit maps portrait, landscape and rotation', () => {
   assert.deepEqual(point('frameToScreen(.5,.5,390,844)'),[195,422]);
   assert.deepEqual(point('frameToScreen(0,0,1280,720)'),[0,0]);
   assert.deepEqual(point('video={videoWidth:720,videoHeight:1280};frameToScreen(.5,.5,844,390)'),[422,195]);
+  assert.deepEqual(point('FAKE=true;frameToScreen(.25,.75,400,800)'),[100,600]);
 });
 test('score label keeps appearance similarity separate from detection confidence', () => {
   assert.equal(run("scoreLabel({similarity:.73,detectionScore:.91})"),'Similarity 0.73 · confidence 91%');
@@ -67,7 +68,7 @@ test('console never substitutes a live thumbnail for missing exact source and ig
 });
 test('reference numbers remain readable at a 210 by 280 CSS pixel portrait preview', () => {
   const code = fs.readFileSync('web/console.js','utf8');
-  const fn = code.slice(code.indexOf('function paintPeople('),code.indexOf("\n$('#referenceFile').addEventListener"));
+  const fn = code.slice(code.indexOf('function paintPeople('),code.indexOf("\n$('#uploadPhoto').addEventListener"));
   const sandbox = vm.createContext({});
   vm.runInContext(`const ctx={beginPath(){},moveTo(){},lineTo(){},stroke(){},strokeRect(){},fillRect(){},fillText(text){this.label=text;}};const canvas={width:960,height:1280,getContext:()=>ctx,getBoundingClientRect:()=>({width:210,height:280})};`+fn,sandbox);
   vm.runInContext('paintPeople(canvas,[{box:[100,100,400,900]}])',sandbox);
@@ -83,7 +84,7 @@ test('reference controls are visible without an operator session', () => {
 });
 test('overlapping reference boxes keep every numeric marker visible', () => {
   const code = fs.readFileSync('web/console.js','utf8');
-  const fn = code.slice(code.indexOf('function paintPeople('),code.indexOf("\n$('#referenceFile').addEventListener"));
+  const fn = code.slice(code.indexOf('function paintPeople('),code.indexOf("\n$('#uploadPhoto').addEventListener"));
   const sandbox = vm.createContext({});
   vm.runInContext(`const rects=[];const ctx={strokeRect(){},fillRect(x,y,w,h){rects.push({x,y,w,h})},fillText(){},beginPath(){},moveTo(){},lineTo(){},stroke(){}};const canvas={width:960,height:1280,getContext:()=>ctx,getBoundingClientRect:()=>({width:210,height:280})};`+fn,sandbox);
   vm.runInContext('paintPeople(canvas,Array.from({length:5},()=>({box:[100,100,400,900]})))',sandbox);

@@ -114,6 +114,8 @@ class Planner:
             self.last_guide = now
             for pid, a in self.assignments.items():
                 x, y, heading, pitch = viewers[pid]
+                if a.get("manual"):
+                    a["heading"] = self.bearing_to(x, y, *self.sector_center(a["sector"]))
                 delta = (a["heading"] - heading + 540) % 360 - 180
                 a["onTarget"] = abs(delta) < self.half_fov * 0.6
                 tilted = pitch is not None and abs(pitch) > MAX_PITCH
@@ -240,8 +242,9 @@ class Planner:
         return self.sector_name(int((px - self.x0) // SECTOR), min(self.rows - 1, int(py // SECTOR)))
 
     def assign(self, pid: str, sector: str, x: float, y: float, now: float) -> None:
-        """Operator override: send this phone to a sector regardless of the greedy plan."""
+        """Operator override: point this phone at a sector center."""
         self.assignments[pid] = {"sector": sector, "t": now, "onTarget": False, "manual": True,
+                                 "heading": self.bearing_to(x, y, *self.sector_center(sector)),
                                  "left": self.unsearched_from(sector, x, y), "progress_t": now}
         self.note(f"→ {sector} (operator)", pid)
 

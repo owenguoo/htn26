@@ -4,15 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Beacon · Console</title>
+  <link rel="icon" type="image/png" href="/web/beacon_logo.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #000; --bg-1: #0a0a0a; --bg-2: #111; --bg-3: #1a1a1a;
-      --line: #1f1f1f; --line-2: #2e2e2e;
-      --fg: #ededed; --fg-2: #a1a1a1; --fg-3: #707070;
-      --red: #ff4d4d; --red-bg: rgba(255, 77, 77, 0.1);
+      --bg: #f5faf6; --bg-1: #edf6ef; --bg-2: #e2f0e6; --bg-3: #d4e7da;
+      --surface: #fff; color-scheme: light;
+      --line: #d5e5da; --line-2: #b3cebd;
+      --fg: #173726; --fg-2: #466653; --fg-3: #597562;
+      --accent: #18834b; --accent-hover: #126b3c; --accent-bg: #e0f5e7;
+      --red: #b72f36; --red-bg: #fcebed;
       --sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
       --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
       --r: 10px;
@@ -28,36 +31,42 @@
 
     /* shell */
     .wrap { max-width: 1440px; margin: 0 auto; padding: 0 24px 40px; }
-    header { position: sticky; top: 0; z-index: 5; background: rgba(0,0,0,0.8); backdrop-filter: blur(12px);
+    header { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,0.94); backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
     .bar { max-width: 1440px; margin: 0 auto; padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 12px; }
     .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
-    .logo svg { display: block; }
+    .logo img { display: block; width: 44px; height: 44px; object-fit: contain; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    input { accent-color: var(--accent); }
     .slash { color: var(--line-2); font-weight: 300; font-size: 20px; }
-    .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-2); }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-3); }
-    .dot.live { background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,0.12); }
     .spacer { flex: 1; }
 
     .btn { height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg);
       font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
       transition: background .15s, border-color .15s; }
-    .btn:hover { background: var(--bg-2); border-color: #3e3e3e; }
+    .btn:hover { background: var(--bg-2); border-color: var(--accent); }
     a.btn { color: var(--fg); text-decoration: none; }
-    .btn.primary { background: var(--fg); color: #000; border-color: var(--fg); }
-    .btn.primary:hover { background: #fff; }
+    .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    .btn.primary:hover { background: var(--accent-hover); }
     .btn.danger { color: var(--red); }
     .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
     .btn:disabled { opacity: .4; cursor: default; }
     kbd { font: 11px var(--mono); color: var(--fg-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
 
-    .search-panel { margin: 20px 0 16px; }
+    .search-panel { margin: 0; }
+    .upload-zone { flex-basis: 100%; width: 100%; min-height: 104px; padding: 20px 12px;
+      display: grid; place-content: center; gap: 4px; border: 1px dashed var(--line-2); border-radius: 8px;
+      background: var(--bg-1); text-align: center; transition: background .15s, border-color .15s; }
+    .upload-zone strong { font-weight: 500; }
+    .upload-zone span { color: var(--fg-2); font-size: 12px; }
+    .upload-zone:hover, .upload-zone.dragging { background: var(--accent-bg); border-color: var(--accent); }
+    .upload-zone:disabled { opacity: .5; cursor: wait; }
     .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .search-panel input { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
-    #referenceFile::file-selector-button { color: var(--fg); background: var(--bg-2); border: 0; border-radius: 4px; padding: 3px 8px; margin-right: 8px; }
+    .search-panel input, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
     #referencePreview { max-width: 100%; max-height: 280px; margin-top: 12px; }
     #personChoices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-    #searchMessage, #searchStatus { margin-top: 10px; color: var(--fg-2); font-size: 13px; }
+    #searchMessage:empty { display: none; }
+    #searchMessage { margin-top: 10px; color: var(--fg-2); font-size: 13px; }
     .analysis { padding: 12px 16px; border-top: 1px solid var(--line); }
     #analyzedFrame { max-width: 100%; max-height: 240px; display: block; margin-top: 10px; }
     /* phase stepper */
@@ -70,9 +79,9 @@
       display: grid; place-items: center; }
     .step.done { color: var(--fg-2); }
     .step.done .n { background: var(--bg-3); border-color: var(--bg-3); }
-    .step.on { background: var(--fg); color: #000; }
-    .step.on .n { border-color: #000; }
-    .step.on.found { background: var(--red); color: #000; }
+    .step.on { background: var(--accent); color: var(--bg); }
+    .step.on .n { border-color: rgba(255,255,255,0.6); }
+    .step.on.found { background: var(--accent-hover); color: var(--bg); }
     .timer { font: 500 20px var(--mono); letter-spacing: -0.02em; }
 
     /* mission control */
@@ -82,7 +91,7 @@
     #mcInput { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--fg);
       font: 15px var(--sans); }
     #mcInput::placeholder { color: var(--fg-3); }
-    .mission:focus-within { border-color: #3e3e3e; }
+    .mission:focus-within { border-color: var(--accent); }
     #mcFeed:empty { display: none; }
     #mcFeed { border-top: 1px solid var(--line); }
     .mc { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
@@ -102,13 +111,13 @@
     /* autonomy */
     .autoSw { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--fg-2); flex: none; }
     .autoSw.on { color: var(--fg); }
-    .autoSw.on .switch { background: var(--red); border-color: var(--red); }
+    .autoSw.on .switch { background: var(--accent); border-color: var(--accent); }
     .autoSw.on .switch::after { transform: translateX(16px); background: #fff; }
     #aiStatus { display: none; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--line);
       font: 12px var(--mono); color: var(--fg-3); }
     #aiStatus.on { display: flex; }
     .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); flex: none; }
-    .pulse.live { background: #fff; animation: breathe 1s ease-in-out infinite; }
+    .pulse.live { background: var(--accent); animation: breathe 1s ease-in-out infinite; }
     @keyframes breathe { 50% { opacity: .25; } }
     #recs:empty { display: none; }
     #recs { border-top: 1px solid var(--line); }
@@ -131,7 +140,7 @@
     .evidence .k { color: var(--fg-3); display: inline-block; min-width: 92px; }
     .explain-hint { font-size: 11px; color: var(--fg-3); margin-top: 6px; }
     .rec .state { font: 12px var(--mono); color: var(--fg-3); white-space: nowrap; }
-    .rec .state.auto { color: var(--red); }
+    .rec .state.auto { color: var(--accent); }
 
     /* metrics */
     .metrics { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line); border-radius: var(--r);
@@ -146,7 +155,7 @@
     /* cards */
     .grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; margin-bottom: 16px; }
     .grid.bottom { grid-template-columns: minmax(0, 1fr) 380px; }
-    .card { border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); min-width: 0; }
+    .card { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); min-width: 0; }
     .card-h { height: 48px; padding: 0 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
     .card-h h2 { margin: 0; font-size: 14px; font-weight: 500; }
     .card-b { padding: 16px; }
@@ -163,34 +172,101 @@
       position: relative; transition: background .15s; flex: none; }
     .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
       background: var(--fg-3); transition: transform .15s, background .15s; }
-    .switch.on { background: var(--fg); border-color: var(--fg); }
-    .switch.on::after { transform: translateX(16px); background: #000; }
+    .switch.on { background: var(--accent); border-color: var(--accent); }
+    .switch.on::after { transform: translateX(16px); background: #fff; }
     .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: 6px; height: 28px; }
     .stepper button { width: 28px; height: 26px; color: var(--fg-2); }
     .stepper button:hover { color: var(--fg); background: var(--bg-2); }
     .stepper span { min-width: 28px; text-align: center; font-family: var(--mono); }
     .status { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--bg-1); border: 1px solid var(--line); }
-    .status.found { background: var(--red-bg); border-color: rgba(255,77,77,0.3); color: var(--red); }
+    .status.found { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-hover); }
     .divider { height: 1px; background: var(--line); margin: 16px -16px; }
 
-    /* phones table */
-    table { width: 100%; border-collapse: collapse; }
-    th { text-align: left; font-weight: 500; font-size: 12px; color: var(--fg-2); padding: 10px 12px; border-bottom: 1px solid var(--line); }
-    td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
-    tr:last-child td { border-bottom: 0; }
-    tbody tr { transition: background .1s; }
-    tbody tr:hover { background: var(--bg-1); }
-    tr.off td { opacity: .4; }
-    .thumb { width: 56px; height: 42px; border-radius: 4px; background: var(--bg-2); object-fit: cover; display: block;
-      border: 1px solid var(--line); }
+    .overview { padding: 24px 0 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .overview h1 { margin: 0; font-size: 24px; letter-spacing: -.03em; }
+    .overview p { margin: 6px 0 0; color: var(--fg-2); }
+    dialog.settings { width: min(760px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 0;
+      border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--fg);
+      box-shadow: 0 24px 80px rgba(23,55,38,.2); overflow-y: auto; }
+    .settings::backdrop { background: rgba(15,35,24,.4); backdrop-filter: blur(4px); }
+    .settings-header { position: sticky; top: 0; background: var(--surface); z-index: 1; padding: 16px 20px;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .settings-header h2 { margin: 0; font-size: 18px; }
+    body:has(#settings[open]) { overflow: hidden; }
+    .settings-body { padding: 16px; border-top: 1px solid var(--line); }
+    .settings-body h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+    .settings-group, .settings-body > .card { margin-bottom: 20px; }
+    .settings-group p { margin: 0 0 12px; }
+    .settings-group .divider { margin-left: 0; margin-right: 0; }
+    .session-heading { font-size: 14px; font-weight: 600; margin: 4px 0 0; }
+    .phases { padding-top: 12px; }
+    .steps { flex-wrap: wrap; }
+    .map-column > .card > .card-h { height: auto; min-height: 48px; flex-wrap: wrap; padding: 12px 16px; }
+    .map-legend { font-size: 12px; }
+    #recs:not(:empty) { margin-bottom: 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+    @media (max-width: 640px) {
+      #mcForm { height: auto; padding: 12px; flex-wrap: wrap; }
+      #mcInput { flex-basis: 70%; }
+    }
+    .chat-launcher { position: fixed; right: 24px; bottom: max(24px, env(safe-area-inset-bottom)); z-index: 12;
+      width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center;
+      background: var(--accent); color: #fff; box-shadow: 0 6px 24px rgba(23,55,38,.25); }
+    .chat-launcher:hover { background: var(--accent-hover); }
+    .chat-state { position: absolute; right: 1px; top: 1px; width: 12px; height: 12px; border: 2px solid #fff;
+      border-radius: 50%; background: #8c9d92; }
+    .chat-launcher.active .chat-state { background: #57d879; }
+    .chat-panel { position: fixed; right: 24px; bottom: 92px; z-index: 12; width: min(360px, calc(100vw - 32px));
+      height: min(340px, calc(100dvh - 120px)); display: flex; flex-direction: column; overflow: hidden; margin: 0; background: var(--surface);
+      box-shadow: 0 12px 48px rgba(23,55,38,.18); }
+    .chat-panel .card-h { flex-shrink: 0; background: var(--surface); }
+    .chat-intro { margin: 0; padding: 16px; color: var(--fg-2); font-size: 13px; line-height: 1.6; }
+    .chat-panel #mcFeed { flex: 1; min-height: 0; overflow-y: auto; border-top: 0; }
+    .chat-panel #mcForm { margin: auto 12px 12px; height: auto; min-height: 46px; padding: 5px 6px 5px 16px; flex-wrap: nowrap; gap: 8px; flex-shrink: 0; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-1); }
+    .chat-panel #mcForm:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-bg); }
+    .chat-panel #mcInput { flex: 1; padding: 8px 0; }
+    .chat-panel #mcInput:focus-visible { outline: none; }
+    .chat-send { flex: 0 0 34px; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #fff; }
+    .chat-send:hover { background: var(--accent-hover); }
+    .system-details { overflow: hidden; }
+    .system-details .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .system-details .metric { min-width: 0; padding: 12px; border-left: 0; border-top: 1px solid var(--line); }
+    .system-details .metric:nth-child(even) { border-left: 1px solid var(--line); }
+    .system-details .metric:nth-child(-n+2) { border-top: 0; }
+    .system-details .metric .v { font-size: 20px; }
+    @media (max-width: 640px) { .chat-panel { right: 16px; } .chat-launcher { right: 16px; } }
+    /* camera carousel */
+    .map-column { min-width: 0; }
+    .camera-track { display: flex; align-items: flex-start; gap: 16px; overflow-x: auto; padding: 16px;
+      scroll-snap-type: x mandatory; scroll-padding: 16px; }
+    .camera-card { flex: 0 0 min(360px, 85%); min-width: 0; scroll-snap-align: start;
+      border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+    .camera-card.off { opacity: .65; }
+    .camera-open { display: block; width: 100%; text-align: left; }
+    .camera-preview { position: relative; aspect-ratio: 16 / 10; display: grid; place-items: center;
+      background: var(--bg-2); overflow: hidden; }
+    .camera-preview .placeholder { color: var(--fg-2); padding: 16px; text-align: center; }
+    .thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+    .thumb:not([src]) { display: none; }
     .thumb.hidden { filter: grayscale(1) brightness(.35); }
-    .idx { font: 500 13px var(--mono); }
-    .badge { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; font-size: 11px;
-      font-weight: 500; border: 1px solid var(--line-2); color: var(--fg-2); margin-right: 4px; }
-    .badge.w { color: #000; background: var(--fg); border-color: var(--fg); }
-    .badge.r { color: var(--red); border-color: rgba(255,77,77,0.4); background: var(--red-bg); }
-    .actions { text-align: right; }
-    .actions .btn + .btn { margin-left: 6px; }
+    .camera-title { display: flex; align-items: center; gap: 8px; padding: 12px 14px; }
+    .camera-title .name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .camera-caption { padding: 0 14px; color: var(--fg-2); font-size: 13px; }
+    .camera-card .st { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; flex-shrink: 0; max-width: 60%; }
+    .camera-card .st .badge { margin: 0; }
+    .camera-caption:not(:empty) { padding-bottom: 12px; }
+    .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px;
+      font-size: 11px; border: 1px solid var(--line-2); color: var(--fg-2); margin: 2px 4px 2px 0; }
+    .badge.w { color: #fff; background: var(--accent); border-color: var(--accent); }
+    .badge.r { color: var(--red); background: var(--red-bg); }
+    .camera-details { border-top: 1px solid var(--line); }
+    summary { cursor: pointer; font-weight: 500; padding: 12px 14px; }
+    .camera-details dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; padding: 0 14px 12px; font-size: 13px; }
+    .camera-details dt { color: var(--fg-2); }
+    .camera-details dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+    .camera-details .actions { padding: 0 14px 12px; }
+    .system-details { margin-bottom: 16px; }
+    .system-details .metrics { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
+    .camera-nav { display: flex; gap: 6px; }
     .empty { padding: 40px 16px; text-align: center; color: var(--fg-3); }
 
     /* expanded feed */
@@ -209,9 +285,9 @@
     .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 180px; flex-shrink: 0; }
     .vimg img { display: block; max-width: 100%; max-height: min(66vh, 720px); object-fit: contain; }
     .vimg .live { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px;
-      font: 500 11px var(--mono); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); }
-    .vimg .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: breathe 1s infinite; }
-    .vnone { position: absolute; color: var(--fg-3); font-size: 13px; }
+      font: 500 11px var(--mono); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; }
+    .vimg .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: breathe 1s infinite; }
+    .vnone { position: absolute; color: #b3cebd; font-size: 13px; }
     #vHudCanvas { position: absolute; left: 0; top: 0; pointer-events: none; }
     .vcap { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80%; display: none;
       padding: 8px 14px; border-radius: 8px; background: rgba(0,0,0,0.78); color: #fff; font-size: 16px; font-weight: 500;
@@ -219,9 +295,9 @@
     .vcap.on { display: block; }
     td .cap { font-size: 12px; color: var(--fg-2); max-width: 280px; white-space: normal; margin-top: 2px; }
     .vhudnote { position: absolute; top: 12px; right: 12px; font: 500 11px var(--mono); padding: 3px 8px;
-      border-radius: 6px; background: rgba(0,0,0,0.6); color: var(--fg-2); }
+      border-radius: 6px; background: rgba(0,0,0,0.6); color: #e7f8ed; }
     .vhudnote.warn { color: #ffb703; }
-    #vHud.on { background: var(--fg); color: #000; border-color: var(--fg); }
+    #vHud.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     #vHud.on kbd { color: #555; border-color: #999; }
     .vstats { display: grid; grid-template-columns: 1.5fr 1.6fr repeat(5, 1fr); border-top: 1px solid var(--line); }
     .vstats div { padding: 12px 16px; border-left: 1px solid var(--line); min-width: 0; }
@@ -241,8 +317,8 @@
       .vimg img { max-height: 40vh; }
     }
     /* activity */
-    #log { max-height: 420px; overflow: auto; }
-    .ev { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    #log { max-height: 180px; overflow: auto; }
+    .ev { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
     .ev:last-child { border-bottom: 0; }
     .ev time { font: 12px var(--mono); color: var(--fg-3); padding-top: 1px; }
     .ev b { font-weight: 500; font-family: var(--mono); }
@@ -269,12 +345,11 @@
   <header>
     <div class="bar">
       <div class="logo">
-        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 L18 17 H2 Z" fill="#ededed"/></svg>
+        <img src="/web/beacon_logo.png" width="44" height="44" alt="">
         Beacon
       </div>
       <span class="slash">/</span>
       <span class="muted">Console</span>
-      <span class="conn"><span class="dot" id="connDot"></span><span id="connText">Connecting</span></span>
       <span class="spacer"></span>
       <div class="joinWrap"><button class="btn" id="joinBtn">Join QR</button>
         <div class="joinPop" id="joinPop"><img id="joinQr" alt="Scan to join"><div class="mono" id="joinUrl"></div>
@@ -283,57 +358,11 @@
   </header>
 
   <main class="wrap">
-    <section class="card search-panel" aria-label="Person search">
-      <div class="card-h"><h2>Person reference</h2><span class="spacer"></span></div>
-      <div class="card-b">
-        <fieldset id="searchTools" style="border:0;padding:0;margin:0">
-          <div class="search-tools"><input aria-label="Upload reference" id="referenceFile" type="file" accept="image/*" style="max-width:240px">
-          <button class="btn" id="clearReference">Clear reference</button>
-          <button class="btn" id="rehearsalMode">Use rehearsal mode</button>
-          <label for="threshold">Similarity threshold</label><input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.70" style="width:80px"><button class="btn" id="saveThreshold">Apply</button></div>
-          <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
-        </fieldset>
-        <div id="searchStatus" role="status">Connecting to hub…</div><div id="searchMessage" role="status"></div>
-      </div>
-    </section>
-    <section class="phases">
-      <div class="steps" id="steps"></div>
-      <span class="spacer"></span>
-      <span class="faint" style="font-size:12px"><kbd>1</kbd>–<kbd>5</kbd> phase &nbsp; <kbd>P</kbd> planner &nbsp; <kbd>M</kbd> autonomy</span>
-      <span class="timer" id="timer">00:00</span>
-    </section>
-
-    <section class="card mission">
-      <form id="mcForm" autocomplete="off">
-        <span class="prompt">›</span>
-        <input id="mcInput" placeholder="Tell Mission Control what to do — “send phones 3 and 5 to the back-left corner”" spellcheck="false">
-        <span class="faint mono" style="font-size:12px" id="mcModel"></span>
-        <button type="button" class="autoSw" id="autoSw" title="Autonomy (M)"><span class="switch"></span>Autonomy</button>
-        <kbd>/</kbd>
-      </form>
-      <div id="aiStatus"><span class="pulse" id="aiPulse"></span><span id="aiText"></span><span class="spacer"></span>
-        <span id="aiUsage"></span></div>
-      <div id="recs"></div>
-      <div id="mcFeed"></div>
-    </section>
-
-    <section class="metrics">
-      <div class="metric"><div class="k">Phones live</div><div class="v" id="mLive">0</div></div>
-      <div class="metric"><div class="k">Placed</div><div class="v" id="mPlaced">0</div></div>
-      <div class="metric"><div class="k" id="mFpsK">Frames / s</div><div class="v" id="mFps">0</div></div>
-      <div class="metric"><div class="k">Latency p50</div><div class="v" id="mLat">–</div></div>
-      <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
-      <div class="metric" id="mCandBox"><div class="k">Candidate</div><div class="v" id="mCand">–</div></div>
-    </section>
-
-    <section class="grid">
-      <div class="card">
-        <div class="card-h"><h2>Floor plan</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
-          <span class="mono" style="font-size:12px" id="likely"></span>
-          <span class="faint" style="font-size:12px">· brighter = more likely · drag the candidate · right-click to ping</span></div>
-        <div id="mapWrap"><canvas id="map"></canvas></div>
-      </div>
-      <div class="stack">
+    <div class="overview"><div><h1>Search overview</h1></div><button class="btn" id="settingsOpen" aria-haspopup="dialog" aria-controls="settings">Settings</button></div>
+    <dialog class="settings" id="settings" aria-labelledby="settingsTitle">
+      <div class="settings-header"><h2 id="settingsTitle">Settings</h2><button class="btn sm" id="settingsClose" autofocus>Close</button></div>
+      <div class="settings-body">
+        <section class="settings-group"><h2>Match sensitivity</h2><p class="muted">Higher values require a closer visual match.</p><div class="search-tools">              <label for="threshold">Similarity threshold</label><input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.70" style="width:80px"><button class="btn" id="saveThreshold">Apply</button></div></section>
         <div class="card">
           <div class="card-h"><h2>Search</h2></div>
           <div class="card-b">
@@ -343,37 +372,94 @@
               <button class="btn sm" id="resetCov">Reset</button></div>
           </div>
         </div>
-        <div class="card">
-          <div class="card-h"><h2>Candidate</h2></div>
-          <div class="card-b">
-            <div class="status" id="candStatus">No candidate placed</div>
-            <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
-            <div class="row" style="margin-top:16px"><div><div class="label">Responders</div><div class="hint">Nearest phones sent when found</div></div>
+        <section class="settings-group"><h2>Response controls</h2>            <div class="row" style="margin-top:16px"><div><div class="label">Responders</div><div class="hint">Nearest phones sent when found</div></div>
               <div class="stepper"><button id="respMinus" aria-label="Fewer">−</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
             <div class="divider"></div>
             <button class="btn primary" id="candBtn" style="width:100%;justify-content:center">Place candidate</button>
+</section>
+      </div>
+    </dialog>
+
+    <h2 class="session-heading">Session controls</h2>
+    <section class="phases">
+      <div class="steps" id="steps"></div>
+      <span class="spacer"></span>
+      <span class="faint" style="font-size:12px"><kbd>1</kbd>–<kbd>5</kbd> phase &nbsp; <kbd>P</kbd> planner &nbsp; <kbd>M</kbd> autonomy</span>
+      <span class="timer" id="timer">00:00</span>
+    </section>
+
+    <div id="recs"></div>
+    <section class="grid">
+      <div class="stack map-column">
+        <div class="card">
+          <div class="card-h"><h2>Search map</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
+            <span class="mono" style="font-size:12px" id="likely"></span>
+</div>
+          <div id="mapWrap"><canvas id="map"></canvas></div>
+        </div>
+        <section class="card camera-section" aria-label="Camera feeds">
+          <div class="card-h"><h2>Camera feeds</h2><span class="faint mono" id="phoneCount">0</span><span class="spacer"></span>
+            <div class="camera-nav"><button class="btn sm" id="cameraPrev" aria-label="Previous cameras" aria-controls="phones">←</button>
+              <button class="btn sm" id="cameraNext" aria-label="Next cameras" aria-controls="phones">→</button></div>
+          </div>
+          <div class="camera-track" id="phones" role="region" aria-label="Camera carousel" tabindex="0"></div>
+          <div class="empty" id="phonesEmpty">No cameras connected. Use Join QR to connect a phone.</div>
+        </section>
+      </div>
+      <div class="stack">
+        <section class="card search-panel" aria-label="Person search">
+          <div class="card-h"><h2>Person to find</h2><span class="spacer"></span></div>
+          <div class="card-b">
+            <fieldset id="searchTools" style="border:0;padding:0;margin:0">
+              <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" aria-label="Upload photo" hidden>
+              <button class="upload-zone" type="button" id="uploadPhoto"><strong>Drop a photo here</strong><span>or click to choose</span></button>
+              <button class="btn" id="clearReference" type="button" hidden>Clear</button>
+</div>
+              <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
+            </fieldset>
+            <div id="searchMessage" role="status"></div>
+          </div>
+        </section>
+        <div class="card">
+          <div class="card-h"><h2>Search status</h2></div>
+          <div class="card-b">
+            <div class="status" id="candStatus">No candidate placed</div>
+            <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
           </div>
         </div>
+        <section class="card system-details" aria-label="System details"><div class="card-h"><h2>System details</h2></div>
+    <div class="metrics">
+      <div class="metric"><div class="k">Phones live</div><div class="v" id="mLive">0</div></div>
+      <div class="metric"><div class="k">Placed</div><div class="v" id="mPlaced">0</div></div>
+      <div class="metric"><div class="k" id="mFpsK">Frames / s</div><div class="v" id="mFps">0</div></div>
+      <div class="metric"><div class="k">Latency p50</div><div class="v" id="mLat">–</div></div>
+      <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
+      <div class="metric" id="mCandBox"><div class="k">Candidate</div><div class="v" id="mCand">–</div></div>
+    </div>
+
+    </section>
+        <section class="card" aria-label="Activity">
+          <div class="card-h"><h2>Activity</h2></div>
+          <div id="log"><div class="empty">Nothing yet</div></div>
+        </section>
       </div>
     </section>
 
-    <section class="grid bottom">
-      <div class="card">
-        <div class="card-h"><h2>Phones</h2><span class="faint mono" id="phoneCount">0</span></div>
-        <div style="overflow:auto">
-          <table>
-            <thead><tr><th></th><th>#</th><th>Name</th><th>Position</th><th>Heading</th><th>FPS</th><th>Latency</th><th>Status</th><th></th></tr></thead>
-            <tbody id="phones"></tbody>
-          </table>
-          <div class="empty" id="phonesEmpty">No phones connected</div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-h"><h2>Activity</h2></div>
-        <div id="log"><div class="empty">Nothing yet</div></div>
-      </div>
-    </section>
   </main>
+
+    <aside class="card mission chat-panel" id="chatPanel" aria-labelledby="chatTitle" hidden>
+      <div class="card-h"><h2 id="chatTitle">Mission Control</h2><span class="spacer"></span><button type="button" class="autoSw" id="autoSw" title="Autonomy (M)"><span class="switch"></span>Autonomy</button></div>
+      <p class="chat-intro">Direct cameras and guide the search.</p>
+      <div id="mcFeed"></div>
+      <form id="mcForm" autocomplete="off">
+        <input id="mcInput" aria-label="Message Mission Control" placeholder="Ask Mission Control…" spellcheck="false">
+        <button class="chat-send" type="submit" aria-label="Send message" title="Send message"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+      </form>
+    </aside>
+    <button class="chat-launcher" id="chatOpen" aria-label="Open Mission Control, autonomy paused" aria-controls="chatPanel" aria-expanded="false" title="Mission Control">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a9 9 0 0 1 18 0Z"/><path d="M7 10h10M7 14h6"/></svg>
+      <span class="chat-state" aria-hidden="true"></span>
+    </button>
 
   <div class="viewer" id="viewer">
     <div class="vbox">
@@ -387,6 +473,7 @@
       <div class="vimg"><img id="vImg" alt=""><canvas id="vHudCanvas"></canvas><div class="vnone" id="vNone">Waiting for video…</div>
         <div class="live"><i></i>LIVE</div><div class="vhudnote" id="vHudNote" hidden></div><div class="vcap" id="vCap"></div></div>
       <div class="analysis"><strong>Analyzed source frame</strong><div id="analysisMeta" class="muted">No current result</div><button class="btn" id="confirmSighting" hidden>Confirm visual sighting</button><canvas id="analyzedFrame" hidden></canvas></div>
+      <details class="camera-details"><summary>Camera details</summary>
       <div class="vstats">
         <div><div class="k">Doing</div><div class="v" id="vTask"></div></div>
         <div><div class="k">Position</div><div class="v" id="vPos"></div></div>
@@ -395,7 +482,7 @@
         <div><div class="k">FPS</div><div class="v" id="vFps"></div></div>
         <div><div class="k">Latency</div><div class="v" id="vLat"></div></div>
         <div><div class="k">Searched</div><div class="v" id="vM2"></div></div>
-      </div>
+      </div></details>
     </div>
   </div>
 

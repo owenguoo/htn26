@@ -30,8 +30,6 @@ function connect() {
 
 function setConn(live) {
   if (!live) { st = null; clearSourceFrames(); renderSearch(); renderAnalysis(); }
-  $('#connDot').classList.toggle('live', live);
-  $('#connText').textContent = live ? 'Live' : 'Reconnecting';
 }
 
 function send(msg) {
@@ -75,7 +73,10 @@ function onFrame(buf) {
   if (thumbs.has(phoneId)) URL.revokeObjectURL(thumbs.get(phoneId));
   thumbs.set(phoneId, url);
   const img = document.querySelector(`img[data-thumb="${CSS.escape(phoneId)}"]`);
-  if (img) img.src = url;
+  if (img) {
+    img.src = url;
+    img.closest('.camera-preview').querySelector('.placeholder').hidden = true;
+  }
   if (phoneId === viewing) { $('#vImg').src = url; $('#vNone').style.display = 'none'; }
 }
 
@@ -129,7 +130,7 @@ function renderControls() {
   const s = $('#candStatus');
   s.classList.toggle('found', !!t?.foundBy);
   if (st.search?.mode === 'real') {
-    s.textContent = st.search.confirmation ? `Visual sighting confirmed · Phone ${st.search.confirmation.phoneId} · target location unknown` : 'Real visual search · target location unknown';
+    s.textContent = st.search.confirmation ? `Visual sighting confirmed · Phone ${st.search.confirmation.phoneId} · target location unknown` : 'No confirmed sighting';
   } else if (!t) {
     s.textContent = 'No candidate placed';
   } else if (t.foundBy) {
@@ -148,7 +149,6 @@ function renderControls() {
   const top = st.likely?.[0];
   $('#likely').textContent = top ? `Most likely: ${top.sector} · ${Math.round(top.share * 100)}%` : '';
   const m = st.mission || {};
-  $('#mcModel').textContent = m.ready ? m.model : (m.why || '');
   renderAutonomy(m);
   $('#candBtn').disabled = st.search?.mode === 'real';
   $('#candBtn').textContent = t ? 'Remove candidate' : 'Place candidate';
@@ -174,44 +174,73 @@ function phoneStatus(p) {
 function renderPhones() {
   const list = [...phones.values()].sort((a, b) => a.index - b.index);
   $('#phoneCount').textContent = list.length;
-  $('#phonesEmpty').style.display = list.length ? 'none' : '';
+  $('#phonesEmpty').hidden = list.length > 0;
   const body = $('#phones');
-  // rebuild rows, but keep <img> elements so thumbnails don't flicker
-  const existing = new Map([...body.children].map((tr) => [tr.dataset.id, tr]));
+  body.hidden = !list.length;
+  // Preserve cards so incoming state retains video elements and expanded details.
+  const existing = new Map([...body.children].map((card) => [card.dataset.id, card]));
   list.forEach((p, i) => {
-    let tr = existing.get(p.id);
-    if (!tr) {
-      tr = document.createElement('tr');
-      tr.dataset.id = p.id;
-      tr.innerHTML = `<td><img class="thumb" alt="" data-thumb="${escapeHtml(p.id)}"></td><td class="idx"></td><td class="name"></td>
-        <td class="pos mono muted"></td><td class="hd mono muted"></td><td class="fps mono muted"></td><td class="lat mono muted"></td>
-        <td class="st"></td><td class="actions"><button class="btn sm" data-act="hide"></button></td>`;
-      if (thumbs.has(p.id)) tr.querySelector('img').src = thumbs.get(p.id);
+    let card = existing.get(p.id);
+    if (!card) {
+      card = document.createElement('article');
+      card.className = 'camera-card';
+      card.dataset.id = p.id;
+      card.innerHTML = `<button class="camera-open" data-act="open">
+        <div class="camera-preview"><span class="placeholder"></span><img class="thumb" alt="" data-thumb="${escapeHtml(p.id)}"></div>
+        <div class="camera-title"><span class="idx mono muted"></span><span class="name"></span><span class="st"></span></div>
+        <div class="camera-caption"></div></button>
+        <details class="camera-details"><summary>Camera details</summary><dl>
+        <dt>Device</dt><dd class="device"></dd><dt>Position</dt><dd class="pos"></dd>
+        <dt>Heading</dt><dd class="hd"></dd><dt>Frames / second</dt><dd class="fps"></dd>
+        <dt>Latency</dt><dd class="lat"></dd></dl>
+        <div class="actions"><button class="btn sm" data-act="hide"></button></div></details>`;
+      if (thumbs.has(p.id)) card.querySelector('img').src = thumbs.get(p.id);
     }
     existing.delete(p.id);
-    if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
-    tr.classList.toggle('off', !p.connected);
-    tr.querySelector('.thumb').classList.toggle('hidden', p.hidden);
-    tr.querySelector('.idx').textContent = p.index;
-    tr.querySelector('.name').innerHTML = `${escapeHtml(p.name || 'Phone')} <span class="faint">${escapeHtml(p.device || '')}</span>`
-      + (p.caption ? `<div class="cap">“${escapeHtml(p.caption.text)}”</div>` : '');
+    if (body.children[i] !== card) body.insertBefore(card, body.children[i] || null);
+    card.classList.toggle('off', !p.connected);
+    card.querySelector('.thumb').classList.toggle('hidden', p.hidden);
+    card.querySelector('.placeholder').textContent = p.connected ? 'Waiting for video…' : 'Camera offline';
+    card.querySelector('.placeholder').hidden = thumbs.has(p.id);
+    card.querySelector('.idx').textContent = `#${p.index}`;
+    card.querySelector('.name').textContent = p.name || 'Phone';
+    card.querySelector('.camera-open').setAttribute('aria-label', `Open camera ${p.index}: ${p.name || 'Phone'}`);
+    card.querySelector('.camera-caption').textContent = p.caption?.text || '';
+    card.querySelector('.device').textContent = p.device || 'Unknown';
     const pose = p.pose;
-    tr.querySelector('.pos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : '–';
-    tr.querySelector('.hd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
-    tr.querySelector('.fps').textContent = p.fps.toFixed(1);
-    tr.querySelector('.lat').textContent = p.latencyMs != null ? `${p.latencyMs}ms` : '–';
-    tr.querySelector('.st').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
-    tr.querySelector('[data-act="hide"]').textContent = p.hidden ? 'Show' : 'Hide';
+    card.querySelector('.pos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : 'Not placed';
+    card.querySelector('.hd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
+    card.querySelector('.fps').textContent = p.fps.toFixed(1);
+    card.querySelector('.lat').textContent = p.latencyMs != null ? `${p.latencyMs} ms` : '–';
+    card.querySelector('.st').innerHTML = [[p.connected ? 'Live' : 'Offline · last frame', p.connected ? 'w' : ''], ...phoneStatus(p).filter(([label]) => label !== 'Offline')].map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
+    card.querySelector('[data-act="hide"]').textContent = p.hidden ? 'Show camera' : 'Hide camera';
   });
-  for (const tr of existing.values()) tr.remove();
+  for (const card of existing.values()) card.remove();
+  updateCameraNavigation();
 }
 
+function updateCameraNavigation() {
+  const track = $('#phones');
+  $('#cameraPrev').disabled = track.scrollLeft <= 1;
+  $('#cameraNext').disabled = track.scrollLeft + track.clientWidth >= track.scrollWidth - 1;
+}
+
+function scrollCameras(direction) {
+  const track = $('#phones');
+  const card = track.firstElementChild;
+  track.scrollBy({ left: direction * (card ? card.offsetWidth + 16 : track.clientWidth), behavior: 'smooth' });
+}
+$('#cameraPrev').addEventListener('click', () => scrollCameras(-1));
+$('#cameraNext').addEventListener('click', () => scrollCameras(1));
+$('#phones').addEventListener('scroll', updateCameraNavigation, { passive: true });
+window.addEventListener('resize', updateCameraNavigation);
 $('#phones').addEventListener('click', (e) => {
-  const tr = e.target.closest('tr');
-  const p = tr && phones.get(tr.dataset.id);
-  if (!p) return;
-  if (e.target.closest('[data-act]')) send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
-  else openViewer(p.id); // click anywhere else on the row: expand the feed
+  const action = e.target.closest('[data-act]');
+  const card = e.target.closest('.camera-card');
+  const p = card && phones.get(card.dataset.id);
+  if (!p || !action) return;
+  if (action.dataset.act === 'hide') send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
+  else openViewer(p.id);
 });
 
 // ---------------------------------------------------------------- expanded feed
@@ -415,8 +444,8 @@ $('#vHide').addEventListener('click', () => {
 $('#viewer').addEventListener('click', (e) => { if (e.target === $('#viewer')) closeViewer(); });
 
 function renderLog() {
-  const log = [...(st.planner?.log || [])].reverse();
-  if (!log.length) return;
+  const log = [...(st.planner?.log || [])].reverse().slice(0, 5);
+  if (!log.length) { $('#log').innerHTML = '<div class="empty">Nothing yet</div>'; return; }
   $('#log').innerHTML = log.map((e) => {
     const p = e.phoneId && phones.get(e.phoneId);
     const who = p ? `<b>#${p.index}</b> ` : '';
@@ -473,16 +502,9 @@ let explaining = null; // id of the autonomy action whose evidence is shown on t
 function renderAutonomy(m) {
   const on = !!m.autonomy;
   $('#autoSw').classList.toggle('on', on);
-  $('#aiStatus').classList.add('on');
-  $('#aiPulse').classList.toggle('live', on && !!m.thinking);
-  const searching = st.phase === 'search' || st.phase === 'found';
-  $('#aiText').textContent = !on ? 'Autonomy paused'
-    : st.missionComplete ? 'Mission complete · all responders on target'
-    : !searching ? 'Autonomous · waiting for the search phase'
-    : m.thinking ? 'Analyzing the room…'
-    : `Autonomous${m.lastThinkMs ? ` · reviews take ${(m.lastThinkMs / 1000).toFixed(1)}s` : ''}`;
-  $('#aiUsage').textContent = `${m.calls || 0} calls · ${((m.tokens || 0) / 1000).toFixed(1)}k tokens`;
-
+  $('#autoSw').setAttribute('aria-pressed', String(on));
+  $('#chatOpen').classList.toggle('active', on);
+  $('#chatOpen').setAttribute('aria-label', `Open Mission Control, autonomy ${on ? 'active' : 'paused'}`);
   // live feed of what autonomy did (newest first, last minute), plus the one being explained
   const all = m.recs || [];
   let recs = all.filter((r) => r.ageS < 60).slice(0, 4);
@@ -640,10 +662,37 @@ function setResponders(d) {
   if (st?.target) send({ type: 'target', responders: respondersPref });
 }
 
+function toggleChat(open, restoreFocus = true) {
+  $('#chatPanel').hidden = !open;
+  $('#chatOpen').setAttribute('aria-expanded', String(open));
+  if (open) $('#mcInput').focus();
+  else if (restoreFocus) $('#chatOpen').focus();
+}
+$('#chatOpen').addEventListener('click', () => toggleChat($('#chatPanel').hidden));
+document.addEventListener('click', (event) => {
+  if (!$('#chatPanel').hidden && !event.target.closest('#chatPanel, #chatOpen')) {
+    toggleChat(false, false);
+  }
+});
+$('#chatPanel').addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') { event.stopPropagation(); toggleChat(false); }
+});
+
+$('#settingsOpen').addEventListener('click', () => $('#settings').showModal());
+$('#settingsClose').addEventListener('click', () => $('#settings').close());
+$('#settings').addEventListener('click', (event) => {
+  if (event.target !== event.currentTarget) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
+    event.currentTarget.close();
+  }
+});
+
 $('#joinBtn').addEventListener('click', (e) => { e.stopPropagation(); $('#joinPop').classList.toggle('on'); });
 document.addEventListener('click', (e) => { if (!e.target.closest('.joinWrap')) $('#joinPop').classList.remove('on'); });
 
 window.addEventListener('keydown', (e) => {
+  if ($('#settings').open && e.key === 'Escape') return;
   if (e.key === 'Escape' && e.target === $('#mcInput')) { e.target.blur(); return; }
   if (viewing && !e.target.closest?.('input, textarea')) {
     if (e.key === 'Escape') { closeViewer(); return; }
@@ -652,7 +701,7 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'h' || e.key === 'H') { toggleHud(); return; }
   }
   if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea')) return;
-  if (e.key === '/') { e.preventDefault(); $('#mcInput').focus(); return; }
+  if (e.key === '/' && !$('#settings').open) { e.preventDefault(); toggleChat(true); return; }
   if (e.key === 'Escape' && explaining) { explaining = null; recsKey = ''; if (st?.mission) renderAutonomy(st.mission); return; }
   if (e.key === 'm' || e.key === 'M') { send({ type: 'autonomy', enabled: !st?.mission?.autonomy }); return; }
   const n = Number(e.key);
@@ -689,14 +738,14 @@ function draw() {
       for (let c = 0; c < cov.cols; c++) {
         const level = parseInt(cov.heat[r * cov.cols + c], 36) / 35;
         if (level < 0.02) continue;
-        ctx.fillStyle = `rgba(255,255,255,${(0.04 + 0.4 * level * level).toFixed(3)})`;
+        ctx.fillStyle = `rgba(87,216,121,${(0.04 + 0.4 * level * level).toFixed(3)})`;
         const [px, py] = view.toPx(cov.x0 + c * cov.cell, r * cov.cell);
         ctx.fillRect(px, py, s + 0.5, s + 0.5);
       }
     }
   }
   drawRoom(ctx, room, view, {
-    colors: { floor: 'rgba(0,0,0,0)', wall: '#3e3e3e', grid: 'rgba(255,255,255,0.04)', stage: '#1a1a1a', text: '#707070' },
+    colors: { floor: 'rgba(0,0,0,0)', wall: '#789b85', grid: 'rgba(23,55,38,0.08)', stage: '#deeee3', text: '#466653' },
   });
 
   // planner assignments: thin dashed lines to the sector
@@ -708,7 +757,7 @@ function draw() {
     const c = job.sector.charCodeAt(0) - 65, r = Number(job.sector.slice(1)) - 1;
     const [ax, ay] = view.toPx(x0 + c * size, r * size);
     const [bx, by] = view.toPx(x0 + (c + 1) * size, (r + 1) * size);
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.strokeStyle = 'rgba(24,131,75,0.35)';
     ctx.lineWidth = 1;
     ctx.strokeRect(ax + 0.5, ay + 0.5, bx - ax - 1, by - ay - 1);
     const [px, py] = view.toPx(p.pose.x, p.pose.y);
@@ -721,7 +770,7 @@ function draw() {
   for (const p of list) {
     if (p.pose.heading == null || st.phase === 'lobby') continue; // lobby: locations only
     drawCone(ctx, view, p.pose.x, p.pose.y, p.pose.heading, room.cameraFovDeg, room.coneLength,
-      p.connected ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.04)');
+      p.connected ? 'rgba(24,131,75,0.16)' : 'rgba(24,131,75,0.04)');
   }
   drawSightings();
   drawCandidate();
@@ -730,9 +779,9 @@ function draw() {
   for (const p of list) {
     const [px, py] = view.toPx(p.pose.x, p.pose.y);
     ctx.globalAlpha = p.connected ? 1 : 0.35;
-    ctx.fillStyle = '#ededed';
+    ctx.fillStyle = '#173726';
     ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#a1a1a1';
+    ctx.fillStyle = '#466653';
     ctx.font = '500 11px "Geist Mono", ui-monospace, monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -749,10 +798,10 @@ function drawPings() {
     const k = (performance.now() / 1000) % 1;
     ctx.save();
     ctx.globalAlpha = Math.max(0.25, 1 - age);
-    ctx.strokeStyle = `rgba(255,255,255,${0.8 * (1 - k)})`;
+    ctx.strokeStyle = `rgba(24,131,75,${0.8 * (1 - k)})`;
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(x, y, 6 + k * 18, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = '#ededed';
+    ctx.fillStyle = '#173726';
     ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 7, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 7, y); ctx.closePath(); ctx.fill();
     ctx.font = '500 11px "Geist", ui-sans-serif, system-ui';
     ctx.textAlign = 'center';
@@ -789,7 +838,7 @@ function drawCandidate() {
   // the mock candidate (rehearsals): where it really is, draggable
   if (t.x != null || dragPos) {
     const [mx, my] = view.toPx((dragPos || t).x, (dragPos || t).y);
-    ctx.strokeStyle = t.foundBy ? 'rgba(237,237,237,0.4)' : '#ededed';
+    ctx.strokeStyle = t.foundBy ? 'rgba(23,55,38,0.4)' : '#173726';
     ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(mx, my, 7, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(mx - 3, my); ctx.lineTo(mx + 3, my); ctx.moveTo(mx, my - 3); ctx.lineTo(mx, my + 3); ctx.stroke();
@@ -800,17 +849,17 @@ function drawCandidate() {
     const p = phones.get(pid);
     if (!p?.pose) continue;
     const [px, py] = view.toPx(p.pose.x, p.pose.y);
-    ctx.strokeStyle = arrived ? '#ededed' : '#ff4d4d';
+    ctx.strokeStyle = arrived ? '#173726' : '#18834b';
     ctx.lineWidth = 1.5;
     ctx.setLineDash(arrived ? [] : [4, 4]);
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(cx, cy); ctx.stroke();
     ctx.setLineDash([]);
   }
   const k = (performance.now() / 1100) % 1;
-  ctx.strokeStyle = `rgba(255,77,77,${1 - k})`;
+  ctx.strokeStyle = `rgba(24,131,75,${1 - k})`;
   ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.arc(cx, cy, 7 + k * 26, 0, Math.PI * 2); ctx.stroke();
-  ctx.fillStyle = '#ff4d4d';
+  ctx.fillStyle = '#18834b';
   ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
 }
 
@@ -885,8 +934,10 @@ async function searchApi(path, options = {}) {
 
 function renderSearch() {
   $('#searchTools').disabled = searchBusy;
+  $('#saveThreshold').disabled = searchBusy;
+  $('#threshold').disabled = searchBusy;
   const search = st?.search;
-  $('#searchStatus').textContent = search ? `${search.mode === 'real' ? 'Real search' : 'Rehearsal'} · Worker: ${search.status.replaceAll('_', ' ')} · ${search.referenceAvailable ? 'Reference registered' : 'No reference'} · ${search.active ? 'Searching' : 'Paused'}` : 'Waiting for hub connection';
+  $('#clearReference').hidden = !drawReference && !search?.referenceAvailable;
   if (search && document.activeElement !== $('#threshold')) $('#threshold').value = search.threshold.toFixed(2);
 }
 
@@ -904,19 +955,12 @@ function clearReferencePreview() {
   $('#personChoices').replaceChildren();
   $('#referenceFile').value = '';
 }
-$('#rehearsalMode').addEventListener('click', () => searchAction(async () => {
-  const result = await searchApi('/api/search/rehearsal', {method: 'POST'});
-  if (st) st.search = result;
-  clearReferencePreview();
-  $('#searchMessage').textContent = 'Rehearsal mode active. Place a mock candidate to rehearse.';
-}));
-
 $('#clearReference').addEventListener('click', () => searchAction(async () => {
   await searchApi('/api/search/reference', {method: 'DELETE'});
   clearReferencePreview();
-  if (st?.search) st.search.sightings = [];
+  if (st?.search) { st.search.sightings = []; st.search.referenceAvailable = false; }
   clearSourceFrames();
-  $('#searchMessage').textContent = 'Reference cleared';
+  $('#searchMessage').textContent = '';
 }));
 $('#saveThreshold').addEventListener('click', () => {
   const input = $('#threshold');
@@ -939,7 +983,7 @@ function paintPeople(canvas, detections, selected = -1) {
   const markers = [];
   detections.forEach((d, i) => {
     const [x1, y1, x2, y2] = d.box;
-    ctx.strokeStyle = selected === i ? '#ff4d4d' : '#fff';
+    ctx.strokeStyle = selected === i ? '#57d879' : '#fff';
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
     const origin = {x: Math.min(x1, canvas.width - size), y: Math.max(0, y1 - size)};
     let position = origin;
@@ -957,7 +1001,7 @@ function paintPeople(canvas, detections, selected = -1) {
   });
   // Paint labels after all boxes so later box outlines cannot obscure earlier numbers.
   markers.forEach(({x, y, x1, y1}, i) => {
-    ctx.strokeStyle = selected === i ? '#ff4d4d' : '#fff';
+    ctx.strokeStyle = selected === i ? '#57d879' : '#fff';
     ctx.beginPath();
     ctx.moveTo(x + size / 2, y + size / 2);
     ctx.lineTo(x1, y1);
@@ -970,14 +1014,43 @@ function paintPeople(canvas, detections, selected = -1) {
     ctx.fillText(String(i + 1), x + 6 * scale, y + 17 * scale);
   });
 }
+$('#uploadPhoto').addEventListener('click', () => $('#referenceFile').click());
 $('#referenceFile').addEventListener('change', () => {
-  const file = $('#referenceFile').files[0];
-  if (!file) return;
+  uploadReferencePhoto($('#referenceFile').files[0]);
+  $('#referenceFile').value = '';
+});
+const uploadZone = $('#uploadPhoto');
+for (const eventName of ['dragenter', 'dragover']) {
+  uploadZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    if (searchBusy) return;
+    event.dataTransfer.dropEffect = 'copy';
+    uploadZone.classList.add('dragging');
+  });
+}
+uploadZone.addEventListener('dragleave', (event) => {
+  if (!uploadZone.contains(event.relatedTarget)) uploadZone.classList.remove('dragging');
+});
+uploadZone.addEventListener('drop', (event) => {
+  event.preventDefault();
+  uploadZone.classList.remove('dragging');
+  if (searchBusy) return;
+  const files = event.dataTransfer.files;
+  if (files.length !== 1) {
+    $('#searchMessage').textContent = 'Choose one photo at a time.';
+    return;
+  }
+  uploadReferencePhoto(files[0]);
+});
+
+function uploadReferencePhoto(file) {
+  if (!file || searchBusy) return;
   searchAction(async () => {
     drawReference = null;
     $('#personChoices').replaceChildren();
     $('#referencePreview').hidden = true;
     $('#searchMessage').textContent = 'Finding people in the reference…';
+    if (file.type && !file.type.startsWith('image/')) throw new Error('Choose an image file.');
     if (file.size > 25_000_000) throw new Error('Choose a photo smaller than 25 MB.');
     const image = new Image();
     const url = URL.createObjectURL(file);
@@ -1007,12 +1080,12 @@ $('#referenceFile').addEventListener('change', () => {
         clearSourceFrames();
         selected = index;
         drawReference();
-        $('#searchMessage').textContent = `Person ${index + 1} selected. Appearance similarity suggests likely sightings, not confirmed identity.`;
+        $('#searchMessage').textContent = `Person ${index + 1} selected.`;
       }));
       $('#personChoices').append(button);
     });
   });
-});
+}
 
 let analysisKey = null;
 function clearSourceFrames() {
@@ -1060,7 +1133,7 @@ function renderAnalysis() {
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     ctx.lineWidth = 3;
     for (const box of result.boxes) {
-      ctx.strokeStyle = box.similarity >= st.search.threshold ? '#ff4d4d' : '#fff';
+      ctx.strokeStyle = box.similarity >= st.search.threshold ? '#57d879' : '#fff';
       ctx.strokeRect(box.x * canvas.width, box.y * canvas.height, box.w * canvas.width, box.h * canvas.height);
     }
     canvas.hidden = false;
