@@ -218,6 +218,9 @@
       text-align: center; line-height: 1.35; }
     .vcap.on { display: block; }
     td .cap { font-size: 12px; color: var(--fg-2); max-width: 280px; white-space: normal; margin-top: 2px; }
+    .vhudnote { position: absolute; top: 12px; right: 12px; font: 500 11px var(--mono); padding: 3px 8px;
+      border-radius: 6px; background: rgba(0,0,0,0.6); color: var(--fg-2); }
+    .vhudnote.warn { color: #ffb703; }
     #vHud.on { background: var(--fg); color: #000; border-color: var(--fg); }
     #vHud.on kbd { color: #555; border-color: #999; }
     .vstats { display: grid; grid-template-columns: 1.5fr 1.6fr repeat(5, 1fr); border-top: 1px solid var(--line); }
@@ -264,6 +267,7 @@
       <span class="slash">/</span>
       <span class="muted">Console</span>
       <span class="conn"><span class="dot" id="connDot"></span><span id="connText">Connecting</span></span>
+      <button class="btn sm danger" id="authWarn" hidden title="The hub ignores phase, focus, ping and phone commands from a signed-out console">Signed out · controls ignored</button>
       <span class="spacer"></span>
       <a class="btn" href="/dashboard" target="_blank" rel="noopener">Open projector ↗</a>
     </div>
@@ -373,7 +377,7 @@
         <button class="btn sm" id="vHide"></button><button class="btn sm" id="vClose">Close <kbd>Esc</kbd></button>
       </div>
       <div class="vimg"><img id="vImg" alt=""><canvas id="vHudCanvas"></canvas><div class="vnone" id="vNone">Waiting for video…</div>
-        <div class="live"><i></i>LIVE</div><div class="vcap" id="vCap"></div></div>
+        <div class="live"><i></i>LIVE</div><div class="vhudnote" id="vHudNote" hidden></div><div class="vcap" id="vCap"></div></div>
       <div class="analysis"><strong>Analyzed source frame</strong><div id="analysisMeta" class="muted">No current result</div><button class="btn" id="confirmSighting" hidden>Confirm visual sighting</button><canvas id="analyzedFrame" hidden></canvas></div>
       <div class="vstats">
         <div><div class="k">Doing</div><div class="v" id="vTask"></div></div>

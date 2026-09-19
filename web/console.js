@@ -25,7 +25,14 @@ function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=2`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => setConn(true);
+  ws.onopen = () => {
+    setConn(true);
+    // A new socket starts with no focus, and a restarted hub has thrown away every
+    // operator session along with its signing secret. Without re-asserting both, an
+    // open viewer silently drops back to the thumbnail rate with no HUD.
+    if (viewing) send({ type: 'focus', phoneId: viewing });
+    loadSession();
+  };
   ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
   ws.onmessage = (ev) => (typeof ev.data === 'string' ? onJson(JSON.parse(ev.data)) : onFrame(ev.data));
 }
@@ -41,7 +48,9 @@ function send(msg) {
 }
 
 function onJson(msg) {
-  if (msg.type === 'hello') {
+  if (msg.error) {
+    onHubError(String(msg.error));
+  } else if (msg.type === 'hello') {
     room = msg.room;
     $('#roomName').textContent = `${room.width} × ${room.depth} m`;
     resizeMap();
@@ -54,6 +63,18 @@ function onJson(msg) {
     for (const p of msg.phones) phones.set(p.id, p);
     for (const id of [...thumbs.keys()]) if (!phones.has(id)) { URL.revokeObjectURL(thumbs.get(id)); thumbs.delete(id); }
     render();
+  }
+}
+
+// The hub answers an operator-only message (focus, phase, ping, phone commands) with
+// an error and keeps streaming state to everyone, so a signed-out console looks
+// perfectly healthy while every click is dropped on the floor. Say so out loud.
+function onHubError(error) {
+  $('#searchMessage').textContent = error;
+  if (/authentication|origin/i.test(error)) {
+    authenticated = false;
+    renderSearch();
+    renderHudNote();
   }
 }
 
@@ -226,6 +247,7 @@ function openViewer(id) {
   if (thumbs.has(id)) { $('#vImg').src = thumbs.get(id); $('#vNone').style.display = 'none'; }
   $('#viewer').classList.add('on');
   send({ type: 'focus', phoneId: id }); // hub streams this phone faster while it's open
+  renderHudNote();
   renderViewer();
 }
 
@@ -233,6 +255,7 @@ function closeViewer() {
   viewing = null;
   clearSourceFrames();
   clearHud();
+  renderHudNote();
   $('#viewer').classList.remove('on');
   send({ type: 'focus', phoneId: null });
 }
@@ -246,6 +269,7 @@ function stepViewer(d) {
 function renderViewer() {
   if (!viewing) return;
   renderAnalysis();
+  renderHudNote();
   const p = phones.get(viewing);
   if (!p) { closeViewer(); return; }
   $('#vNum').textContent = `#${p.index}`;
@@ -273,6 +297,20 @@ function toggleHud() {
   showHud = !showHud;
   try { localStorage.setItem('swarm.hud', showHud ? '1' : '0'); } catch {}
   $('#vHud').classList.toggle('on', showHud);
+  renderHudNote();
+}
+
+/// The HUD only flows while the hub has this phone focused, so "nothing happened"
+/// is ambiguous: the toggle may be off, or the mirror may never have arrived.
+function renderHudNote() {
+  const note = $('#vHudNote');
+  if (!viewing) { note.hidden = true; return; }
+  const hud = phones.get(viewing)?.hud;
+  note.hidden = showHud && !!hud;
+  note.classList.toggle('warn', showHud && !hud);
+  note.textContent = !showHud ? 'HUD off'
+    : authenticated ? 'HUD on · no mirror from this phone yet'
+    : 'HUD on · sign in to receive it';
 }
 
 // ---------------------------------------------------------------- phone HUD mirror
@@ -881,6 +919,7 @@ async function searchApi(path, options = {}) {
 }
 
 function renderSearch() {
+  $('#authWarn').hidden = authenticated;
   $('#loginForm').hidden = authenticated;
   $('#logout').hidden = !authenticated;
   $('#searchTools').hidden = !authenticated;
@@ -898,6 +937,10 @@ async function searchAction(action) {
   finally { searchBusy = false; renderSearch(); }
 }
 
+$('#authWarn').addEventListener('click', () => {
+  $('#loginForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('#operatorCode').focus();
+});
 $('#loginForm').addEventListener('submit', (event) => {
   event.preventDefault();
   searchAction(async () => {

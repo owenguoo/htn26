@@ -8,8 +8,26 @@ public enum PoseSourceKind: String, Sendable {
     /// The real thing. Does not exist in the Simulator.
     case arkit
     /// A recorded walk and a synthetic JPEG: the whole client, minus ARKit and
-    /// the camera. This is what runs in the Simulator and in the hub e2e.
+    /// the camera. This is what the hub e2e runs, and what `replay=1` selects.
     case replay
+    /// Drag to look, hold a stick to walk. **Simulator only** — see
+    /// `isAvailableOnThisPlatform`. The Simulator's default, because a HUD you
+    /// cannot turn is a HUD you cannot judge.
+    case drive
+
+    /// `.drive` exists to make the Simulator judgeable and has no meaning on a
+    /// phone that has ARKit. Gating here as well as at the `switch` in `join` is
+    /// deliberate belt and braces: a `RuntimeOptions` written by a
+    /// `configure({poseSource:'drive'})` call would otherwise survive in
+    /// `UserDefaults`-shaped state onto hardware and quietly replace the camera
+    /// with a joystick.
+    var isAvailableOnThisPlatform: Bool {
+        #if targetEnvironment(simulator)
+        true
+        #else
+        self != .drive
+        #endif
+    }
 }
 
 public struct RuntimeOptions: Sendable {
@@ -27,10 +45,17 @@ public struct RuntimeOptions: Sendable {
         self.replayMarkers = replayMarkers
     }
 
-    /// ARKit where it exists, replay where it does not.
+    /// ARKit where it exists, drive where it does not.
+    ///
+    /// The Simulator default moved from `.replay` to `.drive`: a recorded walk
+    /// shows the HUD doing something, but only a HUD you can turn tells you
+    /// whether the compass turns the right way. Nothing automated depends on
+    /// this default — `e2e-hub.sh` drives the `swarm-replay` CLI on macOS, and
+    /// `join.tsx` / `RootView.swift` still ask for `.replay` *explicitly* when
+    /// they see `replay=1`.
     public static var platformDefault: RuntimeOptions {
         #if targetEnvironment(simulator)
-        RuntimeOptions(poseSource: .replay)
+        RuntimeOptions(poseSource: .drive)
         #else
         RuntimeOptions(poseSource: .arkit)
         #endif
@@ -44,6 +69,20 @@ public struct RuntimeSession: Sendable {
     public let preview: CameraPreviewSource?
     public let venue: Venue
     public let socketURL: URL
+    /// Non-nil only on the `.drive` path, which is Simulator-only. The handle
+    /// the gesture layer pushes `DriveInput` into and the view model pushes the
+    /// hub's room dimensions into — `PoseProvider` was deliberately not widened
+    /// to carry either, so this is how they reach the provider.
+    public let drive: DrivePoseProvider?
+
+    public init(client: SwarmClient, preview: CameraPreviewSource?, venue: Venue,
+                socketURL: URL, drive: DrivePoseProvider? = nil) {
+        self.client = client
+        self.preview = preview
+        self.venue = venue
+        self.socketURL = socketURL
+        self.drive = drive
+    }
 }
 
 /// Builds and holds the running `SwarmClient`.
@@ -65,8 +104,16 @@ public final class SwarmRuntime: @unchecked Sendable {
         lock.withLock { current }
     }
 
+    /// Rejects a pose source this platform has no business running.
+    ///
+    /// Today that is exactly `.drive` off-simulator, which falls back to
+    /// `.arkit` rather than throwing: `configure` is a fire-and-forget
+    /// `Function` on the JS side, and a stale stored option is not a reason to
+    /// leave an operator unable to join.
     public func configure(_ newOptions: RuntimeOptions) {
-        lock.withLock { options = newOptions }
+        var sanitised = newOptions
+        if !sanitised.poseSource.isAvailableOnThisPlatform { sanitised.poseSource = .arkit }
+        lock.withLock { options = sanitised }
     }
 
     public var currentOptions: RuntimeOptions {
@@ -117,12 +164,18 @@ public final class SwarmRuntime: @unchecked Sendable {
             }
         }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+
+        // Belt to `configure`'s braces. A source that cannot run here falls
+        // through to ARKit rather than failing the join — the operator standing
+        // in the room wanted a camera, not an error.
+        let source = options.poseSource.isAvailableOnThisPlatform ? options.poseSource : .arkit
         var configuration = SwarmClient.Configuration(
-            socketURL: socketURL, phoneId: PhoneIdentity.phoneId, name: name,
+            socketURL: socketURL, phoneId: PhoneIdentity.phoneId,
+            name: source == .drive && name.isEmpty ? "sim" : name,
             build: "ios-\(version)", venue: venue)
 
         let session: RuntimeSession
-        switch options.poseSource {
+        switch source {
         case .arkit:
             let provider = ARKitPoseProvider(configuration: .init(
                 venue: venue, referenceImageGroup: nil, wantsSceneDepth: false,
