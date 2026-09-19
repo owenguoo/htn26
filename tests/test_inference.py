@@ -279,3 +279,72 @@ def test_bridge_normalizes_valid_response_and_rejects_wrong_identity():
                 await bridge.process(header, b'jpg')
             assert len(posted) == 1
     asyncio.run(run())
+
+
+def test_reference_clear_wins_while_request_body_streams(monkeypatch):
+    from swarm.control import Auth, Settings, install_routes
+    from fastapi import FastAPI
+    async def run():
+        streaming, release_body = asyncio.Event(), asyncio.Event()
+        worker_calls = []
+        async def body():
+            streaming.set()
+            await release_body.wait()
+            yield b'jpg'
+        async def worker(request):
+            worker_calls.append(request.method)
+            return httpx.Response(200, json={'target_version': 'late'}) if request.method == 'PUT' else httpx.Response(204)
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(worker), **kwargs))
+        hub = module.Hub()
+        auth = Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge', operator_code='code'))
+        app = FastAPI()
+        install_routes(app, hub, auth)
+        async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            await client.post('/api/session', json={'code': 'code'})
+            registration = asyncio.create_task(client.put('/api/search/reference?box=0,0,10,10', content=body()))
+            await asyncio.wait_for(streaming.wait(), 1)
+            revision = hub.search.revision
+            clear = asyncio.create_task(client.delete('/api/search/reference'))
+            await asyncio.sleep(0)
+            assert hub.search.revision != revision
+            release_body.set()
+            uploaded, cleared = await asyncio.gather(registration, clear)
+            assert uploaded.status_code == 409
+            assert cleared.status_code == 200
+            assert hub.search.target_version is None
+            assert cleared.json()['status'] == 'unavailable'
+            assert worker_calls == ['DELETE']
+    asyncio.run(run())
+
+
+def test_reference_delete_holds_gate_while_clearing_overlays(monkeypatch):
+    from swarm.control import Auth, Settings, install_routes
+    from fastapi import FastAPI
+    async def run():
+        clearing, release_clear = asyncio.Event(), asyncio.Event()
+        worker_calls = []
+        async def worker(request):
+            worker_calls.append(request.method)
+            return httpx.Response(200, json={'target_version': 'late'}) if request.method == 'PUT' else httpx.Response(204)
+        real_client = httpx.AsyncClient
+        monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(worker), **kwargs))
+        hub = module.Hub()
+        async def clear_overlays():
+            if not clearing.is_set():
+                clearing.set()
+                await release_clear.wait()
+        monkeypatch.setattr(hub, 'clear_detection_overlays', clear_overlays)
+        app = FastAPI()
+        install_routes(app, hub, Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge', operator_code='code')))
+        async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            await client.post('/api/session', json={'code': 'code'})
+            clear = asyncio.create_task(client.delete('/api/search/reference'))
+            await asyncio.wait_for(clearing.wait(), 1)
+            registration = await client.put('/api/search/reference?box=0,0,10,10', content=b'jpg')
+            release_clear.set()
+            await clear
+            assert registration.status_code == 429
+            assert hub.search.target_version is None
+            assert worker_calls == ['DELETE']
+    asyncio.run(run())

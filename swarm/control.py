@@ -201,10 +201,13 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
         if gate.locked():
             raise HTTPException(429, 'reference control busy')
         async with gate:
-            data = await upload(request)
             hub.search.set_reference(None)
             revision = hub.search.revision
+            status_value = 'unavailable'
             await hub.clear_detection_overlays()
+            data = await upload(request)
+            if hub.search.revision != revision:
+                raise HTTPException(409, 'search changed during upload')
             result = await worker('PUT', '/v1/targets/active', data=data, params=[('box', x) for x in boxes])
             if hub.search.revision != revision:
                 raise HTTPException(409, 'search changed during upload')
@@ -212,8 +215,8 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
             if not isinstance(version, str) or not 1 <= len(version) <= 128:
                 raise HTTPException(502, 'invalid target version')
             hub.search.set_reference(version)
-            await hub.clear_detection_overlays()
             status_value, status_at = 'available', time.monotonic()
+            await hub.clear_detection_overlays()
             return state()
 
     @app.delete('/api/search/reference')
@@ -221,10 +224,10 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
         nonlocal status_value
         auth.require_operator(request)
         hub.search.set_reference(None)
-        await hub.clear_detection_overlays()
         status_value = 'unavailable' if auth.settings.enabled else 'disabled'
-        # Serialization removes any reference registered by an upload that was superseded.
+        # Take the gate before awaiting overlays so registration cannot overtake deletion.
         async with gate:
+            await hub.clear_detection_overlays()
             if auth.settings.enabled:
                 try:
                     await worker('DELETE', '/v1/targets/active')
