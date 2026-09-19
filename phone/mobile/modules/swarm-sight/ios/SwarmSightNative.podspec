@@ -4,7 +4,10 @@
 swarm_core = File.expand_path('../../../../Packages/SwarmCore', __dir__)
 
 Pod::Spec.new do |s|
-  s.name           = 'SwarmSight'
+  # Not 'SwarmSight': that is the app target's module name, and a pod that shares
+  # it makes `import SwarmSight` inside the app resolve to the app itself — the
+  # module class then silently disappears from Release builds.
+  s.name           = 'SwarmSightNative'
   s.version        = '1.0.0'
   s.summary        = 'Native SwarmSight client: ARKit pose source, frame encoder, operator view.'
   s.description    = 'Hosts SwarmCore inside an Expo app. JS never touches frames, poses at rate, or the socket.'
