@@ -262,28 +262,32 @@ struct LatencyTests {
 
     // MARK: - The trace on the wire
 
-    @Test func theAssembledFrameChunkCarriesItsTrace() async throws {
+    /// The hub carries no trace; it measures latency from `tCapture`. The
+    /// phone-side stages still have to be stamped, because they are the only
+    /// way to tell "the phone was slow" from "the network was".
+    @Test func theAssembledFrameKeepsItsTraceAndPutsTCaptureOnTheWire() async throws {
         let harness = try ReplayHarness(fixture: "trajectory-walk-2min.json")
         let ticket = try #require(try await harness.run().frames.first)
         let encoded = EncodedFrame(frameID: ticket.frameID, jpeg: Data([0xFF, 0xD8]),
-                                   width: 960, height: 720, intrinsics: Sample.intrinsics())
-        let chunk = FrameAssembly.chunk(deviceID: "phone-a", ticket: ticket, encoded: encoded,
-                                        quality: 0.6,
-                                        encodedAt: ticket.serverTimestamp + 0.018,
-                                        sentAt: ticket.serverTimestamp + 0.027)
-        let trace = try #require(chunk.trace)
+                                   width: 720, height: 960, intrinsics: Sample.intrinsics())
+        let room = RoomPose(x: 1, y: 2, heading: 45, pitch: -3)
+        let (message, trace) = FrameAssembly.frame(ticket: ticket, encoded: encoded, room: room,
+                                                   calibrated: true, tCaptureMs: 1_789_834_632_484,
+                                                   encodedAt: ticket.serverTimestamp + 0.018,
+                                                   sentAt: ticket.serverTimestamp + 0.027)
         #expect(trace.isClientComplete)
         #expect(trace.isMonotonic)
         #expect(isClose(trace.duration(from: .capture, to: .sent) ?? 0, 0.027, within: 1e-6))
         #expect(trace.violations().isEmpty)
 
-        // And it survives the wire, because the server appends to this object.
-        let data = try WireCoder.encode(WireEnvelope(seq: 1, message: .frame(chunk)))
-        guard case .frame(let decoded) = try WireCoder.decode(data).message else {
-            Issue.record("expected a frame")
-            return
-        }
-        #expect(decoded.trace == trace)
+        let onWire = DeliveredMessage(try message.encoded())
+        #expect(onWire.isBinary)
+        #expect(onWire.type == "frame")
+        #expect(onWire.number("tCapture") == 1_789_834_632_484)
+        #expect(onWire.number("seq") == Double(ticket.frameID))
+        #expect(onWire.number("heading") == 45)
+        #expect(onWire.json["calibrated"] as? Bool == true)
+        #expect(onWire.payload == Data([0xFF, 0xD8]))
     }
 
     /// Depth that has not been made metric must never look like metres on the

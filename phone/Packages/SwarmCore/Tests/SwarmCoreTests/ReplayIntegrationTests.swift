@@ -14,24 +14,28 @@ struct ReplayIntegrationTests {
 
     // MARK: - Gate 1 over the replay
 
-    /// Every pose the replay produces survives encoding and decoding unchanged.
-    /// A round-trip test over invented values would not catch a field that only
-    /// goes wrong for real motion.
-    @Test func everyReplayedPoseRoundTripsThroughTheWire() async throws {
+    /// Every pose the replay produces projects into the room and encodes as a
+    /// `slam` the hub's `set_external_pose` will accept: finite x and y, heading
+    /// in [0, 360). A test over invented values would not catch a field that
+    /// only goes wrong for real motion.
+    @Test func everyReplayedPoseBecomesAValidSlam() async throws {
         let harness = try ReplayHarness(fixture: "trajectory-walk-2min.json")
         let poses = try await harness.run().poses
         #expect(poses.count > 500)
 
-        for (index, pose) in poses.enumerated() {
-            let data = try WireCoder.encode(WireEnvelope(seq: UInt64(index), message: .pose(pose)))
-            guard case .pose(let decoded) = try WireCoder.decode(data).message else {
-                Issue.record("pose \(index) did not decode as a pose")
-                return
+        for (index, update) in poses.enumerated() {
+            #expect(update.inVenueFrame)
+            let room = RoomAlignment.identity.project(try #require(update.venuePose))
+            let message = DeliveredMessage(try HubOutbound.slam(x: room.x, y: room.y, heading: room.heading,
+                                                                pitch: room.pitch).encoded())
+            #expect(message.type == "slam")
+            let x = try #require(message.number("x")), y = try #require(message.number("y"))
+            #expect(x.isFinite && y.isFinite, "pose \(index)")
+            #expect(isClose(x, Double(update.position[0]), within: 1e-6))
+            #expect(isClose(y, Double(update.position[2]), within: 1e-6))
+            if let heading = message.number("heading") {
+                #expect(heading >= 0 && heading < 360, "pose \(index) heading \(heading)")
             }
-            #expect(decoded == pose, "pose \(index) changed on the wire")
-            let recovered = try #require(decoded.venuePose)
-            #expect(recovered.position.x.isFinite && recovered.position.y.isFinite
-                    && recovered.position.z.isFinite)
         }
     }
 
@@ -46,7 +50,7 @@ struct ReplayIntegrationTests {
         let channel = GatedChannel()
         let factory = ScriptedChannelFactory(channels: [channel])
         let transport = Transport(
-            configuration: .init(url: URL(string: "ws://127.0.0.1:8765/device")!,
+            configuration: .init(url: URL(string: "ws://127.0.0.1:8000/ws/phone")!,
                                  maxInFlight: 1, bufferDepth: 1),
             factory: factory, sleeper: RecordingSleeper())
         await transport.start()
@@ -54,8 +58,8 @@ struct ReplayIntegrationTests {
 
         // The socket accepts roughly one message for every twenty offered, which
         // is the ratio a phone hits when the Wi-Fi in a crowded hall degrades.
-        for (index, pose) in poses.enumerated() {
-            await transport.send(.pose(pose))
+        for (index, _) in poses.enumerated() {
+            await transport.send(Sample.slam(index))
             if index % 20 == 0 { await channel.grant(1) }
             await Task.yield()
             let buffered = await transport.bufferedMessageCount()
@@ -73,17 +77,13 @@ struct ReplayIntegrationTests {
         #expect(stats.sent + stats.dropped == poses.count)
         #expect(stats.inFlight == 0)
 
-        let delivered = await channel.deliveredEnvelopes().compactMap { envelope -> PoseUpdate? in
-            if case .pose(let update) = envelope.message { return update }
-            return nil
-        }
-        #expect(!delivered.isEmpty)
+        let sequences = await channel.deliveredMessages().filter { $0.type == "slam" }
+            .compactMap { $0.number("x").map(Int.init) }
+        #expect(!sequences.isEmpty)
         // Delivered poses must be in order and must reach the end of the walk.
-        let sequences = delivered.map(\.seq)
         #expect(zip(sequences, sequences.dropFirst()).allSatisfy { $0 < $1 },
                 "delivered poses were out of order")
-        let lastSeq = try #require(poses.last?.seq)
-        #expect(delivered.last?.seq == lastSeq,
+        #expect(sequences.last == poses.count - 1,
                 "the final pose of the walk was dropped in favour of an older one")
         await transport.stop()
     }
@@ -97,7 +97,7 @@ struct ReplayIntegrationTests {
         let channel = GatedChannel()
         let factory = ScriptedChannelFactory(channels: [channel])
         let transport = Transport(
-            configuration: .init(url: URL(string: "ws://127.0.0.1:8765/device")!,
+            configuration: .init(url: URL(string: "ws://127.0.0.1:8000/ws/phone")!,
                                  maxInFlight: 1, bufferDepth: 1),
             factory: factory, sleeper: RecordingSleeper())
         await transport.start()
@@ -106,14 +106,14 @@ struct ReplayIntegrationTests {
         for event in events {
             switch event {
             case .pose(let update):
-                await transport.send(.pose(update))
+                await transport.send(Sample.slam(Int(update.seq)))
             case .captureFrame(let ticket):
                 let encoded = EncodedFrame(frameID: ticket.frameID, jpeg: Data(repeating: 0, count: 512),
-                                           width: 960, height: 720, intrinsics: ticket.intrinsics)
-                await transport.send(.frame(FrameAssembly.chunk(
-                    deviceID: "phone-a", ticket: ticket, encoded: encoded, quality: 0.6,
+                                           width: 720, height: 960, intrinsics: ticket.intrinsics)
+                await transport.send(FrameAssembly.frame(
+                    ticket: ticket, encoded: encoded, room: nil, calibrated: true, tCaptureMs: 0,
                     encodedAt: ticket.serverTimestamp + 0.018,
-                    sentAt: ticket.serverTimestamp + 0.027)))
+                    sentAt: ticket.serverTimestamp + 0.027).message)
             default:
                 break
             }
@@ -127,9 +127,9 @@ struct ReplayIntegrationTests {
             return buffered == 0 && inFlight == 0
         }
 
-        let delivered = await channel.deliveredEnvelopes()
-        let poseCount = delivered.filter { if case .pose = $0.message { true } else { false } }.count
-        let frameCount = delivered.filter { if case .frame = $0.message { true } else { false } }.count
+        let delivered = await channel.deliveredMessages()
+        let poseCount = delivered.filter { $0.type == "slam" }.count
+        let frameCount = delivered.filter { $0.type == "frame" }.count
         #expect(poseCount > 0)
         #expect(frameCount > 0, "frames were starved out entirely")
         #expect(poseCount > frameCount,
@@ -147,15 +147,15 @@ struct ReplayIntegrationTests {
 
     // MARK: - Gate 2 over the replay
 
-    /// An unsynchronised timestamp is indistinguishable from a synchronised one
-    /// at the server, so the phone sends nothing until the clock has converged.
-    /// Fusing on device uptime is worse than fusing on nothing.
+    /// With `requireClockSync` on — for a server that fuses on these timestamps,
+    /// which the htn26 hub does not — the phone sends nothing until the clock
+    /// has converged. Fusing on device uptime is worse than fusing on nothing.
     @Test func noPoseLeavesTheDeviceBeforeTheClockHasSynchronised() async throws {
         let trajectory = try Fixtures.trajectory("trajectory-walk-2min.json")
         let venue = try Venue.load(from: Fixtures.url("venue.json"))
         let provider = MockPoseProvider(trajectory: trajectory)
         // A brand new, unsynchronised clock.
-        let machine = SessionMachine(configuration: .init(deviceID: "phone-a"),
+        let machine = SessionMachine(configuration: .init(deviceID: "phone-a", requireClockSync: true),
                                      venue: venue, provider: provider, clock: ClockSync())
 
         let stream = await machine.start()

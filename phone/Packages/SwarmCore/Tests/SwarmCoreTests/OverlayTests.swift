@@ -92,162 +92,254 @@ struct OverlayTests {
         #expect(Geometry.relativeBearing(from: pose, to: SIMD3<Float>(1, 0, 2)) == nil)
     }
 
-    // MARK: - Tracked arrows
+    // MARK: - Hub guides
 
-    /// A venue-frame target stays put while the operator turns, which is the
-    /// whole point of doing this on the phone rather than on the server.
-    @Test func aTrackedArrowFollowsTheCameraRatherThanTheScreen() {
-        var model = OverlayModel()
-        model.apply(Command(id: "a", serverTimestamp: 0,
-                            kind: .arrow(target: [4, 1.5, 0], bearingRadians: nil, label: "backpack")),
-                    now: 0)
-
-        var bearings: [Float] = []
-        for step in 0...8 {
-            let yaw = -1.2 + Float(step) * 0.15
-            model.update(pose: camera(at: SIMD3<Float>(0, 1.5, 0), yaw: yaw),
-                         diagnostics: diagnostics(), transport: .init(),
-                         transportState: .connected, now: Double(step))
-            if let arrow = model.state.arrow { bearings.append(arrow.bearingRadians) }
-        }
-        #expect(bearings.count == 9)
-        #expect(Set(bearings).count == 9, "the bearing did not change as the camera turned")
-        #expect(model.state.arrow?.label == "backpack")
-        let distance = model.state.arrow?.distance ?? 0
-        #expect(isClose(distance, 4, within: 0.01))
+    private func tick(_ model: inout OverlayModel, pose: Pose?, now: Double, stale: Bool = false,
+                      alignment: RoomAlignment? = .identity, intrinsics: CameraIntrinsics? = nil) {
+        model.update(pose: pose, alignment: alignment, source: alignment == nil ? .none : .marker,
+                     intrinsics: intrinsics, diagnostics: diagnostics(stale: stale),
+                     transport: .init(), transportState: .connected, now: now)
     }
 
-    /// If we do not know where the camera is looking, we cannot say which way to
-    /// turn. An arrow drawn from a stale pose points at nothing.
-    @Test func aTrackedArrowDisappearsWhenThePoseGoesStale() {
+    /// Room heading h means a right-handed yaw of −h about +Y.
+    private func facing(_ headingDegrees: Double, at position: SIMD3<Float> = [0, 1.5, 5]) -> Pose {
+        camera(at: position, yaw: -Float(headingDegrees * .pi / 180))
+    }
+
+    /// The hub says "turn right 40°" from where the phone *was* facing. As the
+    /// operator turns, the arrow must shrink — that is the whole point of storing
+    /// the target as a heading, and what makes the directive feel live between
+    /// the hub's updates.
+    @Test func aTurnGuideShrinksAsTheOperatorTurnsTowardIt() throws {
         var model = OverlayModel()
-        model.apply(Command(id: "a", serverTimestamp: 0,
-                            kind: .arrow(target: [4, 1.5, 0], bearingRadians: nil, label: nil)),
-                    now: 0)
-        model.update(pose: camera(at: .zero, yaw: 0), diagnostics: diagnostics(),
-                     transport: .init(), transportState: .connected, now: 1)
+        model.apply(.guideTurn(sector: "B2", delta: 40, onTarget: false, text: "Turn right 40°",
+                               kind: "search", distance: nil), heading: 10, now: 0)
+        tick(&model, pose: facing(10), now: 0.1)
+        let first = try #require(model.state.arrow)
+        #expect(isClose(first.bearingRadians, 40 * .pi / 180, within: 1e-3))
+        #expect(first.bearingRadians > 0, "turn right must be a positive, clockwise arrow")
+        #expect(model.state.banner?.text == "Turn right 40°")
+
+        tick(&model, pose: facing(30), now: 0.2)
+        #expect(isClose(try #require(model.state.arrow).bearingRadians, 20 * .pi / 180, within: 1e-3))
+        tick(&model, pose: facing(50), now: 0.3)
+        #expect(try #require(model.state.arrow).isOnTarget)
+        tick(&model, pose: facing(70), now: 0.4)
+        #expect(try #require(model.state.arrow).bearingRadians < 0, "overshot: now turn back left")
+    }
+
+    @Test func aTurnGuideWrapsThroughNorth() throws {
+        var model = OverlayModel()
+        model.apply(.guideTurn(sector: nil, delta: -30, onTarget: false, text: nil, kind: "search",
+                               distance: nil), heading: 10, now: 0)
+        tick(&model, pose: facing(10), now: 0)
+        #expect(isClose(try #require(model.state.arrow).bearingRadians, -30 * .pi / 180, within: 1e-3))
+    }
+
+    @Test func aTurnGuideExpiresThreeSecondsAfterTheHubStopsRefreshingIt() {
+        var model = OverlayModel()
+        let guide = HubCommand.guideTurn(sector: "A1", delta: 20, onTarget: false, text: nil,
+                                         kind: "search", distance: nil)
+        model.apply(guide, heading: 0, now: 0)
+        tick(&model, pose: facing(0), now: 2.9)
         #expect(model.state.arrow != nil)
-
-        model.update(pose: camera(at: .zero, yaw: 0), diagnostics: diagnostics(stale: true),
-                     transport: .init(), transportState: .connected, now: 2)
-        #expect(model.state.arrow == nil, "an arrow was drawn from a pose we do not trust")
-    }
-
-    @Test func aBareBearingIsShownWithoutBeingTracked() {
-        var model = OverlayModel()
-        model.apply(Command(id: "a", serverTimestamp: 0,
-                            kind: .arrow(target: nil, bearingRadians: -1.2, label: "left")),
-                    now: 0)
-        #expect(model.state.arrow?.bearingRadians == -1.2)
-        #expect(model.trackedTarget == nil)
-        #expect(model.state.arrow?.distance == nil)
-    }
-
-    @Test func onTargetIsReportedOnceTheOperatorIsFacingIt() {
-        var model = OverlayModel()
-        model.apply(Command(id: "a", serverTimestamp: 0,
-                            kind: .arrow(target: [0, 1.5, -4], bearingRadians: nil, label: nil)),
-                    now: 0)
-        model.update(pose: camera(at: SIMD3<Float>(0, 1.5, 0), yaw: 0), diagnostics: diagnostics(),
-                     transport: .init(), transportState: .connected, now: 1)
-        #expect(model.state.arrow?.isOnTarget == true)
-
-        model.update(pose: camera(at: SIMD3<Float>(0, 1.5, 0), yaw: 1.2), diagnostics: diagnostics(),
-                     transport: .init(), transportState: .connected, now: 2)
-        #expect(model.state.arrow?.isOnTarget == false)
-    }
-
-    // MARK: - Commands
-
-    /// A "look left" that arrives two seconds after the moment has passed reads
-    /// as broken. Discarding it is better than painting it late.
-    @Test func anExpiredCommandIsDiscardedRatherThanPaintedLate() {
-        var model = OverlayModel()
-        let inTime = Command(id: "a", serverTimestamp: 100,
-                             kind: .flash(r: 1, g: 0, b: 0, durationMs: 400), expiresInMs: 800)
-        let applied = model.apply(inTime, now: 100.5)
-        #expect(applied)
-        #expect(model.state.flash != nil)
-
-        // Two seconds late against an 800 ms expiry.
-        var stale = OverlayModel()
-        let tooLate = stale.apply(Command(id: "b", serverTimestamp: 100,
-                                          kind: .flash(r: 1, g: 0, b: 0, durationMs: 400),
-                                          expiresInMs: 800),
-                                  now: 102)
-        #expect(!tooLate)
-        #expect(stale.state.flash == nil)
-    }
-
-    @Test func aCommandIsAppliedOnlyOnce() {
-        var model = OverlayModel()
-        let command = Command(id: "buzz", serverTimestamp: 0, kind: .haptic(pattern: "sharp", intensity: 1))
-        let first = model.apply(command, now: 0)
-        #expect(first)
-        #expect(model.consumeHaptic()?.pattern == "sharp")
-        let second = model.apply(command, now: 0.1)
-        #expect(!second, "a redelivered command fired twice")
-        #expect(model.consumeHaptic() == nil)
-    }
-
-    @Test func theFlashClearsItselfWhenItsDurationElapses() {
-        var model = OverlayModel()
-        model.apply(Command(id: "a", serverTimestamp: 0,
-                            kind: .flash(r: 1, g: 0.2, b: 0, durationMs: 400)), now: 10)
-        #expect(model.state.flash != nil)
-        model.update(pose: nil, diagnostics: diagnostics(), transport: .init(),
-                     transportState: .connected, now: 10.2)
-        #expect(model.state.flash != nil)
-        model.update(pose: nil, diagnostics: diagnostics(), transport: .init(),
-                     transportState: .connected, now: 10.5)
-        #expect(model.state.flash == nil)
-    }
-
-    @Test func clearRemovesEverythingIncludingTheTrackedTarget() {
-        var model = OverlayModel()
-        model.apply(Command(id: "a", serverTimestamp: 0,
-                            kind: .arrow(target: [1, 1, 1], bearingRadians: nil, label: nil)), now: 0)
-        model.apply(Command(id: "b", serverTimestamp: 0,
-                            kind: .flash(r: 1, g: 1, b: 1, durationMs: 5_000)), now: 0)
-        model.apply(Command(id: "c", serverTimestamp: 0, kind: .clear), now: 0)
-        #expect(model.state.flash == nil)
+        model.apply(guide, heading: 0, now: 2.9)
+        tick(&model, pose: facing(0), now: 5.8)
+        #expect(model.state.arrow != nil, "a refresh must extend the guide")
+        tick(&model, pose: facing(0), now: 6.0)
         #expect(model.state.arrow == nil)
-        #expect(model.trackedTarget == nil)
+        #expect(model.state.banner == nil)
     }
 
-    /// A haptic is an event, not a state: the thing the web client could never
-    /// do, and it must fire exactly once.
-    @Test func hapticsAndSoundsAreConsumedOnce() {
+    @Test func aTurnGuideWithNoHeadingIsIgnoredLikePhoneJS() {
         var model = OverlayModel()
-        model.apply(Command(id: "h", serverTimestamp: 0, kind: .haptic(pattern: "sharp", intensity: 0.9)),
-                    now: 0)
-        model.apply(Command(id: "s", serverTimestamp: 0, kind: .sound(name: "ping")), now: 0)
-        #expect(model.consumeHaptic()?.intensity == 0.9)
-        #expect(model.consumeHaptic() == nil)
-        #expect(model.consumeSound()?.name == "ping")
-        #expect(model.consumeSound() == nil)
-    }
-
-    @Test func setRatesIsNotTheOverlaysBusiness() {
-        var model = OverlayModel()
-        model.apply(Command(id: "r", serverTimestamp: 0,
-                            kind: .setRates(poseHz: 5, frameFPS: 1, depthHz: 0.2)), now: 0)
-        #expect(model.state.flash == nil)
+        let applied = model.apply(.guideTurn(sector: nil, delta: 20, onTarget: false, text: nil,
+                                             kind: "search", distance: nil), heading: nil, now: 0)
+        #expect(!applied)
+        tick(&model, pose: facing(0), now: 0)
         #expect(model.state.arrow == nil)
-        #expect(model.state.pendingHaptic == nil)
     }
 
-    /// The de-duplication set runs for the length of the demo, so it is bounded.
-    @Test func theSeenCommandSetDoesNotGrowWithoutBound() {
+    @Test func aLookHeadingIsAbsoluteAndHonoursUntilMs() throws {
         var model = OverlayModel()
-        for index in 0..<5_000 {
-            model.apply(Command(id: "c\(index)", serverTimestamp: 0, kind: .clear), now: 0)
+        model.apply(.guideHeading(kind: "go", sector: "door", heading: 135, distance: 6.1,
+                                  untilMs: 10_000), heading: nil, now: 0)
+        tick(&model, pose: facing(90), now: 1)
+        let arrow = try #require(model.state.arrow)
+        #expect(isClose(arrow.bearingRadians, 45 * .pi / 180, within: 1e-3))
+        #expect(arrow.distance == 6.1)
+        #expect(model.state.banner?.text == "Walk to door · 6.1 m")
+        tick(&model, pose: facing(90), now: 10.1)
+        #expect(model.state.arrow == nil)
+    }
+
+    /// `.gravity` alignment has no true north. Showing an arrow for a compass
+    /// bearing would be a guess dressed as an instruction.
+    @Test func aCompassGuideShowsTextOnly() {
+        var model = OverlayModel()
+        model.apply(.guideCompass(kind: "look", sector: "north", compass: 10, untilMs: 20_000),
+                    heading: 0, now: 0)
+        tick(&model, pose: facing(0), now: 1)
+        #expect(model.state.arrow == nil)
+        #expect(model.state.banner?.text == "Look north · 10° N")
+    }
+
+    @Test func theArrowDisappearsWhenThePoseGoesStaleButTheBannerStays() {
+        var model = OverlayModel()
+        model.apply(.guideHeading(kind: "look", sector: "stage", heading: 0, distance: nil,
+                                  untilMs: 20_000), heading: nil, now: 0)
+        tick(&model, pose: facing(90), now: 1)
+        #expect(model.state.arrow != nil)
+        tick(&model, pose: facing(90), now: 2, stale: true)
+        #expect(model.state.arrow == nil, "an arrow from a pose we do not trust points at nothing")
+        #expect(model.state.banner != nil)
+        tick(&model, pose: facing(90), now: 3, alignment: nil)
+        #expect(model.state.arrow == nil, "unaligned: no room heading, no arrow")
+    }
+
+    @Test func guideClearRemovesArrowAndBanner() {
+        var model = OverlayModel()
+        model.apply(.guideHeading(kind: "look", sector: nil, heading: 0, distance: nil, untilMs: 20_000),
+                    heading: nil, now: 0)
+        tick(&model, pose: facing(90), now: 1)
+        model.apply(.guideClear, heading: 90, now: 1)
+        #expect(model.state.arrow == nil && model.state.banner == nil)
+        tick(&model, pose: facing(90), now: 1.1)
+        #expect(model.state.arrow == nil)
+    }
+
+    @Test func comingOnTargetFiresOneHapticNotOnePerRefresh() {
+        var model = OverlayModel()
+        func guide(_ onTarget: Bool) -> HubCommand {
+            .guideTurn(sector: "A1", delta: 5, onTarget: onTarget, text: nil, kind: "search", distance: nil)
         }
-        // The oldest ids have been evicted, so re-applying one succeeds again;
-        // what matters is that memory is flat, not that de-duplication is
-        // eternal. A command from 5 000 ago is not going to be redelivered.
-        let evictedIsAcceptedAgain = model.apply(Command(id: "c0", serverTimestamp: 0, kind: .clear), now: 0)
-        #expect(evictedIsAcceptedAgain)
+        model.apply(guide(false), heading: 0, now: 0)
+        do { let cue = model.consumeHaptic(); #expect(cue == nil) }
+        model.apply(guide(true), heading: 0, now: 0.2)
+        do { let cue = model.consumeHaptic(); #expect(cue?.pattern == "onTarget") }
+        model.apply(guide(true), heading: 0, now: 0.4)
+        do { let cue = model.consumeHaptic(); #expect(cue == nil) }
+        model.apply(guide(false), heading: 0, now: 0.6)
+        model.apply(guide(true), heading: 0, now: 0.8)
+        do { let cue = model.consumeHaptic(); #expect(cue?.pattern == "onTarget") }
+    }
+
+    // MARK: - The other commands
+
+    @Test func flashUsesItsColourThenTheWelcomeColourThenWhite() throws {
+        var model = OverlayModel()
+        model.apply(.flash(color: nil, text: nil, ttlMs: 1500), heading: nil, now: 0)
+        #expect(model.state.flash?.red == 1 && model.state.flash?.blue == 1)
+
+        let welcome = try #require(HubInbound.decode(Data(
+            ##"{"type":"welcome","phoneId":"a","index":3,"color":"#ff0000","phase":"lobby"}"##.utf8)))
+        guard case .welcome(let w) = welcome else { return }
+        model.apply(w)
+        #expect(model.state.index == 3)
+        #expect(model.state.phase == "lobby")
+        model.apply(.flash(color: nil, text: "", ttlMs: 1500), heading: nil, now: 0)
+        #expect(model.state.flash?.red == 1 && model.state.flash?.green == 0)
+        #expect(model.state.flash?.text == nil)
+
+        model.apply(.flash(color: "#7ae582", text: "You're there ✓", ttlMs: 1500), heading: nil, now: 10)
+        let flash = try #require(model.state.flash)
+        #expect(isClose(flash.green, Float(0xe5) / 255, within: 1e-6))
+        #expect(flash.text == "You're there ✓")
+        tick(&model, pose: nil, now: 11.4)
+        #expect(model.state.flash != nil)
+        tick(&model, pose: nil, now: 11.6)
+        #expect(model.state.flash == nil)
+    }
+
+    @Test func aMessageToastsBeepsAndExpires() {
+        var model = OverlayModel()
+        model.apply(.message(text: "Spread out", ttlMs: 8000), heading: nil, now: 0)
+        #expect(model.state.toast?.text == "Spread out")
+        do { let cue = model.consumeSound(); #expect(cue?.name == "message") }
+        do { let cue = model.consumeSound(); #expect(cue == nil, "a sound fires once") }
+        do { let cue = model.consumeHaptic(); #expect(cue?.pattern == "message") }
+        tick(&model, pose: nil, now: 8.1)
+        #expect(model.state.toast == nil)
+    }
+
+    @Test func detectionsReplaceEachOtherAndExpire() {
+        var model = OverlayModel()
+        model.apply(.detections(boxes: [HubDetectionBox(x: 0, y: 0, w: 1, h: 1)], ttlMs: 1500),
+                    heading: nil, now: 0)
+        model.apply(.detections(boxes: [], ttlMs: 1500), heading: nil, now: 1)
+        #expect(model.state.detections?.boxes.isEmpty == true)
+        tick(&model, pose: nil, now: 2.6)
+        #expect(model.state.detections == nil)
+    }
+
+    @Test func aPingBeepsOnceIsProjectedAndExpires() throws {
+        var model = OverlayModel()
+        let ping = HubCommand.ping(id: 5, x: 3, y: 5, label: "Check here", ttlMs: 12_000)
+        model.apply(ping, heading: nil, now: 0)
+        do { let cue = model.consumeSound(); #expect(cue?.name == "ping") }
+        model.apply(ping, heading: nil, now: 1)
+        do { let cue = model.consumeSound(); #expect(cue == nil, "the same ping re-sent must not beep again") }
+        #expect(model.state.pings.count == 1)
+
+        // Standing at room (0, 5) facing the stage: the ping at (3, 5) is dead right.
+        tick(&model, pose: facing(0), now: 2, intrinsics: Sample.intrinsics())
+        var cue = try #require(model.state.pings.first)
+        #expect(isClose(try #require(cue.bearingRadians), .pi / 2, within: 1e-3))
+        #expect(isClose(try #require(cue.distance), 3, within: 1e-3))
+        #expect(cue.imagePoint == nil, "it is beside the camera, not in front of it")
+
+        // Turn to face it and it lands in the image, below centre (it is on the floor).
+        tick(&model, pose: facing(90), now: 3, intrinsics: Sample.intrinsics())
+        cue = try #require(model.state.pings.first)
+        let point = try #require(cue.imagePoint)
+        #expect(isClose(Float(point.x), Sample.intrinsics().cx, within: 1))
+        #expect(Float(point.y) > Sample.intrinsics().cy)
+
+        tick(&model, pose: facing(90), now: 13.1)
+        #expect(model.state.pings.isEmpty)
+    }
+
+    @Test func worldPingsFillInOnesWhoseCommandWasLostWithoutBeeping() throws {
+        var model = OverlayModel()
+        guard case .world(let world)? = HubInbound.decode(
+            try Data(contentsOf: Fixtures.url("hub-messages/world.json"))) else {
+            Issue.record("world fixture did not decode")
+            return
+        }
+        model.apply(world, now: 100)
+        #expect(model.state.pings.map(\.id) == [1])
+        do { let cue = model.consumeSound(); #expect(cue == nil) }
+        #expect(isClose(try #require(model.state.pings.first).until, 111.7, within: 1e-6))
+        model.apply(world, now: 100.5)
+        #expect(model.state.pings.count == 1)
+        #expect(model.state.world?.stats?.rank == 1)
+    }
+
+    @Test func rateHudAndUnknownAreNotTheOverlaysBusiness() {
+        var model = OverlayModel()
+        let before = model.state
+        do { let applied = model.apply(.rate(fps: 8), heading: nil, now: 0); #expect(!applied) }
+        do { let applied = model.apply(.hud(on: true), heading: nil, now: 0); #expect(!applied) }
+        do { let applied = model.apply(.unknown(cmd: "teleport"), heading: nil, now: 0); #expect(!applied) }
+        #expect(model.state == before)
+    }
+
+    @Test func theRoomPoseIsPublishedForTheMiniMap() throws {
+        var model = OverlayModel()
+        tick(&model, pose: facing(90, at: [2, 1.5, 7]), now: 0)
+        let room = try #require(model.state.roomPose)
+        #expect(isClose(room.x, 2, within: 1e-4) && isClose(room.y, 7, within: 1e-4))
+        #expect(isClose(try #require(room.heading), 90, within: 1e-3))
+        #expect(model.state.alignment == .marker)
+        tick(&model, pose: facing(90), now: 1, alignment: nil)
+        #expect(model.state.roomPose == nil)
+    }
+
+    @Test func hexColours() {
+        #expect(HexColor.parse("#ffffff")?.0 == 1)
+        #expect(HexColor.parse("000") ?? (1, 1, 1) == (0, 0, 0))
+        #expect(HexColor.parse("#xyzxyz") == nil)
+        #expect(HexColor.parse(nil) == nil)
     }
 
     // MARK: - The status pill
@@ -260,7 +352,8 @@ struct OverlayTests {
         var value = diagnostics()
         value.thermalState = .serious
 
-        model.update(pose: camera(at: .zero, yaw: 0), diagnostics: value, transport: stats,
+        model.update(pose: camera(at: .zero, yaw: 0), alignment: .identity, source: .marker,
+                     intrinsics: nil, diagnostics: value, transport: stats,
                      transportState: .connected, now: 5)
         let pill = model.state.pill
         #expect(pill.sessionState == .tracking)
@@ -299,34 +392,31 @@ struct OverlayTests {
 
     // MARK: - Driven from the replay
 
-    /// An operator walks the room with a fixed target pinned in the venue frame.
+    /// An operator walks the room while the hub holds a "look at heading" order.
     /// The arrow must swing through a real range as they sweep, and point behind
-    /// them when they walk past it.
-    @Test func theArrowTracksAFixedVenueTargetAcrossTheReplayedWalk() async throws {
+    /// them when they face away.
+    @Test func theArrowTracksAFixedRoomHeadingAcrossTheReplayedWalk() async throws {
         let trajectory = try Fixtures.trajectory("trajectory-walk-2min.json")
         let truth = try #require(trajectory.groundTruth)
-        let target = SIMD3<Float>(0, 1.4, 5.5)
 
         var model = OverlayModel()
-        model.apply(Command(id: "search", serverTimestamp: 0,
-                            kind: .arrow(target: [target.x, target.y, target.z],
-                                         bearingRadians: nil, label: "backpack")),
-                    now: 0)
+        model.apply(.guideHeading(kind: "look", sector: "stage", heading: 0, distance: nil,
+                                  untilMs: 10_000_000), heading: nil, now: 0)
 
         var bearings: [Float] = []
-        var distances: [Float] = []
         var onTargetCount = 0
         // Every tenth ground-truth sample: six per second, which is what the
         // overlay actually redraws at.
         for sample in stride(from: 0, to: truth.count, by: 10).compactMap({ truth[$0].pose }) {
-            model.update(pose: sample, diagnostics: diagnostics(), transport: .init(),
-                         transportState: .connected, now: 0)
-            guard let arrow = model.state.arrow else {
-                Issue.record("the arrow vanished during a clean replay")
-                return
-            }
+            tick(&model, pose: sample, now: 0)
+            guard let arrow = model.state.arrow else { continue } // looking straight down
+            // The arrow must agree with the independent 3D bearing to a point far
+            // away in the heading-0 direction: two derivations, one answer.
+            let far = sample.position + SIMD3<Float>(0, 0, -1_000)
+            let expected = try #require(Geometry.relativeBearing(from: sample, to: far))
+            #expect(abs(RoomMath.signedDiff(Double(arrow.bearingRadians) * 180 / .pi,
+                                            Double(expected) * 180 / .pi)) < 0.1)
             bearings.append(arrow.bearingRadians)
-            distances.append(arrow.distance ?? 0)
             if arrow.isOnTarget { onTargetCount += 1 }
         }
 
@@ -334,14 +424,21 @@ struct OverlayTests {
         #expect(bearings.allSatisfy { $0 >= -Float.pi - 1e-4 && $0 <= Float.pi + 1e-4 },
                 "a bearing escaped the range a compass can express")
         let span = (bearings.max() ?? 0) - (bearings.min() ?? 0)
-        #expect(span > 3.0, "the arrow only swung \(span) rad over a two-minute walk with a sweep")
-        #expect(onTargetCount > 20, "the operator never once faced the target: \(onTargetCount) samples")
-        #expect((distances.max() ?? 0) > (distances.min() ?? 0) + 1,
-                "the distance to the target never changed while walking a room")
+        // The recorded walk sweeps about 165° of heading; it never turns its back
+        // fully on the stage.
+        #expect(span > 2.5, "the arrow only swung \(span) rad over a two-minute walk with a sweep")
+        #expect(onTargetCount > 20, "the operator never once faced the stage: \(onTargetCount) samples")
 
-        // A target ahead, seen from a camera that has walked past it, must point
-        // backwards rather than silently clamp.
-        #expect(bearings.contains { abs($0) > 2.0 },
-                "the arrow never pointed behind the operator")
+        // Ordered to look at the back of the room instead, the same walk must at
+        // some point have the arrow pointing behind the operator rather than
+        // silently clamping.
+        model.apply(.guideHeading(kind: "look", sector: "rear", heading: 180, distance: nil,
+                                  untilMs: 10_000_000), heading: nil, now: 0)
+        var behind = 0
+        for sample in stride(from: 0, to: truth.count, by: 10).compactMap({ truth[$0].pose }) {
+            tick(&model, pose: sample, now: 0)
+            if let arrow = model.state.arrow, abs(arrow.bearingRadians) > 2.0 { behind += 1 }
+        }
+        #expect(behind > 0, "the arrow never pointed behind the operator")
     }
 }

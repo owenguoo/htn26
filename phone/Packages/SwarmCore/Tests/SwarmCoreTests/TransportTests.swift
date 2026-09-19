@@ -15,14 +15,19 @@ struct TransportTests {
     -> (Transport, ScriptedChannelFactory) {
         let factory = ScriptedChannelFactory(channels: channels)
         let configuration = Transport.Configuration(
-            url: URL(string: "ws://127.0.0.1:8765/device")!,
+            url: URL(string: "ws://127.0.0.1:8000/ws/phone")!,
             maxInFlight: maxInFlight, bufferDepth: bufferDepth,
             initialBackoff: 0.01, maxBackoff: 0.04, jitterFraction: 0)
         return (Transport(configuration: configuration, factory: factory, sleeper: sleeper), factory)
     }
 
-    private func poses(_ range: ClosedRange<Int>) -> [WireMessage] {
-        range.map { .pose(Sample.poseUpdate(seq: UInt64($0), t: 1_000 + Double($0))) }
+    /// `slam` messages whose `x` is their ordinal, so order survives the wire.
+    private func poses(_ range: ClosedRange<Int>) -> [HubOutbound] {
+        range.map(Sample.slam)
+    }
+
+    private func slamOrdinals(_ messages: [DeliveredMessage]) -> [Int] {
+        messages.filter { $0.type == "slam" }.compactMap { $0.number("x").map(Int.init) }
     }
 
     /// The socket accepts one message at a time while the producer emits ten.
@@ -58,11 +63,7 @@ struct TransportTests {
             return buffered == 0 && inFlight == 0
         }
 
-        let delivered = await channel.deliveredEnvelopes()
-        let deliveredSeqs: [UInt64] = delivered.compactMap {
-            if case .pose(let update) = $0.message { return update.seq }
-            return nil
-        }
+        let deliveredSeqs = slamOrdinals(await channel.deliveredMessages())
         #expect(!deliveredSeqs.isEmpty)
         #expect(deliveredSeqs.last == 10, "the newest pose must survive; got \(deliveredSeqs)")
         #expect(deliveredSeqs.count < 10, "some poses must have been dropped")
@@ -70,7 +71,7 @@ struct TransportTests {
         let finalStats = await transport.currentStats()
         #expect(finalStats.sent + finalStats.dropped == 10,
                 "every offered message is either sent or counted as dropped")
-        #expect(finalStats.droppedByType[.pose] == finalStats.dropped)
+        #expect(finalStats.droppedByLane[.slam] == finalStats.dropped)
         #expect(finalStats.inFlight == 0)
         await transport.stop()
     }
@@ -93,8 +94,8 @@ struct TransportTests {
         await transport.stop()
     }
 
-    /// Control traffic is not perishable. Losing a hello makes the device
-    /// silently stop existing to the server.
+    /// Control traffic is not perishable. A lost pong leaves the hub with no
+    /// clock offset for this phone, and so no latency figure.
     @Test func controlTrafficIsNeverDropped() async throws {
         let channel = GatedChannel()
         let (transport, _) = makeTransport(channels: [channel])
@@ -102,8 +103,8 @@ struct TransportTests {
         await waitUntil("connected") { await transport.currentState() == .connected }
 
         for index in 1...20 {
-            await transport.send(.ping(Ping(id: UInt64(index), t0: Double(index))))
-            await transport.send(.pose(Sample.poseUpdate(seq: UInt64(index))))
+            await transport.send(.pong(ts: Double(index), tp: 0))
+            await transport.send(Sample.slam(index))
             await Task.yield()
         }
         for _ in 0..<80 {
@@ -116,48 +117,67 @@ struct TransportTests {
             return buffered == 0 && inFlight == 0
         }
 
-        let delivered = await channel.deliveredEnvelopes()
-        let pingIDs: [UInt64] = delivered.compactMap {
-            if case .ping(let ping) = $0.message { return ping.id }
-            return nil
-        }
-        #expect(pingIDs == Array(1...20).map(UInt64.init), "every ping must arrive, in order")
+        let pongs = await channel.deliveredMessages().filter { $0.type == "pong" }
+            .compactMap { $0.number("ts").map(Int.init) }
+        #expect(pongs == Array(1...20), "every pong must arrive, in order")
         let stats = await transport.currentStats()
-        #expect(stats.droppedByType[.ping] == nil)
+        #expect(stats.droppedByLane[.control] == nil)
         await transport.stop()
     }
 
-    @Test func helloIsSentFirstOnEveryConnect() async throws {
+    /// The hub registers a phone from the first message on the socket, reading
+    /// it with `receive_json()`. So on every connect the hello must be first,
+    /// text, and alone — nothing else may be in flight beside it, because
+    /// concurrent sends do not promise order.
+    @Test func helloIsSentFirstAloneAndAsTextOnEveryConnect() async throws {
         let first = GatedChannel(failAfterSends: 2)
         let second = GatedChannel()
-        let (transport, factory) = makeTransport(channels: [first, second])
-        await transport.setHello(Sample.hello())
+        let (transport, factory) = makeTransport(channels: [first, second], maxInFlight: 3)
+        let names = NameBox()
+        await transport.setHello { HubHello(phoneId: "phone-a", name: await names.next()) }
+        // Offered before the socket exists, and racing the hello for it.
+        await transport.send(.pong(ts: 1, tp: 1))
+        await transport.send(Sample.slam(1))
         await transport.start()
         await waitUntil("connected") { await transport.currentState() == .connected }
 
-        await transport.send(.pose(Sample.poseUpdate(seq: 1)))
-        await first.grant(6)
-        try? await Task.sleep(nanoseconds: 5_000_000)
-        await transport.send(.pose(Sample.poseUpdate(seq: 2)))
-        await transport.send(.pose(Sample.poseUpdate(seq: 3)))
-        await first.grant(6)
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        let peakBesideHello = await first.concurrentSendPeak
+        #expect(peakBesideHello == 1, "something was sent alongside the hello: \(peakBesideHello) concurrent sends")
 
-        await waitUntil("reconnected") { await factory.attempts() >= 2 }
+        await first.grant(6)
+        await waitUntil("first socket died") { await factory.attempts() >= 2 }
         await waitUntil("second channel connected") { await transport.currentState() == .connected }
+        await transport.send(.pong(ts: 2, tp: 2))
         await second.grant(6)
-        await waitUntil("hello resent") {
-            await second.deliveredEnvelopes().contains {
-                if case .hello = $0.message { return true }
-                return false
-            }
-        }
+        await waitUntil("second socket drained") { await second.deliveredCount() >= 2 }
 
-        let firstDelivered = await first.deliveredEnvelopes()
-        #expect(firstDelivered.first.map { if case .hello = $0.message { true } else { false } } == true,
-                "hello must be the first message on a fresh socket")
-        let secondDelivered = await second.deliveredEnvelopes()
-        #expect(secondDelivered.first.map { if case .hello = $0.message { true } else { false } } == true,
-                "hello must be re-sent on reconnect")
+        for (label, channel) in [("fresh", first), ("reconnected", second)] {
+            let delivered = await channel.delivered
+            guard case .text? = delivered.first else {
+                Issue.record("hello on the \(label) socket was not a text frame")
+                continue
+            }
+            #expect(DeliveredMessage(delivered[0]).type == "hello",
+                    "hello must be the first message on a \(label) socket")
+        }
+        // Re-evaluated, not replayed: a rename between connects reaches the hub.
+        let helloNames = await [first, second].asyncMap { channel in
+            await channel.deliveredMessages().first?.json["name"] as? String
+        }
+        #expect(helloNames == ["name-1", "name-2"])
+        let hellos = await second.deliveredMessages().filter { $0.type == "hello" }.count
+        #expect(hellos == 1)
+        await transport.stop()
+    }
+
+    @Test func aHelloOfferedThroughSendIsIgnored() async throws {
+        let channel = GatedChannel()
+        let (transport, _) = makeTransport(channels: [channel])
+        await transport.start()
+        await waitUntil("connected") { await transport.currentState() == .connected }
+        await transport.send(.hello(Sample.hello()))
+        #expect(await transport.bufferedMessageCount() == 0)
         await transport.stop()
     }
 
@@ -177,10 +197,7 @@ struct TransportTests {
         await second.grant(10)
         try? await Task.sleep(nanoseconds: 30_000_000)
 
-        let replayed = await second.deliveredEnvelopes().filter {
-            if case .pose = $0.message { return true }
-            return false
-        }
+        let replayed = await second.deliveredMessages().filter { $0.type == "slam" }
         #expect(replayed.isEmpty, "stale poses were replayed onto the new socket: \(replayed.count)")
         let stats = await transport.currentStats()
         #expect(stats.reconnects == 1)
@@ -188,33 +205,21 @@ struct TransportTests {
         await transport.stop()
     }
 
-    @Test func noDuplicateSequenceNumbersAcrossAReconnect() async throws {
-        let first = GatedChannel(failAfterSends: 3)
-        let second = GatedChannel()
-        let (transport, factory) = makeTransport(channels: [first, second], maxInFlight: 1, bufferDepth: 4)
-        await transport.setHello(Sample.hello())
+    @Test func framesGoOutBinaryAndEverythingElseText() async throws {
+        let channel = GatedChannel()
+        let (transport, _) = makeTransport(channels: [channel], maxInFlight: 1, bufferDepth: 1)
         await transport.start()
         await waitUntil("connected") { await transport.currentState() == .connected }
-
-        for message in poses(1...4) {
-            await transport.send(message)
-            await first.grant(1)
-            try? await Task.sleep(nanoseconds: 2_000_000)
+        await transport.send(Sample.slam(1))
+        await transport.send(Sample.frame(1, bytes: 9))
+        await transport.send(.pong(ts: 1, tp: 2))
+        await channel.grant(3)
+        await waitUntil("delivered") { await channel.deliveredCount() == 3 }
+        for message in await channel.deliveredMessages() {
+            #expect(message.isBinary == (message.type == "frame"), "\(message.type)")
         }
-        await first.grant(8)
-        await waitUntil("reconnected") { await factory.attempts() >= 2 }
-        await second.grant(8)
-        for message in poses(5...8) {
-            await transport.send(message)
-            await second.grant(1)
-            try? await Task.sleep(nanoseconds: 2_000_000)
-        }
-        try? await Task.sleep(nanoseconds: 30_000_000)
-
-        let all = await first.deliveredEnvelopes() + second.deliveredEnvelopes()
-        let sequences = all.map(\.seq)
-        #expect(Set(sequences).count == sequences.count,
-                "sequence numbers repeated across the reconnect: \(sequences)")
+        let frame = try #require(await channel.deliveredMessages().first { $0.type == "frame" })
+        #expect(frame.payload == Data(repeating: 0xAB, count: 9))
         await transport.stop()
     }
 
@@ -263,10 +268,10 @@ struct TransportTests {
         // accepts one message for every eleven offered.
         for round in 1...30 {
             for index in 1...10 {
-                await transport.send(.pose(Sample.poseUpdate(seq: UInt64(round * 10 + index))))
+                await transport.send(Sample.slam(round * 10 + index))
                 await Task.yield()
             }
-            await transport.send(.frame(Sample.frameChunk(id: UInt64(round))))
+            await transport.send(Sample.frame(round))
             await Task.yield()
             await channel.grant(1)
             try? await Task.sleep(nanoseconds: 1_000_000)
@@ -278,34 +283,42 @@ struct TransportTests {
             return buffered == 0 && inFlight == 0
         }
 
-        let delivered = await channel.deliveredEnvelopes()
-        let poses = delivered.filter { if case .pose = $0.message { true } else { false } }.count
-        let frames = delivered.filter { if case .frame = $0.message { true } else { false } }.count
+        let delivered = await channel.deliveredMessages()
+        let poses = delivered.filter { $0.type == "slam" }.count
+        let frames = delivered.filter { $0.type == "frame" }.count
         #expect(poses > 0)
         #expect(frames > 0, "the pose stream starved frames out entirely over 30 rounds")
         #expect(frames >= 5, "only \(frames) of 30 frames got a turn against \(poses) poses")
     }
 
-    @Test func inboundCommandsAreDecodedAndDelivered() async throws {
+    @Test func inboundHubMessagesAreDecodedAndDelivered() async throws {
         let channel = GatedChannel()
         let (transport, _) = makeTransport(channels: [channel])
         let inbound = await transport.inbound()
         await transport.start()
         await waitUntil("connected") { await transport.currentState() == .connected }
 
-        let collector = Task { () -> [Command] in
-            var received: [Command] = []
+        let names = ["welcome", "ping", "cmd-flash", "cmd-guide-turn", "world"]
+        let collector = Task { () -> [HubInbound] in
+            var received: [HubInbound] = []
             for await message in inbound {
-                if case .command(let command) = message { received.append(command) }
-                if received.count == Sample.commands.count { break }
+                received.append(message)
+                if received.count == names.count { break }
             }
             return received
         }
-        for (index, command) in Sample.commands.enumerated() {
-            let data = try WireCoder.encode(WireEnvelope(seq: UInt64(index), message: .command(command)))
-            await channel.deliverInbound(data)
+        for name in names {
+            await channel.deliverInbound(try String(contentsOf: Fixtures.url("hub-messages/\(name).json"),
+                                                    encoding: .utf8))
         }
-        #expect(await collector.value == Sample.commands)
+        let received = await collector.value
+        #expect(received.count == names.count)
+        guard case .welcome = received[0], case .ping = received[1],
+              case .command(.flash) = received[2], case .command(.guideTurn) = received[3],
+              case .world = received[4] else {
+            Issue.record("decoded out of order or as the wrong thing: \(received)")
+            return
+        }
         await transport.stop()
     }
 
@@ -316,18 +329,34 @@ struct TransportTests {
         await transport.start()
         await waitUntil("connected") { await transport.currentState() == .connected }
 
-        await channel.deliverInbound(Data("not json at all".utf8))
-        await channel.deliverInbound(Data(#"{"type":"nonsense"}"#.utf8))
-        let good = try WireCoder.encode(WireEnvelope(seq: 1, message: .command(Sample.commands[0])))
-        await channel.deliverInbound(good)
+        await channel.deliverInbound("not json at all")
+        await channel.deliverInbound(.binary(Data([0, 1, 2])))
+        await channel.deliverInbound(#"{"type":"phase","phase":"found"}"#)
 
-        let first = await Task { () -> WireMessage? in
+        let first = await Task { () -> HubInbound? in
             for await message in inbound { return message }
             return nil
         }.value
-        #expect(first == .command(Sample.commands[0]),
-                "a malformed frame must not kill the socket or be mistaken for a command")
+        #expect(first == .phase("found"),
+                "a malformed frame must not kill the socket or be mistaken for a message")
         await waitUntil("all three frames read") { await transport.currentStats().received == 3 }
         await transport.stop()
+    }
+}
+
+/// Hands out "name-1", "name-2", … so a test can tell one hello from the next.
+actor NameBox {
+    private var count = 0
+    func next() -> String {
+        count += 1
+        return "name-\(count)"
+    }
+}
+
+extension Array {
+    func asyncMap<T>(_ transform: (Element) async -> T) async -> [T] {
+        var out: [T] = []
+        for element in self { out.append(await transform(element)) }
+        return out
     }
 }

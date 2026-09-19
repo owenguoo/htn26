@@ -107,6 +107,9 @@ public struct DepthTicket: Sendable, Equatable {
 public enum SessionEvent: Sendable, Equatable {
     case stateChanged(from: SessionState, to: SessionState)
     case pose(PoseUpdate)
+    /// A pose in ARKit's arbitrary start-up frame, emitted only when
+    /// `emitsBeforeOrigin` is set. Never venue-frame; `inVenueFrame` is false.
+    case rawPose(PoseUpdate)
     case captureFrame(FrameTicket)
     case captureDepthChunk(DepthTicket)
     case correctionApplied(markerID: String, positionError: Float, rotationDegrees: Float)
@@ -148,10 +151,10 @@ public struct SessionDiagnostics: Sendable, Equatable {
 /// the length of the demo.
 public actor SessionMachine {
     public struct Rates: Sendable, Equatable {
-        /// Frames and depth chunks are considered only when a pose is emitted,
-        /// so `poseHz` is an upper bound on both. At the defaults — 10 Hz poses
-        /// against 1.5 fps frames — that is slack of nearly seven to one; set
-        /// `poseHz` below `frameFPS` and the frame rate silently follows it down.
+        /// Frames are scheduled on their own clock, against every incoming
+        /// sample, so `frameFPS` may exceed `poseHz` — the hub asks for 8–15 fps
+        /// when a console expands a phone. Depth chunks are still considered
+        /// only when a pose is emitted, so `poseHz` bounds `depthHz`.
         public var poseHz: Double
         public var frameFPS: Double
         public var depthHz: Double
@@ -188,8 +191,11 @@ public actor SessionMachine {
         ///
         /// Turning this off does not make the timestamps good — it makes the
         /// phone send `serverTimestamp` values that are really device uptime,
-        /// which the server will happily fuse and get wrong. It exists for
-        /// bench testing against a server that does not answer pings.
+        /// which a fusing server would get wrong.
+        ///
+        /// Off by default since the htn26 hub: the hub estimates each phone's
+        /// clock offset itself from `pong.tp`, never reads these timestamps, and
+        /// sends no NTP-style pong for `ClockSync` to ingest.
         public var requireClockSync: Bool
         /// Frames to skip after the world origin moves.
         ///
@@ -200,12 +206,23 @@ public actor SessionMachine {
         /// reasons about. Poses keep flowing; frames wait for the origin to
         /// settle, which at 1.5 fps costs nothing.
         public var framesSuppressedAfterOriginChange: Int
+        /// Emit `rawPose` events and frame tickets before any marker has been
+        /// seen.
+        ///
+        /// The hub marks a phone stale after 3 s without a frame, and the
+        /// seat-tap fallback needs a live pose to anchor to, so a phone that
+        /// says nothing until it finds a marker is both invisible and unable to
+        /// use the fallback. Raw poses are flagged `inVenueFrame == false`; it is
+        /// the consumer's job never to report one as a room position without a
+        /// seat alignment.
+        public var emitsBeforeOrigin: Bool
 
         public init(deviceID: String, rates: Rates = Rates(), stalenessLimit: Double = 5.0,
                     degradedToLostAfter: Double = 4.0, confidenceDecayPerSecond: Double = 0.25,
                     confidenceRecoveryPerSecond: Double = 0.5, confidenceAfterCorrection: Double = 1.0,
                     depthChunkSize: Int = 6, minimumDepthBaseline: Float = 0.12,
-                    requireClockSync: Bool = true, framesSuppressedAfterOriginChange: Int = 2) {
+                    requireClockSync: Bool = false, framesSuppressedAfterOriginChange: Int = 2,
+                    emitsBeforeOrigin: Bool = false) {
             self.deviceID = deviceID
             self.rates = rates
             self.stalenessLimit = stalenessLimit
@@ -217,12 +234,15 @@ public actor SessionMachine {
             self.minimumDepthBaseline = minimumDepthBaseline
             self.requireClockSync = requireClockSync
             self.framesSuppressedAfterOriginChange = max(0, framesSuppressedAfterOriginChange)
+            self.emitsBeforeOrigin = emitsBeforeOrigin
         }
     }
 
     // MARK: - State
 
     private var configuration: Configuration
+    /// What `rate` with a null fps goes back to.
+    private var defaultFrameFPS: Double
     private let provider: any PoseProvider
     private var calibration: CalibrationEngine
     private var clock: ClockSync
@@ -266,6 +286,7 @@ public actor SessionMachine {
     public init(configuration: Configuration, venue: Venue, provider: any PoseProvider,
                 clock: ClockSync = ClockSync()) {
         self.configuration = configuration
+        self.defaultFrameFPS = configuration.rates.frameFPS
         self.provider = provider
         self.calibration = CalibrationEngine(venue: venue)
         self.clock = clock
@@ -322,9 +343,28 @@ public actor SessionMachine {
         diagnostics.thermalState = newValue
     }
 
-    /// Server-driven rate control, from a `setRates` command.
     public func setRates(_ rates: Rates) {
         configuration.rates = rates
+        defaultFrameFPS = rates.frameFPS
+    }
+
+    /// The hub's `rate` command. nil restores the configured default. Clamped to
+    /// 1–15: the hub asks for 8 today and 15 on its streaming branch. Thermal
+    /// shedding still multiplies whatever this sets, downward only.
+    public func setFrameRate(fps: Double?) {
+        let requested = fps ?? defaultFrameFPS
+        configuration.rates.frameFPS = fps == nil ? requested : min(Self.maxHubFPS, max(1, requested))
+        // Take effect now, not after the old, slower interval has run out.
+        nextFrameDue = -.infinity
+    }
+
+    public static let maxHubFPS: Double = 15
+
+    public func currentRates() -> Rates { configuration.rates }
+
+    /// The most recent pose in whatever frame ARKit is in, venue or not.
+    public func latestPose() -> (pose: Pose, inVenueFrame: Bool, intrinsics: CameraIntrinsics?)? {
+        lastPose.map { ($0, calibration.hasOrigin && state.hasVenueFramePose, lastIntrinsics) }
     }
 
     /// Advances the machine's clock without a new pose, so staleness and the
@@ -600,7 +640,11 @@ public actor SessionMachine {
         // Updated before the state guard, so a session waiting for a marker does
         // not leave the pill blaming the clock.
         diagnostics.isBlockedOnClockSync = configuration.requireClockSync && !clock.isSynchronized
-        guard state.hasVenueFramePose, let pose = lastPose else { return }
+        guard let pose = lastPose else { return }
+        guard state.hasVenueFramePose, calibration.hasOrigin else {
+            emitRawIfDue(pose: pose)
+            return
+        }
         // The state enum is not the invariant. `.lost` and `.recalibrating` both
         // claim to have a venue-frame pose, but an interruption during
         // calibration reaches `.lost` without any marker ever having been seen,
@@ -611,7 +655,10 @@ public actor SessionMachine {
         guard !diagnostics.isBlockedOnClockSync else { return }
 
         let poseInterval = 1.0 / max(0.001, configuration.rates.poseHz)
-        guard now >= nextPoseDue else { return }
+        guard now >= nextPoseDue else {
+            emitFrameIfDue { self.makePoseUpdate(pose: pose) }
+            return
+        }
         // The next slot is measured from now, not from the slot that was missed.
         // Measuring from the missed slot would make the phone emit a burst of
         // back-dated poses the moment tracking recovered after a long gap, which
@@ -622,8 +669,32 @@ public actor SessionMachine {
         diagnostics.posesEmitted += 1
         continuation?.yield(.pose(update))
 
-        emitFrameIfDue(pose: update)
+        emitFrameIfDue { update }
         emitDepthIfDue()
+    }
+
+    /// Before a marker: the pose is real, the frame is arbitrary.
+    private func emitRawIfDue(pose: Pose) {
+        guard configuration.emitsBeforeOrigin else { return }
+        guard state == .calibrating || state == .recalibrating || state == .lost else { return }
+        guard !diagnostics.isBlockedOnClockSync else { return }
+        func raw() -> PoseUpdate {
+            var update = makePoseUpdate(pose: pose)
+            update.inVenueFrame = false
+            update.lastCorrectionAge = nil
+            update.lastCorrectionMarker = nil
+            return update
+        }
+        var emitted: PoseUpdate?
+        if now >= nextPoseDue {
+            nextPoseDue = now + 1.0 / max(0.001, configuration.rates.poseHz)
+            let update = raw()
+            emitted = update
+            continuation?.yield(.rawPose(update))
+        }
+        // Frames, so the hub does not grey the tile while the operator is still
+        // looking for a marker. No depth: baselines across frames mean nothing.
+        emitFrameIfDue(recordsReference: false) { emitted ?? raw() }
     }
 
     private func makePoseUpdate(pose: Pose) -> PoseUpdate {
@@ -643,7 +714,9 @@ public actor SessionMachine {
                           seq: poseSeq)
     }
 
-    private func emitFrameIfDue(pose: PoseUpdate) {
+    /// `makePose` is only called if a frame is actually due, so checking at
+    /// 60 Hz does not burn a pose sequence number per sample.
+    private func emitFrameIfDue(recordsReference: Bool = true, _ makePose: () -> PoseUpdate) {
         // A stale pose means we do not know where the camera is, so a frame from
         // it cannot be unprojected. Sending it wastes inference and bandwidth.
         guard !isStale else { return }
@@ -654,8 +727,13 @@ public actor SessionMachine {
         }
         let interval = 1.0 / max(0.001, configuration.rates.frameFPS * thermalState.rateMultiplier)
         guard now >= nextFrameDue else { return }
-        nextFrameDue = (nextFrameDue == -.infinity ? now : max(now, nextFrameDue)) + interval
+        // Keep the phase: adding the interval to the *slot* rather than to now
+        // is what stops 60 Hz sample quantisation from turning 8 fps into 7.
+        // Unless we are a whole interval behind — then catching up would mean a
+        // burst of frames that all show the same instant.
+        nextFrameDue = nextFrameDue < now - interval ? now + interval : nextFrameDue + interval
 
+        let pose = makePose()
         frameID += 1
         var trace = LatencyTrace(frameID: frameID)
         trace.stamp(.capture, at: pose.serverTimestamp)
@@ -666,7 +744,7 @@ public actor SessionMachine {
                                  intrinsics: lastIntrinsics,
                                  trace: trace)
         diagnostics.framesRequested += 1
-        recordFrameReference(ticket)
+        if recordsReference { recordFrameReference(ticket) }
         continuation?.yield(.captureFrame(ticket))
     }
 
@@ -698,6 +776,8 @@ public actor SessionMachine {
     }
 
     private func emitDepthIfDue() {
+        // The hub has no depth channel. Zero means off, not "infinitely slowly".
+        guard configuration.rates.depthHz > 0 else { return }
         let interval = 1.0 / max(0.001, configuration.rates.depthHz * thermalState.rateMultiplier)
         guard now >= nextDepthDue else { return }
         guard recentFrames.count >= configuration.depthChunkSize else { return }

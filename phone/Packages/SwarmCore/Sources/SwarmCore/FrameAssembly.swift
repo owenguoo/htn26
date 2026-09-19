@@ -1,37 +1,35 @@
 import Foundation
 
-/// Assembles the wire message for one frame, so the app target does not have to
-/// know the shape of `FrameChunk`.
+/// Assembles the hub message for one frame, so the app target does not have to
+/// know the shape of the wire.
 public enum FrameAssembly {
-    /// Builds the chunk and stamps `.sent` on its trace.
+    /// Builds the binary frame message and the finished phone-side trace.
     ///
-    /// The trace travels with the frame: the server appends its own stages and
-    /// sends the finished trace back, which is the only way an end-to-end number
-    /// exists at all. A frame sent without one cannot be held to the budget.
-    public static func chunk(deviceID: String,
-                             ticket: FrameTicket,
-                             encoded: EncodedFrame,
-                             quality: Float,
-                             encodedAt: Double,
-                             sentAt: Double) -> FrameChunk {
+    /// The hub does not carry a trace — it measures latency itself from
+    /// `tCapture` — so the trace stays on the phone, feeds `LatencyStatistics`,
+    /// and is summarised into the 1 Hz `debug` blob.
+    ///
+    /// - Parameters:
+    ///   - room: the capture pose projected into the room, if the phone is
+    ///     aligned. The hub reads `heading`/`pitch` off frame headers exactly as
+    ///     it does off `orient`.
+    ///   - tCaptureMs: phone epoch milliseconds at capture.
+    public static func frame(ticket: FrameTicket, encoded: EncodedFrame, room: RoomPose?,
+                             calibrated: Bool, tCaptureMs: Double,
+                             encodedAt: Double, sentAt: Double) -> (message: HubOutbound, trace: LatencyTrace) {
         var trace = ticket.trace
         trace.stamp(.encoded, at: encodedAt)
         trace.stamp(.sent, at: sentAt)
-        return FrameChunk(deviceID: deviceID,
-                          frameID: ticket.frameID,
-                          serverTimestamp: sentAt,
-                          width: encoded.width,
-                          height: encoded.height,
-                          jpegQuality: quality,
-                          intrinsics: encoded.intrinsics,
-                          pose: ticket.pose,
-                          jpeg: encoded.jpeg,
-                          trace: trace)
+        let header = HubFrameHeader(seq: ticket.frameID, tCapture: tCaptureMs,
+                                    heading: room?.heading, pitch: room?.pitch,
+                                    calibrated: calibrated,
+                                    width: encoded.width, height: encoded.height)
+        return (.frame(header, jpeg: encoded.jpeg), trace)
     }
 
     /// Builds the depth chunk for a ticket. Depth that has not been made metric
-    /// carries `metricScale == nil`, so the server can never mistake
-    /// scene-normalized units for metres.
+    /// carries `metricScale == nil`, so nothing downstream can mistake
+    /// scene-normalized units for metres. Dormant: the hub has no depth channel.
     public static func chunk(deviceID: String, ticket: DepthTicket, source: DepthSourceKind,
                              sentAt: Double, depth: DepthResult? = nil) -> DepthChunk {
         DepthChunk(deviceID: deviceID,

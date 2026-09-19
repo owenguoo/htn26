@@ -166,3 +166,32 @@ public struct ClockSync: Sendable, Equatable {
         adopted = nil
     }
 }
+
+// MARK: - Exchange types
+
+/// NTP-style four-timestamp exchange. `t0` is the phone's monotonic clock; `t1`
+/// and `t2` are the server's. The phone stamps `t3` on receipt and never trusts
+/// the server to have done it.
+public struct Ping: Sendable, Equatable, Codable {
+    public var id: UInt64
+    public var t0: Double
+
+    public init(id: UInt64, t0: Double) {
+        self.id = id
+        self.t0 = t0
+    }
+}
+
+public struct Pong: Sendable, Equatable, Codable {
+    public var id: UInt64
+    public var t0: Double
+    public var t1: Double
+    public var t2: Double
+
+    public init(id: UInt64, t0: Double, t1: Double, t2: Double) {
+        self.id = id
+        self.t0 = t0
+        self.t1 = t1
+        self.t2 = t2
+    }
+}

@@ -44,11 +44,11 @@ enum Fixtures {
 /// grants a permit. This is how "a socket that accepts 1 msg/sec while the
 /// producer emits 10/sec" is expressed without spending ten seconds of wall clock.
 actor GatedChannel: WebSocketChannel {
-    private(set) var delivered: [Data] = []
+    private(set) var delivered: [SocketFrame] = []
     private var permits = 0
     private var waiting: [CheckedContinuation<Void, Never>] = []
-    private var inbox: [Data] = []
-    private var inboxWaiters: [CheckedContinuation<Data, any Error>] = []
+    private var inbox: [SocketFrame] = []
+    private var inboxWaiters: [CheckedContinuation<SocketFrame, any Error>] = []
     private var closed = false
     private(set) var closeCount = 0
     /// When set, every send after this many sends throws, simulating a socket
@@ -61,7 +61,7 @@ actor GatedChannel: WebSocketChannel {
         self.failAfterSends = failAfterSends
     }
 
-    func send(_ data: Data) async throws {
+    func send(_ data: SocketFrame) async throws {
         concurrentSends += 1
         concurrentSendPeak = max(concurrentSendPeak, concurrentSends)
         defer { concurrentSends -= 1 }
@@ -94,7 +94,7 @@ actor GatedChannel: WebSocketChannel {
         }
     }
 
-    func receive() async throws -> Data {
+    func receive() async throws -> SocketFrame {
         if !inbox.isEmpty { return inbox.removeFirst() }
         if closed { throw TransportError.notConnected }
         return try await withCheckedThrowingContinuation { continuation in
@@ -102,7 +102,11 @@ actor GatedChannel: WebSocketChannel {
         }
     }
 
-    func deliverInbound(_ data: Data) {
+    func deliverInbound(_ text: String) {
+        deliverInbound(.text(text))
+    }
+
+    func deliverInbound(_ data: SocketFrame) {
         if inboxWaiters.isEmpty {
             inbox.append(data)
         } else {
@@ -119,12 +123,42 @@ actor GatedChannel: WebSocketChannel {
         inboxWaiters.removeAll()
     }
 
-    /// Decoded envelopes, in the order the socket accepted them.
-    func deliveredEnvelopes() -> [WireEnvelope] {
-        delivered.compactMap { try? WireCoder.decode($0) }
+    /// What the hub would have seen, in the order the socket accepted it.
+    func deliveredMessages() -> [DeliveredMessage] {
+        delivered.map(DeliveredMessage.init)
     }
 
     func deliveredCount() -> Int { delivered.count }
+}
+
+/// One message as the hub would parse it: `type` plus the JSON object, whether it
+/// arrived as text or as the header of a binary frame.
+struct DeliveredMessage: @unchecked Sendable {
+    let isBinary: Bool
+    let type: String
+    let json: [String: Any]
+    let payload: Data
+
+    init(_ frame: SocketFrame) {
+        var object: [String: Any] = [:]
+        var body = Data()
+        switch frame {
+        case .text(let text):
+            isBinary = false
+            object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:]
+        case .binary(let data):
+            isBinary = true
+            if let (header, payload) = try? HubFrame.unpack(data) {
+                object = (try? JSONSerialization.jsonObject(with: header)) as? [String: Any] ?? [:]
+                body = payload
+            }
+        }
+        json = object
+        payload = body
+        type = object["type"] as? String ?? "?"
+    }
+
+    func number(_ key: String) -> Double? { json[key] as? Double }
 }
 
 /// Hands out a prepared list of channels, one per connect attempt, so a test can
@@ -218,10 +252,17 @@ func isClose(_ a: Double, _ b: Double, within tolerance: Double) -> Bool {
 // MARK: - Sample values
 
 enum Sample {
-    static func hello(deviceID: String = "phone-a") -> Hello {
-        Hello(deviceID: deviceID, deviceName: "Dawson's iPhone", deviceModel: "iPhone16,1",
-              appVersion: "1.0.0", venueID: "hth-main-hall", hasLiDAR: true,
-              capabilities: ["lidar", "haptics"])
+    static func hello(phoneId: String = "phone-a") -> HubHello {
+        HubHello(phoneId: phoneId, name: "Dawson", build: "test")
+    }
+
+    static func slam(_ n: Int) -> HubOutbound {
+        .slam(x: Double(n), y: 0, heading: 0, pitch: 0)
+    }
+
+    static func frame(_ n: Int, bytes: Int = 6) -> HubOutbound {
+        .frame(HubFrameHeader(seq: UInt64(n), tCapture: Double(n), heading: nil, pitch: nil, calibrated: false),
+               jpeg: Data(repeating: 0xAB, count: bytes))
     }
 
     static func poseUpdate(seq: UInt64 = 1, t: Double = 1_000.5) -> PoseUpdate {
@@ -237,17 +278,6 @@ enum Sample {
                          imageWidth: 1_920, imageHeight: 1_440)
     }
 
-    static func frameChunk(id: UInt64 = 7) -> FrameChunk {
-        var trace = LatencyTrace(frameID: id)
-        trace.stamp(.capture, at: 1_000.000)
-        trace.stamp(.encoded, at: 1_000.018)
-        trace.stamp(.sent, at: 1_000.027)
-        return FrameChunk(deviceID: "phone-a", frameID: id, serverTimestamp: 1_000.027,
-                          width: 960, height: 720, jpegQuality: 0.6, intrinsics: intrinsics(),
-                          pose: poseUpdate(), jpeg: Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]),
-                          trace: trace)
-    }
-
     static func depthChunk() -> DepthChunk {
         DepthChunk(deviceID: "phone-a", chunkID: 3, serverTimestamp: 1_000.5, source: .server,
                    frames: (0..<4).map { index in
@@ -258,16 +288,6 @@ enum Sample {
                    metricScale: 1.37, width: 4, height: 2,
                    depth: [1, 2, 3, 4, 5, 6, 7, 8], confidence: [1, 1, 1, 1, 0.5, 0.5, 0.5, 0.5])
     }
-
-    static let commands: [Command] = [
-        Command(id: "c1", serverTimestamp: 1_000, kind: .flash(r: 1, g: 0.2, b: 0, durationMs: 400), expiresInMs: 800),
-        Command(id: "c2", serverTimestamp: 1_001, kind: .arrow(target: [3, 1.5, -2], bearingRadians: nil, label: "backpack")),
-        Command(id: "c3", serverTimestamp: 1_002, kind: .arrow(target: nil, bearingRadians: -1.2, label: nil)),
-        Command(id: "c4", serverTimestamp: 1_003, kind: .sound(name: "ping")),
-        Command(id: "c5", serverTimestamp: 1_004, kind: .haptic(pattern: "sharp", intensity: 0.9)),
-        Command(id: "c6", serverTimestamp: 1_005, kind: .setRates(poseHz: 10, frameFPS: 1.5, depthHz: 0.3)),
-        Command(id: "c7", serverTimestamp: 1_006, kind: .clear),
-    ]
 }
 
 // MARK: - Deterministic randomness
@@ -389,6 +409,10 @@ struct ReplayHarness {
 extension Array where Element == SessionEvent {
     var poses: [PoseUpdate] {
         compactMap { if case .pose(let update) = $0 { return update }; return nil }
+    }
+
+    var rawPoses: [PoseUpdate] {
+        compactMap { if case .rawPose(let update) = $0 { return update }; return nil }
     }
 
     var frames: [FrameTicket] {

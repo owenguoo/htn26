@@ -2,10 +2,14 @@ import Foundation
 
 /// The socket, abstracted so tests can drive a channel that accepts one message
 /// per second while the producer emits ten.
+///
+/// Text and binary are distinct because the hub cares which: it reads the first
+/// message with `receive_json()` and drops a socket whose hello is binary
+/// (`hub.py` `ws_phone`), and it only treats binary messages as camera frames.
 public protocol WebSocketChannel: Sendable {
-    func send(_ data: Data) async throws
+    func send(_ frame: SocketFrame) async throws
     /// Returns the next inbound message, or throws when the channel closes.
-    func receive() async throws -> Data
+    func receive() async throws -> SocketFrame
     func close() async
 }
 
@@ -38,11 +42,16 @@ public enum TransportState: Sendable, Equatable {
 /// accounting.
 ///
 /// **Backpressure drops, never queues.** A queue that grows is a phone reporting
-/// where it was thirty seconds ago. Perishable traffic — poses, frames, depth —
-/// sits in a shallow latest-wins buffer: when a newer one arrives and the buffer
-/// is full, the *stale* one is discarded and counted. Control traffic — hello,
-/// commands, the clock-sync pair — is never dropped, because losing it makes the
-/// device silently stop existing to the server.
+/// where it was thirty seconds ago. Perishable traffic — `slam`/`orient`,
+/// frames, `debug` — sits in a shallow latest-wins buffer per lane: when a newer
+/// one arrives and the buffer is full, the *stale* one is discarded and counted.
+/// Control traffic — hello, pong, seat, name — is never dropped: a lost pong
+/// leaves the hub without a clock offset and therefore without latency.
+///
+/// **Hello goes first, alone.** The hub registers the phone from the first
+/// message on the socket. With more than one send in flight the socket does not
+/// promise ordering, so after every connect the hello is sent by itself and
+/// nothing else is pumped until it has completed.
 public actor Transport {
     public struct Configuration: Sendable {
         public var url: URL
@@ -85,7 +94,7 @@ public actor Transport {
         public var reconnects: Int = 0
         public var inFlight: Int = 0
         public var buffered: Int = 0
-        public var droppedByType: [WireMessageType: Int] = [:]
+        public var droppedByLane: [HubOutbound.Lane: Int] = [:]
     }
 
     public private(set) var state: TransportState = .idle
@@ -101,22 +110,24 @@ public actor Transport {
     /// corrupt the in-flight count of the new socket.
     private var generation: UInt64 = 0
     private var inFlight = 0
-    private var seq: UInt64 = 0
+    /// True between adopting a socket and its hello completing. Nothing else
+    /// may be sent in that window.
+    private var awaitingHello = false
 
     /// Never dropped, FIFO.
-    private var controlQueue: [WireMessage] = []
-    /// Latest-wins, one shallow buffer per perishable type so a burst of frames
+    private var controlQueue: [HubOutbound] = []
+    /// Latest-wins, one shallow buffer per perishable lane so a burst of frames
     /// cannot starve poses.
-    private var perishable: [WireMessageType: [WireMessage]] = [:]
+    private var perishable: [HubOutbound.Lane: [HubOutbound]] = [:]
     /// Where the round-robin resumes, so every perishable type gets a turn.
     private var perishableCursor = 0
 
-    /// Re-sent on every successful connect so the server can re-register the
-    /// device after a drop. Everything else perishable is discarded on
-    /// disconnect — stale frames are never replayed.
-    private var hello: Hello?
+    /// Evaluated afresh and sent first on every successful connect, so the hub
+    /// re-registers the phone with its *current* name and seat. Everything else
+    /// buffered is discarded on disconnect — stale frames are never replayed.
+    private var hello: (@Sendable () async -> HubHello)?
 
-    private var inboundContinuation: AsyncStream<WireMessage>.Continuation?
+    private var inboundContinuation: AsyncStream<HubInbound>.Continuation?
     private var runTask: Task<Void, Never>?
     private var receiveTask: Task<Void, Never>?
     private var pumpTasks: Set<UUID> = []
@@ -136,18 +147,18 @@ public actor Transport {
     }
 
     /// Inbound messages, already decoded. Finishes when the transport is closed.
-    public func inbound() -> AsyncStream<WireMessage> {
+    public func inbound() -> AsyncStream<HubInbound> {
         if let existing = inboundStream { return existing }
-        let (stream, continuation) = AsyncStream<WireMessage>.makeStream(bufferingPolicy: .bufferingNewest(64))
+        let (stream, continuation) = AsyncStream<HubInbound>.makeStream(bufferingPolicy: .bufferingNewest(64))
         inboundContinuation = continuation
         inboundStream = stream
         return stream
     }
 
-    private var inboundStream: AsyncStream<WireMessage>?
+    private var inboundStream: AsyncStream<HubInbound>?
 
-    /// Registers the identity re-sent on every connect.
-    public func setHello(_ hello: Hello) {
+    /// Registers the identity sent first on every connect.
+    public func setHello(_ hello: @escaping @Sendable () async -> HubHello) {
         self.hello = hello
     }
 
@@ -173,18 +184,21 @@ public actor Transport {
 
     /// Offers a message. Perishable messages may be dropped here and now; that is
     /// the design, not a failure.
-    public func send(_ message: WireMessage) {
-        if message.isDroppable {
-            var bucket = perishable[message.type] ?? []
+    public func send(_ message: HubOutbound) {
+        // Hello is the transport's to send, first and alone. See `adopt`.
+        if case .hello = message { return }
+        let lane = message.lane
+        if lane != .control {
+            var bucket = perishable[lane] ?? []
             bucket.append(message)
             while bucket.count > configuration.bufferDepth {
                 // Discard the stale one, keep the newest. A pose from 400 ms ago
                 // is not worth the bandwidth it would take to deliver it.
                 bucket.removeFirst()
                 stats.dropped += 1
-                stats.droppedByType[message.type, default: 0] += 1
+                stats.droppedByLane[lane, default: 0] += 1
             }
-            perishable[message.type] = bucket
+            perishable[lane] = bucket
         } else {
             controlQueue.append(message)
         }
@@ -196,10 +210,10 @@ public actor Transport {
         controlQueue.count + perishable.values.reduce(0) { $0 + $1.count }
     }
 
-    /// The perishable types, in the order the cursor rotates through them.
-    private static let perishableOrder: [WireMessageType] = [.pose, .frame, .depth]
+    /// The perishable lanes, in the order the cursor rotates through them.
+    private static let perishableOrder: [HubOutbound.Lane] = [.slam, .frame, .debug]
 
-    private func nextMessage() -> WireMessage? {
+    private func nextMessage() -> HubOutbound? {
         if !controlQueue.isEmpty { return controlQueue.removeFirst() }
 
         // Genuine round-robin, not priority order. Under the starvation this
@@ -211,10 +225,10 @@ public actor Transport {
         let order = Self.perishableOrder
         for step in 0..<order.count {
             let index = (perishableCursor + step) % order.count
-            let type = order[index]
-            if var bucket = perishable[type], !bucket.isEmpty {
+            let lane = order[index]
+            if var bucket = perishable[lane], !bucket.isEmpty {
                 let message = bucket.removeFirst()
-                perishable[type] = bucket
+                perishable[lane] = bucket
                 perishableCursor = (index + 1) % order.count
                 return message
             }
@@ -223,13 +237,11 @@ public actor Transport {
     }
 
     private func pump() {
-        guard case .connected = state, let channel else { return }
+        guard case .connected = state, let channel, !awaitingHello else { return }
         while inFlight < configuration.maxInFlight, let message = nextMessage() {
-            seq += 1
-            let envelope = WireEnvelope(seq: seq, message: message)
-            let data: Data
+            let data: SocketFrame
             do {
-                data = try WireCoder.encode(envelope)
+                data = try message.encoded()
             } catch {
                 // An unencodable message is a programmer error, not a network
                 // one. Count it and move on rather than wedging the pump.
@@ -315,11 +327,37 @@ public actor Transport {
         state = .connected
         stats.connects += 1
         if stats.connects > 1 { stats.reconnects += 1 }
-        // Identity first, so the server has registered the device before any
-        // pose arrives.
-        if let hello {
-            controlQueue.insert(.hello(hello), at: 0)
+        // Identity first and alone, so the hub has registered the phone before
+        // anything else can reach the socket.
+        guard let hello else {
+            pump()
+            return
         }
+        awaitingHello = true
+        inFlight = 1
+        stats.inFlight = 1
+        let currentGeneration = generation
+        Task { [weak self] in
+            do {
+                try await newChannel.send(HubOutbound.hello(await hello()).encoded())
+                await self?.finishHello(generation: currentGeneration, failed: false)
+            } catch {
+                await self?.finishHello(generation: currentGeneration, failed: true)
+            }
+        }
+    }
+
+    private func finishHello(generation sendGeneration: UInt64, failed: Bool) {
+        guard sendGeneration == generation else { return }
+        awaitingHello = false
+        inFlight = max(0, inFlight - 1)
+        stats.inFlight = inFlight
+        if failed {
+            stats.sendFailures += 1
+            signalDisconnect()
+            return
+        }
+        stats.sent += 1
         pump()
     }
 
@@ -347,11 +385,12 @@ public actor Transport {
 
     /// Returns false when this socket has been superseded, so the receive task
     /// for the old generation retires instead of feeding the new one.
-    private func receive(_ data: Data, generation receiveGeneration: UInt64) -> Bool {
+    private func receive(_ data: SocketFrame, generation receiveGeneration: UInt64) -> Bool {
         guard receiveGeneration == generation else { return false }
         stats.received += 1
-        if let envelope = try? WireCoder.decode(data) {
-            inboundContinuation?.yield(envelope.message)
+        // Anything that is not a typed JSON object decodes to nil and is ignored.
+        if let message = HubInbound.decode(data) {
+            inboundContinuation?.yield(message)
         }
         return true
     }
@@ -387,13 +426,14 @@ public actor Transport {
         channel = nil
         generation &+= 1
         inFlight = 0
+        awaitingHello = false
         stats.inFlight = 0
         if countBufferedAsDropped {
             // Never replay stale frames across a reconnect. Whatever was waiting
             // describes a moment that has passed.
-            for (type, bucket) in perishable where !bucket.isEmpty {
+            for (lane, bucket) in perishable where !bucket.isEmpty {
                 stats.dropped += bucket.count
-                stats.droppedByType[type, default: 0] += bucket.count
+                stats.droppedByLane[lane, default: 0] += bucket.count
             }
             perishable.removeAll()
             controlQueue.removeAll()
@@ -451,14 +491,17 @@ public final class URLSessionWebSocketChannel: WebSocketChannel {
         }
     }
 
-    public func send(_ data: Data) async throws {
-        try await task.send(.data(data))
+    public func send(_ frame: SocketFrame) async throws {
+        switch frame {
+        case .text(let text): try await task.send(.string(text))
+        case .binary(let data): try await task.send(.data(data))
+        }
     }
 
-    public func receive() async throws -> Data {
+    public func receive() async throws -> SocketFrame {
         switch try await task.receive() {
-        case .data(let data): return data
-        case .string(let string): return Data(string.utf8)
+        case .data(let data): return .binary(data)
+        case .string(let string): return .text(string)
         @unknown default: throw TransportError.unsupportedMessage
         }
     }
