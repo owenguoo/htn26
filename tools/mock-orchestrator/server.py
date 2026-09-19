@@ -338,6 +338,25 @@ def demo_loop():
             time.sleep(hold)
 
 
+def outbound_address():
+    """The address a phone on the same wifi can actually reach.
+
+    `gethostbyname(gethostname())` is the obvious thing and it is wrong: on many
+    networks it resolves to 127.0.0.1, which is precisely the value somebody
+    then copies into venue.json and spends twenty minutes wondering why the
+    phone will not connect. Opening a UDP socket toward a public address makes
+    the routing table pick the real outbound interface; nothing is sent.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("192.0.2.1", 9))  # TEST-NET-1, guaranteed unroutable
+        return probe.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        probe.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0")
@@ -352,8 +371,7 @@ def main():
     listener.bind((arguments.host, arguments.port))
     listener.listen(8)
 
-    address = socket.gethostbyname(socket.gethostname())
-    print(f"stub orchestrator on ws://{address}:{arguments.port}/device")
+    print(f"stub orchestrator on ws://{outbound_address()}:{arguments.port}/device")
     print("this is NOT the real orchestrator; if they disagree, the real one wins")
 
     if sys.stdin.isatty():
