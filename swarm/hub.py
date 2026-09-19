@@ -391,6 +391,10 @@ class Hub:
             sighting_cmds = self.check_sightings(viewers, now) if searching else []
             busy = self.target.busy() | set(self.directives)
             cmds = self.planner.tick({k: v for k, v in viewers.items() if k not in busy}, now)
+            for pid, wx, wy, label in self.planner.walk_requests:  # the planner wants someone to walk
+                if pid in self.phones and pid not in busy:
+                    self.look([self.phones[pid].index], label, point=(wx, wy), go=True)
+            self.planner.walk_requests.clear()
             cmds += self.target.tick(viewers if searching else {}, now)
             for pid in self.target.busy() & set(self.directives):
                 del self.directives[pid]  # joining the find team replaces any earlier walk/look order
