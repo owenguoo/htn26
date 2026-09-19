@@ -203,7 +203,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
             hub.search.set_reference(None)
             revision = hub.search.revision
             await hub.enter_real_search()
-            status_value = 'unavailable'
+            status_value = 'unavailable' if auth.settings.enabled else 'disabled'
             await hub.clear_detection_overlays()
             data = await upload(request)
             if hub.search.revision != revision:

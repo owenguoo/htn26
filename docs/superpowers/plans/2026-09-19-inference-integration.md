@@ -15,7 +15,7 @@ Use one active search per room, version every result, and keep visual confirmati
 ## Global constraints
 
 All requirements in the spec apply to every task.
-This is a proposed plan only; no application source has been modified.
+Tasks 1-6 are implemented; see docs/inference.md for verification commands and outstanding physical-phone and GPU trials.
 Keep the root Python requirement unchanged and use Python 3.12 for the inference subproject.
 Start with one sampled frame per second per phone, four global in-flight requests, and a 1500 ms result-age limit.
 The initial similarity threshold of 0.70 is a configurable test setting, not calibrated identity confidence.

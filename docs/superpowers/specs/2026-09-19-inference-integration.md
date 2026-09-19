@@ -1,6 +1,6 @@
 # YOLOE + OSNet integration design
 
-Status: proposed for review, not implemented.
+Status: implemented and locally verified; physical-phone accuracy and cloud-GPU capacity remain unverified.
 Baseline: htn26 commit d8392f5; inference service commit 51bc388.
 
 ## Outcome

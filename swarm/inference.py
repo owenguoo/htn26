@@ -67,6 +67,28 @@ class Bridge:
             await self.client.post(self.settings.hub_url + '/api/search/status', headers=self.headers,
                                    json={'searchRevision': revision, 'status': status})
 
+    async def health(self) -> None:
+        state = self.state.copy()
+        revision = state.get('searchRevision')
+        if not revision or not state.get('enabled') or not state.get('targetVersion'):
+            return
+        value = 'unavailable'
+        try:
+            response = await self.client.get(
+                self.settings.inference_url + '/v1/targets/active', timeout=2,
+                headers={'Authorization': f'Bearer {self.settings.inference_key}'})
+            if response.status_code == 404:
+                value = 'reference_unavailable'
+            else:
+                response.raise_for_status()
+                value = ('available' if response.json()['target_version'] == state['targetVersion']
+                         else 'reference_unavailable')
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            pass
+        # A slow probe belongs only to the search generation it started with.
+        if self.state.get('searchRevision') == revision:
+            await self.status(revision, value)
+
     async def poll(self) -> None:
         while True:
             try:
@@ -76,6 +98,7 @@ class Bridge:
                 if state.get('searchRevision') != self.state.get('searchRevision') or not state.get('active'):
                     self.clear()
                 self.state = state
+                await self.health()
             except (httpx.HTTPError, ValueError):
                 self.state = {}
                 self.clear()

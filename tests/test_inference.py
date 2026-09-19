@@ -379,3 +379,73 @@ def test_detection_delivery_preserves_scores_and_current_threshold(monkeypatch):
         assert delivered[0]['boxes'][0]['similarity'] == .73
         assert delivered[0]['boxes'][0]['detectionScore'] == .91
     asyncio.run(run())
+
+
+def test_idle_health_checks_authenticated_reference_and_generation():
+    from swarm.control import Settings
+    from swarm.inference import Bridge
+    import json
+    async def run():
+        statuses = []
+        code = 200
+        version = 'v'
+        async def boundary(request):
+            if request.url.path == '/v1/targets/active':
+                assert request.headers['authorization'] == 'Bearer secret'
+                return httpx.Response(code, json={'target_version': version})
+            if request.url.path == '/readyz':
+                return httpx.Response(200)
+            statuses.append(json.loads(request.content))
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(boundary)) as client:
+            bridge = Bridge(Settings(inference_url='http://127.0.0.1:8001', inference_key='secret'), client)
+            bridge.state = dict(active=False, enabled=True, searchRevision='r', targetVersion='v')
+            await bridge.health()
+            assert statuses[-1]['status'] == 'available'
+            code = 401
+            await bridge.health()
+            assert statuses[-1]['status'] == 'unavailable'
+            code = 404
+            await bridge.health()
+            assert statuses[-1]['status'] == 'reference_unavailable'
+            bridge.state = dict(enabled=True, searchRevision='new', status='reference_unavailable')
+            await bridge.health()
+            assert statuses[-1]['status'] == 'reference_unavailable'
+    asyncio.run(run())
+
+
+def test_disabled_reference_failure_preserves_disabled():
+    from swarm.control import Auth, Settings, install_routes
+    from fastapi import FastAPI
+    hub = module.Hub()
+    app = FastAPI()
+    install_routes(app, hub, Auth(Settings(inference_url='', operator_code='code')))
+    with TestClient(app) as client:
+        client.post('/api/session', json={'code': 'code'})
+        assert client.put('/api/search/reference?box=0,0,10,10', content=b'jpg').status_code == 503
+        assert client.get('/api/search').json()['status'] == 'disabled'
+
+
+def test_slow_health_response_cannot_publish_new_generation():
+    from swarm.control import Settings
+    from swarm.inference import Bridge
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        posted = []
+        async def boundary(request):
+            if request.method == 'GET':
+                entered.set()
+                await release.wait()
+                return httpx.Response(200, json={'target_version': 'old'})
+            posted.append(request)
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(boundary)) as client:
+            bridge = Bridge(Settings(inference_url='http://127.0.0.1:8001'), client)
+            bridge.state = dict(enabled=True, searchRevision='old', targetVersion='old')
+            task = asyncio.create_task(bridge.health())
+            await entered.wait()
+            bridge.state = dict(enabled=True, searchRevision='new', targetVersion='new')
+            release.set()
+            await task
+            assert posted == []
+    asyncio.run(run())

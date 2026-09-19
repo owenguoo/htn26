@@ -113,6 +113,17 @@ def add_person_routes(
             targets[target_id] = target
             return {"target_id": target_id, "target_version": target.version}
 
+    @app.get("/v1/targets/{target_id}")
+    async def target_status(target_id: Identifier, _: Annotated[None, Depends(authenticate)]):
+        require_enabled()
+        worker = app.state.worker
+        if worker.closed or worker.task is None or worker.task.done():
+            raise HTTPException(503, "Worker is not ready")
+        target = app.state.targets.get(target_id)
+        if target is None:
+            raise HTTPException(404, "Reference target was not found")
+        return {"target_id": target_id, "target_version": target.version}
+
     @app.delete("/v1/targets/{target_id}", status_code=204)
     async def delete(target_id: Identifier, _: Annotated[None, Depends(authenticate)]):
         require_enabled()
