@@ -103,6 +103,7 @@ public struct SessionDiagnostics: Sendable, Equatable {
     public var framesRequested: Int = 0
     public var depthChunksRequested: Int = 0
     public var depthChunksSkippedForBaseline: Int = 0
+    public var framesSuppressedForOriginChange: Int = 0
     public var corrections: Int = 0
     public var rejectedCorrections: Int = 0
     public var thermalState: ThermalState = .nominal
@@ -154,12 +155,21 @@ public actor SessionMachine {
         /// cannot tell an unsynchronised timestamp from a synchronised one, and
         /// fusing on device uptime is worse than fusing on nothing.
         public var requireClockSync: Bool
+        /// Frames to skip after the world origin moves.
+        ///
+        /// `setWorldOrigin` affects subsequent frames, but a frame captured
+        /// before the call can still be in flight when it lands. A pose from one
+        /// is a cone that flickers for a sixtieth of a second; a *frame* from one
+        /// is geometry the server unprojects into the wrong place and then
+        /// reasons about. Poses keep flowing; frames wait for the origin to
+        /// settle, which at 1.5 fps costs nothing.
+        public var framesSuppressedAfterOriginChange: Int
 
         public init(deviceID: String, rates: Rates = Rates(), stalenessLimit: Double = 5.0,
                     degradedToLostAfter: Double = 4.0, confidenceDecayPerSecond: Double = 0.25,
                     confidenceRecoveryPerSecond: Double = 0.5, confidenceAfterCorrection: Double = 1.0,
                     depthChunkSize: Int = 6, minimumDepthBaseline: Float = 0.12,
-                    requireClockSync: Bool = true) {
+                    requireClockSync: Bool = true, framesSuppressedAfterOriginChange: Int = 2) {
             self.deviceID = deviceID
             self.rates = rates
             self.stalenessLimit = stalenessLimit
@@ -170,6 +180,7 @@ public actor SessionMachine {
             self.depthChunkSize = max(2, depthChunkSize)
             self.minimumDepthBaseline = minimumDepthBaseline
             self.requireClockSync = requireClockSync
+            self.framesSuppressedAfterOriginChange = max(0, framesSuppressedAfterOriginChange)
         }
     }
 
@@ -202,6 +213,9 @@ public actor SessionMachine {
     /// this runs for thirty minutes and a growing array is a memory leak with a
     /// schedule.
     private var recentFrames: [DepthChunk.FrameRef] = []
+    /// Counts down after the world origin moves. See
+    /// `framesSuppressedAfterOriginChange`.
+    private var framesSuppressed = 0
 
     private var diagnostics = SessionDiagnostics()
     private var continuation: AsyncStream<SessionEvent>.Continuation?
@@ -342,6 +356,12 @@ public actor SessionMachine {
             // moved. Re-express them, or a depth chunk straddling a correction
             // reports a baseline made of the correction rather than of motion.
             remapBufferedFrames(by: correction.relativeTransform)
+            if case .originEstablished = outcome {
+                // The frame changed wholesale, not by a bounded step. Nothing
+                // recorded under the old one means anything.
+                recentFrames.removeAll(keepingCapacity: true)
+            }
+            framesSuppressed = configuration.framesSuppressedAfterOriginChange
             diagnostics.corrections += 1
             // A marker sighting is a hard re-lock: whatever ARKit thinks of its
             // own tracking, we now know where we are.
@@ -530,6 +550,11 @@ public actor SessionMachine {
         // A stale pose means we do not know where the camera is, so a frame from
         // it cannot be unprojected. Sending it wastes inference and bandwidth.
         guard !isStale else { return }
+        guard framesSuppressed == 0 else {
+            framesSuppressed -= 1
+            diagnostics.framesSuppressedForOriginChange += 1
+            return
+        }
         let interval = 1.0 / max(0.001, configuration.rates.frameFPS * thermalState.rateMultiplier)
         guard now >= nextFrameDue else { return }
         nextFrameDue = (nextFrameDue == -.infinity ? now : max(now, nextFrameDue)) + interval
