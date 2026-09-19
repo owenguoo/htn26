@@ -1047,6 +1047,13 @@ def _versioned(text: str, build: str) -> str:
     return re.sub(r"(/web/[\w.-]+\.js)(?=['\"])", rf"\1?v={build}", text)
 
 
+ROOT_PAGE = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beacon</title><style>body{background:#0b0b0c;color:#ededed;font:16px/1.5 -apple-system,system-ui,sans-serif;
+margin:0;display:grid;place-items:center;height:100vh;text-align:center}div{max-width:22rem;padding:24px}
+b{font-size:20px}p{color:#9b9b9b}</style><div><b>Beacon</b><p>Open the Beacon app on this phone and scan the
+join code there. The browser client is no longer used.</p></div>"""
+
+
 def _page(name: str) -> HTMLResponse:
     build = build_id()
     html = _versioned((WEB / name).read_text(), build)
@@ -1055,8 +1062,10 @@ def _page(name: str) -> HTMLResponse:
 
 
 @app.get("/")
-def phone_page() -> HTMLResponse:
-    return _page("phone.html")
+def root() -> HTMLResponse:
+    """The browser phone client is retired: phones run the native app, which speaks /ws/phone.
+    This page is what someone gets if they scan the join QR with the system camera."""
+    return HTMLResponse(ROOT_PAGE, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/console")
