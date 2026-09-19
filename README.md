@@ -37,11 +37,19 @@ sudo xcodebuild -license accept
 xcodebuild -downloadPlatform iOS
 ```
 
+```bash
+xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16
+```
+
 The first is a one-off; until it is run, every `swift`, `xcrun` and `xcodebuild`
 invocation under Xcode refuses. The second installs the iOS Simulator runtime,
-which this Xcode does not ship with — without it there are no simulator devices,
-so `-destination 'platform=iOS Simulator,name=iPhone 16'` cannot resolve. It is
-a multi-gigabyte download.
+which this Xcode does not ship with — without it there are no simulator devices
+at all. It is a multi-gigabyte download.
+
+The third exists because a runtime ships device *types*, not devices: iOS 26.3
+creates an iPhone 16e and several 17s but no plain iPhone 16, which is the name
+the gate uses. `Scripts/preflight.sh` checks all three and prints whichever
+command is still needed.
 
 Note that the app **compiles** for the simulator without either of these; only
 the `xcodebuild` invocation needs them.

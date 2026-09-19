@@ -13,7 +13,7 @@
 
 /* Begin PBXFileReference section */
 		8BCD5BC4CDFDF0918087C782 /* SwarmSight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwarmSight.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		FEA3CD2C29190FF061EE5105 /* venue.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = venue.json; path = Fixtures/venue.json; sourceTree = "<group>"; };
+		FEA3CD2C29190FF061EE5105 /* venue.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = venue.json; path = Fixtures/venue.json; sourceTree = SOURCE_ROOT; };
 		141BE85673A1D7CFB5CE3F07 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
