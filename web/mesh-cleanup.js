@@ -1,54 +1,63 @@
-// Conservative display-only overlap ownership. Original GLBs stay untouched.
-// No surface is invented: only near-coplanar triangles from later sections are hidden.
-export function cleanMeshes(meshes, cellSize = 0.04, tolerance = 0.025) {
-  const cells = new Map();
-  let total = 0, removed = 0;
-  const masks = [];
-  function inside(px,py,pz,r) {
-    const wx=px-r.ax, wy=py-r.ay, wz=pz-r.az;
-    const d20=wx*r.ux+wy*r.uy+wz*r.uz, d21=wx*r.vx+wy*r.vy+wz*r.vz;
-    const u=(r.d11*d20-r.d01*d21)/r.den, v=(r.d00*d21-r.d01*d20)/r.den;
-    if (u >= -1e-4 && v >= -1e-4 && u+v <= 1.0001) return true;
-    // Independent triangulations rarely share edges exactly. Allow only a
-    // 1 cm boundary mismatch, not ownership of an entire spatial cell.
-    const edgeDistance = (ax,ay,az,bx,by,bz) => {
-      const ex=bx-ax, ey=by-ay, ez=bz-az;
-      const t=Math.max(0,Math.min(1,((px-ax)*ex+(py-ay)*ey+(pz-az)*ez)/(ex*ex+ey*ey+ez*ez)));
-      return Math.hypot(px-ax-t*ex,py-ay-t*ey,pz-az-t*ez);
-    };
-    const bx=r.ax+r.ux, by=r.ay+r.uy, bz=r.az+r.uz;
-    const cx=r.ax+r.vx, cy=r.ay+r.vy, cz=r.az+r.vz;
-    return Math.min(edgeDistance(r.ax,r.ay,r.az,bx,by,bz),
-      edgeDistance(bx,by,bz,cx,cy,cz),edgeDistance(cx,cy,cz,r.ax,r.ay,r.az)) <= .01;
-  }
+// Display-only patch ownership; source meshes remain unchanged.
+// 24 cm patches choose one section by projected coverage, then surface area.
+// 3 cm coverage cells let non-winning sections fill holes and extend the map.
+export function cleanMeshes(meshes, patchSize = .24, tolerance = .08) {
+  const patches = new Map(), groups = [], assignments = [];
+  let total=0,removed=0;
+  const fine=8;
   for (const mesh of meshes) {
-    const p = mesh.positions, indices = mesh.indices;
-    const kept = new Uint32Array(indices.length);
-    let n = 0;
-    for (let i = 0; i < indices.length; i += 3) {
+    const p=mesh.positions, indices=mesh.indices;
+    const ids=new Int32Array(indices.length/3).fill(-1), slots=new Uint8Array(ids.length);
+    for(let i=0;i<indices.length;i+=3) {
       total++;
-      const a = indices[i]*3, b = indices[i+1]*3, c = indices[i+2]*3;
-      const x = (p[a]+p[b]+p[c])/3, y = (p[a+1]+p[b+1]+p[c+1])/3, z = (p[a+2]+p[b+2]+p[c+2])/3;
-      const ux=p[b]-p[a], uy=p[b+1]-p[a+1], uz=p[b+2]-p[a+2];
-      const vx=p[c]-p[a], vy=p[c+1]-p[a+1], vz=p[c+2]-p[a+2];
-      let nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
-      const len=Math.hypot(nx,ny,nz);
-      if (!Number.isFinite(x+y+z+len) || len < 1e-12) { removed++; continue; }
-      nx/=len; ny/=len; nz/=len;
-      const key=`${Math.floor(x/cellSize)},${Math.floor(y/cellSize)},${Math.floor(z/cellSize)}`;
-      const records = cells.get(key) || [];
-      const owner = records.find(r => Math.abs(nx*r.nx+ny*r.ny+nz*r.nz) > .97 &&
-        [a,b,c].every(v => Math.abs((p[v]-r.x)*r.nx+(p[v+1]-r.y)*r.ny+(p[v+2]-r.z)*r.nz) <= tolerance && inside(p[v],p[v+1],p[v+2],r)));
-      if (owner && owner.section !== mesh.section) { removed++; continue; }
-      kept[n++]=indices[i]; kept[n++]=indices[i+1]; kept[n++]=indices[i+2];
-      // Preserve multiple orientations (e.g. a wall/floor junction), with bounded storage.
-      if (!owner && records.length < 8) {
-        const d00=ux*ux+uy*uy+uz*uz, d01=ux*vx+uy*vy+uz*vz, d11=vx*vx+vy*vy+vz*vz;
-        records.push({x,y,z,nx,ny,nz,ax:p[a],ay:p[a+1],az:p[a+2],ux,uy,uz,vx,vy,vz,
-          d00,d01,d11,den:d00*d11-d01*d01,section:mesh.section}); cells.set(key,records);
+      const a=indices[i]*3,b=indices[i+1]*3,c=indices[i+2]*3;
+      const center=[(p[a]+p[b]+p[c])/3,(p[a+1]+p[b+1]+p[c+1])/3,(p[a+2]+p[b+2]+p[c+2])/3];
+      const u=[p[b]-p[a],p[b+1]-p[a+1],p[b+2]-p[a+2]],v=[p[c]-p[a],p[c+1]-p[a+1],p[c+2]-p[a+2]];
+      const normal=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+      const len=Math.hypot(...normal);
+      if (!Number.isFinite(center[0]+center[1]+center[2]+len) || len<1e-12) continue;
+      let axis=0;
+      if(Math.abs(normal[1])>Math.abs(normal[axis]))axis=1;
+      if(Math.abs(normal[2])>Math.abs(normal[axis]))axis=2;
+      const sign=normal[axis]<0?-1:1;
+      for(let j=0;j<3;j++)normal[j]*=sign/len;
+      const ta=(axis+1)%3,tb=(axis+2)%3;
+      const x=Math.floor(center[ta]/patchSize),y=Math.floor(center[tb]/patchSize);
+      const key=`${axis},${x},${y}`;
+      let candidates=patches.get(key);
+      if(!candidates){candidates=[];patches.set(key,candidates);}
+      let group=candidates.find(g=>g.normal.reduce((sum,n,j)=>sum+n*normal[j],0)>.9 &&
+        Math.abs(g.normal.reduce((sum,n,j)=>sum+n*(center[j]-g.center[j]),0))<=tolerance);
+      if(!group){
+        group={id:groups.length,normal,center,sections:new Map()};
+        candidates.push(group);groups.push(group);
       }
+      let section=group.sections.get(mesh.section);
+      if(!section){section={id:mesh.section,coverage:new Uint8Array(64),count:0,area:0};group.sections.set(mesh.section,section);}
+      const sx=Math.min(7,Math.max(0,Math.floor((center[ta]/patchSize-x)*fine)));
+      const sy=Math.min(7,Math.max(0,Math.floor((center[tb]/patchSize-y)*fine)));
+      const slot=sy*fine+sx;
+      if(!section.coverage[slot]){section.coverage[slot]=1;section.count++;}
+      section.area+=Math.min(len/2,patchSize*patchSize);
+      ids[i/3]=group.id;slots[i/3]=slot;
     }
-    masks.push(kept.slice(0,n));
+    assignments.push({ids,slots});
   }
-  return {masks,total,removed,cells:cells.size};
+  for(const group of groups){
+    let owner=null;
+    for(const section of group.sections.values()) {
+      if(!owner || section.count>owner.count || (section.count===owner.count && section.area>owner.area*1.2))owner=section;
+    }
+    group.owner=owner;
+  }
+  const masks=meshes.map((mesh,mi)=>{
+    const {ids,slots}=assignments[mi],out=new Uint32Array(mesh.indices.length);let count=0;
+    for(let i=0;i<ids.length;i++){
+      const owner=ids[i]<0?null:groups[ids[i]].owner;
+      if(!owner || (owner.id!==mesh.section && owner.coverage[slots[i]])){removed++;continue;}
+      out[count++]=mesh.indices[i*3];out[count++]=mesh.indices[i*3+1];out[count++]=mesh.indices[i*3+2];
+    }
+    return out.slice(0,count);
+  });
+  return {masks,total,removed,cells:groups.length};
 }

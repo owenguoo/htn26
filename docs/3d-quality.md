@@ -194,22 +194,24 @@ pose before capture starts. After anchoring, visual registration controls map
 placement rather than later ARKit origin changes. Metric accuracy still requires
 valid initial calibration and cannot be inferred from the internal fit residual.
 
-### Display-only overlap cleanup
+### Display-only patch selection
 
-The minimap opens top-down with cutaway enabled. A module Web Worker conservatively
-hides triangles in later sections only when an earlier near-coplanar triangle
-covers their projected vertices (2.5 cm plane tolerance, 1 cm boundary tolerance,
-normal agreement > .97).
-Eight candidate triangles per 4 cm cell bound matching work. Distinct surfaces,
-new coverage and source GLBs remain unchanged; uncertain overlap stays visible.
-This is not surface fusion or semantic person/hand removal. The Clean overlap
-switch restores original indices for comparison. New sections display before
-cleanup finishes; the status reports worker time and fraction hidden. Cleanup
-cancels when superseded and never invokes the reconstruction worker.
+Clean patches selects one section for each 24 cm surface patch. Similar-facing
+surfaces within 8 cm are grouped; the section covering the most 3 cm projected
+cells wins, with projected surface area breaking substantial ties. A losing
+section's triangles stay visible in cells the winner does not cover. This replaces
+the earlier near-identical-triangle filter, which removed only 2.1% of the test map.
 
-Validation on the saved 15-section scan: 2.1% of triangles hidden, 2415 ms worker
-time / 3121 ms including preparation and application. DOM render-loop telemetry
-reported approximately 120 fps with cleanup enabled and disabled after completion;
-this is not a worst-frame-time guarantee during processing. Five geometry tests
-cover duplicates, new coverage, distinct surfaces, same-section geometry, invalid
-input, and disjoint details. Large registration seams intentionally remain.
+This is an approximate display mask, not fused geometry. Fine features, thin
+parallel surfaces, patch boundaries and residual seams can still be affected;
+the toggle restores all original indices, and GLB files remain untouched. Larger
+surface disagreements are left alone. The worker runs asynchronously after meshes
+are displayed, never invokes VGGT, and cancels when superseded. Top-down cutaway
+remains the default. Seven tests cover duplicates, separated surfaces, unique
+coverage, invalid geometry, and selection of the better-covered section.
+
+Frozen v15 validation: 32.1% of triangles hidden; 1151 ms worker time and
+1876 ms including preparation/application, with meshes visible throughout.
+The render loop reported 120 fps after completion. Same-camera visual comparison
+shows changed overlapping surfaces, but large misalignments and holes remain;
+triangle reduction is not evidence of metric accuracy or complete seam removal.

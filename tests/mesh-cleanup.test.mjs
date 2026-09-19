@@ -24,3 +24,15 @@ test('handles empty and invalid meshes',()=>{
 test('preserves disjoint coplanar details within the same voxel',()=>{
  assert.equal(cleanMeshes([mesh('a'),mesh('b',0,.04)]).removed,0);
 });
+test('suppresses doubled surfaces six centimetres apart',()=>{
+ const r=cleanMeshes([mesh('a'),mesh('b',.06)]);
+ assert.equal(r.removed,1);
+});
+test('best-covered section owns patch while other sections keep unique cells',()=>{
+ const join=(section,parts)=>({section,positions:Float32Array.from(parts.flatMap(m=>Array.from(m.positions))),indices:Uint32Array.from(parts.flatMap((m,i)=>[i*3,i*3+1,i*3+2]))});
+ const a=join('a',[mesh('a'),mesh('a',0,.15)]);
+ const b=join('b',[mesh('b',.03),mesh('b',.03,.04),mesh('b',.03,.08)]);
+ const r=cleanMeshes([a,b]);
+ assert.equal(r.masks[0].length,3); // unique distant cell stays
+ assert.equal(r.masks[1].length,9); // best coverage wins, not first arrival
+});

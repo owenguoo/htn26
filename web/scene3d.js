@@ -107,7 +107,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
 
   const toolbar = document.createElement('div');
   toolbar.className = 's3d-tools';
-  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="true">Cutaway</button><button type="button" data-view="clean" aria-pressed="true">Clean overlap</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
+  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="true">Cutaway</button><button type="button" data-view="clean" aria-pressed="true">Clean patches</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
   host.appendChild(toolbar);
   toolbar.addEventListener('click', (e) => {
     const action = e.target.closest('button')?.dataset.view;
@@ -330,7 +330,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
       if (epoch !== cleanupEpoch || scanObj !== root || data.error) return;
       host.dataset.cleanupMs = String(Math.round(performance.now()-started));
       objects.forEach((o,i) => o.geometry.setIndex(new THREE.BufferAttribute(data.masks[i],1)));
-      scanLabel = `live map · ${root.children.length} retained sections · ${(data.removed/Math.max(1,data.total)*100).toFixed(1)}% overlap hidden · cleanup ${Math.round(data.ms)} ms`;
+      scanLabel = `live map · ${root.children.length} retained sections · ${(data.removed/Math.max(1,data.total)*100).toFixed(1)}% surface hidden · cleanup ${Math.round(data.ms)} ms`;
     };
     worker.onerror = () => { worker.terminate(); if (cleanupWorker === worker) cleanupWorker=null; };
     worker.postMessage({meshes},meshes.flatMap(m=>[m.positions.buffer,m.indices.buffer]));
