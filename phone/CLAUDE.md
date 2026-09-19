@@ -8,11 +8,22 @@ over WebSocket, and displays commands sent back (full-screen color flash,
 directional arrow, sound, haptic). The operators walk around and sweep their
 cameras; they are not seated.
 
-**A working web prototype already exists.** The orchestrator, dashboard, feed
-wall, cone rendering and QR join flow are built and running. This iOS app is a
-drop-in replacement for the *pose source* and *frame source* only. Do not
-rewrite, redesign or "improve" the server or the dashboard. If the wire protocol
-here disagrees with the server, the server wins — ask, don't refactor.
+**This Swift app is the mobile client. `../web/phone.js` is not.** The browser
+client was the prototype that proved the idea; we no longer build on it or put it
+in an operator's hands. Everything an operator sees or does on a phone — the UI,
+the guidance cues, voice input, the HUD — lands here, in Swift. A gap here is a
+gap, not something the web client covers for us.
+
+`../web/phone.js` stays useful as a **behavioural reference**. It is the working
+implementation of things this client is still catching up to, so read it to learn
+what the hub sends and expects, and to match wording, thresholds and timings.
+Read it; don't extend it.
+
+The rest of the web prototype is a different matter and is still live: the
+orchestrator, the operator console, the dashboard, the feed wall, cone rendering
+and the QR join flow are built, running, and **not ours**. Do not rewrite,
+redesign or "improve" the server or the console. If the wire protocol here
+disagrees with the server, the server wins — ask, don't refactor.
 
 **The server is the htn26 hub, in this same checkout** (`../swarm/hub.py`,
 `../swarm/protocol.py`, `../web/phone.js`). Phone work must not modify
