@@ -3,7 +3,7 @@
 Two ways in:
 - Commands: the operator types plain English in /console; the model calls tools (phase, planner,
   candidate, sector assignments, look / walk-to, messages, pings, ...) that act on the hub at once.
-- Autonomy (on by default): a loop reviews the room back to back while searching (and right after
+- Autonomy (off until the operator turns it on): a loop reviews the room back to back while searching (and right after
   key events), using signals computed here (tilted phones, unreachable sectors, stalled coverage,
   ...), and takes at most one action per review, logging why. Autonomy can only steer phones, never
   change the phase, move the candidate or reset coverage.
@@ -22,8 +22,11 @@ from collections import deque
 import openai
 from openai import AsyncOpenAI
 
+from .protocol import now_ms
+
 MAX_STEPS = 6  # model → tools → model rounds per command
 THINK_EVERY_S = 2          # start a review this soon after the previous one started (reviews take ~2 s)
+IDLE_RECHECK_S = 20        # when nothing changed and the last review did nothing, re-check this rarely
 STEERING = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "cancel_look")
 # tools the autonomy layer may use: steering phones only
 AUTONOMY_TOOLS = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "cancel_look",
@@ -178,7 +181,9 @@ class MissionControl:
         self.busy = False
         self.last_ms: int | None = None
         # autonomy
-        self.autonomy = True
+        self.autonomy = False               # the operator turns it on from the console
+        self.last_fingerprint = None        # what the room looked like at the last review
+        self.last_review_acted = True
         self.recs: deque[dict] = deque(maxlen=12)
         self.rec_ids = itertools.count(1)
         self.thinking = False
@@ -296,9 +301,34 @@ class MissionControl:
             if (not self.autonomy or not self.client or self.thinking or not due
                     or self.hub.phase not in ("search", "found") or self.hub.target.complete()):
                 continue
+            # don't spend tokens on an empty room, or on a room that hasn't changed since a review
+            # that found nothing to do (re-check now and then in case slow drift matters)
+            if not any(p.connected and p.pose(now_ms()) for p in self.hub.phones.values()):
+                continue
+            fp = self.fingerprint()
+            quiet = time.time() - self.last_think < IDLE_RECHECK_S
+            if not self.triggered and not self.last_review_acted and fp == self.last_fingerprint and quiet:
+                continue
+            self.last_fingerprint = fp
             self.triggered = False
             self.last_think = time.time()
             asyncio.create_task(self.review())
+
+    def fingerprint(self) -> tuple:
+        """A coarse picture of the room: if this hasn't changed, another review won't say anything new."""
+        hub, now = self.hub, now_ms()
+        phones = []
+        for p in sorted(hub.phones.values(), key=lambda p: p.index):
+            pose = p.pose(now) if p.connected else None
+            phones.append((p.index, bool(pose),
+                           pose and round(pose["x"]), pose and round(pose["y"]),
+                           pose and pose["heading"] is not None and round(pose["heading"] / 30),
+                           hub.task_of(p.id), p.tilted_since is not None))
+        cov = round(hub.coverage.snapshot()["searched"] * 20)  # 5% steps
+        t = hub.target
+        return (hub.phase, cov, tuple(phones), bool(t.found_by),
+                tuple(sorted((pid, r["arrived"]) for pid, r in t.responders.items())),
+                len(hub.active_pings(now)), hub.planner.enabled)
 
     async def review(self) -> None:
         self.thinking = True
@@ -313,12 +343,14 @@ class MissionControl:
             self.last_think_ms = round((time.time() - t0) * 1000)
         # one action per review: fast, legible, and easy to follow on stage
         raw = next((r for r in recs if r["actions"]), None)
+        self.last_review_acted = raw is not None
         if not raw or not self.autonomy or self.hub.target.complete():
             return  # nothing to do, paused, or the mission finished while this review was thinking
         a = raw["actions"][0]
         why_not = self._blocked(a)
         if why_not:  # the model ignored a rule; skip this review rather than churn phones
             self.hub.planner.note(f"skipped “{raw['title'][:40]}”: {why_not}")
+            self.last_review_acted = False  # nothing happened, so don't re-review an unchanged room
             return
         rec = {"id": next(self.rec_ids), "t": time.time(), "title": raw["title"][:80],
                "reason": raw["reason"][:160], "severity": raw["severity"],

@@ -16,7 +16,7 @@ let lastDragSend = 0;
 // ---------------------------------------------------------------- socket
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=1`);
+  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=2`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => setConn(true);
   ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
@@ -92,6 +92,8 @@ function renderMetrics() {
   $('#mLive').textContent = live.length;
   $('#mPlaced').textContent = live.filter((p) => p.pose).length;
   $('#mFps').textContent = live.reduce((s, p) => s + p.fps, 0).toFixed(1);
+  const mbps = live.reduce((s, p) => s + (p.kbps || 0), 0) / 1000;
+  $('#mFpsK').textContent = `Frames / s · ${mbps.toFixed(1)} Mbps in`;
   const lats = live.map((p) => p.latencyMs).filter((x) => x != null).sort((a, b) => a - b);
   $('#mLat').textContent = lats.length ? `${lats[Math.floor(lats.length / 2)]}ms` : '–';
   $('#mSearched').textContent = `${Math.round((st.coverage?.searched || 0) * 100)}%`;
@@ -135,6 +137,7 @@ function phoneStatus(p) {
   else if (p.stale) out.push(['Stale', '']);
   if (p.pitch != null && Math.abs(p.pitch) > 65) out.push([p.pitch < 0 ? 'Floor' : 'Ceiling', '']);
   if (p.hidden) out.push(['Hidden', '']);
+  if (p.oldPage && !p.sim && p.connected) out.push(['Old page · reload', 'r']);
   return out;
 }
 
@@ -182,6 +185,7 @@ $('#phones').addEventListener('click', (e) => {
 
 // ---------------------------------------------------------------- expanded feed
 let viewing = null; // phone id shown large
+let showHud = (() => { try { return localStorage.getItem('swarm.hud') !== '0'; } catch { return true; } })();
 
 function openViewer(id) {
   viewing = id;
@@ -195,6 +199,7 @@ function openViewer(id) {
 
 function closeViewer() {
   viewing = null;
+  clearHud();
   $('#viewer').classList.remove('on');
   send({ type: 'focus', phoneId: null });
 }
@@ -225,6 +230,146 @@ function renderViewer() {
 }
 
 $('#vClose').addEventListener('click', closeViewer);
+$('#vHud').addEventListener('click', toggleHud);
+$('#vHud').classList.toggle('on', showHud);
+function toggleHud() {
+  showHud = !showHud;
+  try { localStorage.setItem('swarm.hud', showHud ? '1' : '0'); } catch {}
+  $('#vHud').classList.toggle('on', showHud);
+}
+
+// ---------------------------------------------------------------- phone HUD mirror
+// Redraws what's on the viewed phone's screen over its feed, from the description the phone sends.
+const CARD = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+const TONES = { ok: ['#7ae582', '#04210a'], alert: ['#ff5d73', '#ffffff'], warn: ['#ffb703', '#1a1200'] };
+
+function clearHud() {
+  const c = $('#vHudCanvas');
+  c.getContext('2d').clearRect(0, 0, c.width, c.height);
+}
+
+function drawHud() {
+  requestAnimationFrame(drawHud);
+  if (!viewing) return;
+  const c = $('#vHudCanvas');
+  const img = $('#vImg');
+  const ctx = c.getContext('2d');
+  const box = img.getBoundingClientRect(), host = c.parentElement.getBoundingClientRect();
+  const W = box.width, H = box.height;
+  const dpr = window.devicePixelRatio || 1;
+  c.style.left = `${box.left - host.left}px`;
+  c.style.top = `${box.top - host.top}px`;
+  c.style.width = `${W}px`;
+  c.style.height = `${H}px`;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) {
+    c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const hud = phones.get(viewing)?.hud;
+  if (!showHud || !hud || !W || !img.getAttribute('src')) return;
+
+  // the phone's screen shows a crop of the frame: dim what the person can't see
+  let sx = 0, sy = 0, sw = W, sh = H;
+  if (hud.screen) {
+    const [a, b, e, f] = hud.screen;
+    sx = Math.max(0, a * W); sy = Math.max(0, b * H);
+    sw = Math.min(W, e * W) - sx; sh = Math.min(H, f * H) - sy;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, sy); ctx.fillRect(0, sy + sh, W, H - sy - sh);
+    ctx.fillRect(0, sy, sx, sh); ctx.fillRect(sx + sw, sy, W - sx - sw, sh);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1);
+  }
+  const k = sw / 390; // scale phone-sized HUD elements to the drawn screen (≈ iPhone width in CSS px)
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // detection boxes and AR markers live in frame coordinates
+  for (const d of hud.dets || []) {
+    ctx.strokeStyle = '#ff5d73';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(d.x * W, d.y * H, d.w * W, d.h * H);
+  }
+  for (const m of hud.ar || []) {
+    const x = m.x * W, y = m.y * H, r = Math.max(6, m.r * sh);
+    ctx.fillStyle = m.color;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    pill(ctx, x, y - r - 13 * k, m.label, 'rgba(0,0,0,0.7)', '#fff', 12 * k);
+  }
+
+  // screen-space HUD, stacked from the top of the phone's screen
+  let top = sy + 8 * k;
+  if (hud.compass) { drawTape(ctx, sx + 8 * k, top, sw - 16 * k, 40 * k, hud.compass, k); top += 48 * k; }
+  if (hud.banner) {
+    const [bg, fg] = TONES[hud.banner.tone] || TONES.warn;
+    pill(ctx, sx + sw / 2, top + 16 * k, hud.banner.text, bg, fg, 15 * k, true);
+    top += 40 * k;
+  }
+  if (hud.lookingFor) { pill(ctx, sx + sw / 2, top + 12 * k, hud.lookingFor, 'rgba(12,17,32,0.85)', '#eef2ff', 12 * k); top += 30 * k; }
+  if (hud.toast) { pill(ctx, sx + sw / 2, top + 14 * k, hud.toast, 'rgba(255,255,255,0.95)', '#05070f', 13 * k, true); top += 36 * k; }
+  if (hud.card) {
+    const cy = sy + sh * 0.42;
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.beginPath(); ctx.roundRect(sx + 16 * k, cy - 40 * k, sw - 32 * k, 80 * k, 14 * k); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = `700 ${18 * k}px Geist, system-ui`;
+    ctx.fillText(hud.card.title, sx + sw / 2, cy - 12 * k);
+    ctx.fillStyle = '#a1a1a1';
+    ctx.font = `${12 * k}px Geist, system-ui`;
+    ctx.fillText(hud.card.text, sx + sw / 2, cy + 14 * k);
+  }
+}
+
+function pill(ctx, x, y, text, bg, fg, size, bold = false) {
+  ctx.font = `${bold ? 700 : 600} ${size}px Geist, system-ui`;
+  const w = ctx.measureText(text).width + size * 1.4, h = size * 1.9;
+  ctx.fillStyle = bg;
+  ctx.beginPath(); ctx.roundRect(x - w / 2, y - h / 2, w, h, h / 2); ctx.fill();
+  ctx.fillStyle = fg;
+  ctx.fillText(text, x, y + 0.5);
+}
+
+function drawTape(ctx, x0, y0, w, h, cmp, k) {
+  const SPAN = 120, ppd = w / SPAN, cx = x0 + w / 2;
+  ctx.save();
+  ctx.fillStyle = 'rgba(12,17,32,0.82)';
+  ctx.beginPath(); ctx.roundRect(x0, y0, w, h, 10 * k); ctx.fill(); ctx.clip();
+  for (let d = Math.ceil((cmp.center - SPAN / 2) / 5) * 5; d <= cmp.center + SPAN / 2; d += 5) {
+    const x = cx + (d - cmp.center) * ppd;
+    const dd = ((d % 360) + 360) % 360;
+    const major = dd % 15 === 0;
+    ctx.strokeStyle = major ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = major ? 1.5 : 1;
+    ctx.beginPath(); ctx.moveTo(x, y0 + h - (major ? 10 : 6) * k); ctx.lineTo(x, y0 + h - 2); ctx.stroke();
+    if (major) {
+      const card = cmp.abs ? CARD[dd] : null;
+      ctx.fillStyle = card ? '#fff' : 'rgba(255,255,255,0.55)';
+      ctx.font = `${card ? 800 : 600} ${(card ? 11 : 9) * k}px system-ui`;
+      ctx.fillText(card ?? String(dd), x, y0 + h - 18 * k);
+    }
+  }
+  for (const m of cmp.markers) {
+    const edge = Math.abs(m.off) > SPAN / 2 - 8;
+    const x = edge ? (m.off > 0 ? x0 + w - 18 * k : x0 + 18 * k) : cx + m.off * ppd;
+    const label = edge ? (m.off > 0 ? `${m.label} ▶` : `◀ ${m.label}`) : m.label;
+    ctx.font = `800 ${(m.big ? 10 : 9) * k}px system-ui`;
+    const tw = ctx.measureText(label).width + 10 * k;
+    const bx = Math.max(x0 + 2, Math.min(x0 + w - tw - 2, x - tw / 2));
+    ctx.fillStyle = m.color;
+    ctx.beginPath(); ctx.roundRect(bx, y0 + 2 * k, tw, 14 * k, 7 * k); ctx.fill();
+    ctx.fillStyle = '#05070f';
+    ctx.fillText(label, bx + tw / 2, y0 + 9.5 * k);
+  }
+  ctx.restore();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.moveTo(cx - 5 * k, y0 + h); ctx.lineTo(cx + 5 * k, y0 + h); ctx.lineTo(cx, y0 + h - 6 * k); ctx.fill();
+}
+requestAnimationFrame(drawHud);
 $('#vHide').addEventListener('click', () => {
   const p = phones.get(viewing);
   if (p) send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
@@ -338,6 +483,7 @@ window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { closeViewer(); return; }
     if (e.key === 'ArrowRight') { stepViewer(1); return; }
     if (e.key === 'ArrowLeft') { stepViewer(-1); return; }
+    if (e.key === 'h' || e.key === 'H') { toggleHud(); return; }
   }
   if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea')) return;
   if (e.key === '/') { e.preventDefault(); $('#mcInput').focus(); return; }

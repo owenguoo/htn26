@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import io
 import itertools
 import json
 import math
 import os
+import re
 import socket
 import uuid
 from collections import deque
@@ -20,7 +22,7 @@ from pathlib import Path
 import segno
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .coverage import Coverage
@@ -48,7 +50,7 @@ WORLD_HZ = 2             # how often phones get the shared picture (mini-map, pr
 LOOK_SECONDS = 20        # default time an operator "look" direction holds a phone
 GO_SECONDS = 90          # default time a "walk to" order stays active
 ARRIVE_M = 1.5           # a phone this close to a walk-to spot has arrived
-FOCUS_FPS = 8            # a phone expanded in a console captures and streams this fast
+FOCUS_FPS = 15           # a phone expanded in a console captures and streams this fast
 FOCUS_INTERVAL_MS = 1000 / FOCUS_FPS
 
 
@@ -72,6 +74,8 @@ class Phone:
     gps: dict | None = None          # latest browser geolocation fix
     debug: dict | None = None        # latest diagnostics the phone reported
     hidden: bool = False             # operator hid this feed from the projector
+    hud: dict | None = None          # what's on the phone's screen, sent while it's expanded in a console
+    build: str = ""                  # version of the page the phone is running (see build_id)
     searched_cells: int = 0          # coverage cells this phone was first to look at
     tilted_since: float | None = None  # when it started pointing at the floor/ceiling
     # latest frame (latest wins, never queued)
@@ -80,14 +84,17 @@ class Phone:
     frame_t: float = 0              # capture time, server clock
     frame_at: float = 0             # arrival time, server clock
     frames_total: int = 0
-    arrivals: deque = field(default_factory=lambda: deque(maxlen=120))
+    arrivals: deque = field(default_factory=lambda: deque(maxlen=120))  # (arrival ms, bytes)
     latency_ms: float | None = None
     # clock sync: phone_clock - server_clock
     clock_offset: float | None = None
     best_rtt: float = math.inf
 
     def fps(self, now: float, window_ms: float = 2000) -> float:
-        return sum(1 for t in self.arrivals if now - t <= window_ms) * 1000 / window_ms
+        return sum(1 for t, _ in self.arrivals if now - t <= window_ms) * 1000 / window_ms
+
+    def kbps(self, now: float, window_ms: float = 2000) -> float:
+        return sum(n for t, n in self.arrivals if now - t <= window_ms) * 8 / window_ms  # bytes/ms → kbit/s
 
     @property
     def color(self) -> str:
@@ -109,12 +116,14 @@ class Phone:
             "id": self.id, "index": self.index, "name": self.name, "color": self.color,
             "sim": self.sim, "device": self.device, "connected": self.connected,
             "pose": self.pose(now), "pitch": self.pitch, "calibrated": self.calibrated,
-            "fps": round(self.fps(now), 1),
+            "fps": round(self.fps(now), 1), "kbps": round(self.kbps(now)),
             "latencyMs": None if self.latency_ms is None else round(self.latency_ms),
             "stale": self.frame is None or now - self.frame_at > STALE_MS,
             "frames": self.frames_total,
             "debug": self.debug,
             "hidden": self.hidden,
+            "oldPage": self.build != build_id(),
+            "hud": self.hud if self.hud and now - self.hud["t"] < 2000 else None,
             "gps": None if not self.gps else {**self.gps, "ageMs": round(now - self.gps["t"])},
         }
 
@@ -172,6 +181,7 @@ class Hub:
         phone.sim = bool(hello.get("sim"))
         phone.device = "sim" if phone.sim else _device(str(hello.get("ua") or ""))
         phone.name = str(hello.get("name") or "")[:24]
+        phone.build = str(hello.get("build") or "")
         if isinstance(hello.get("seat"), dict):
             phone.seat = _seat(hello["seat"])
         return phone
@@ -197,7 +207,7 @@ class Hub:
         except Exception:
             return
         now = now_ms()
-        phone.arrivals.append(now)
+        phone.arrivals.append((now, len(buf)))
         t_phone = header.get("tCapture")
         if t_phone is not None and phone.clock_offset is not None:
             phone.frame_t = t_phone - phone.clock_offset
@@ -223,6 +233,8 @@ class Hub:
             # phone-side world tracking (8th Wall): already in room meters
             self._apply_orientation(phone, msg)
             self.set_external_pose({**msg, "phoneId": phone.id, "source": "slam"})
+        elif kind == "hud":
+            phone.hud = {k: v for k, v in msg.items() if k != "type"} | {"t": now_ms()}
         elif kind == "debug":
             phone.debug = {k: v for k, v in msg.items() if k != "type"}
         elif kind == "gps":
@@ -452,9 +464,11 @@ class Hub:
         for pid in wanted - self.boosted:
             if pid in self.phones:
                 await self.phones[pid].send({"type": "command", "cmd": "rate", "fps": FOCUS_FPS})
+                await self.phones[pid].send({"type": "command", "cmd": "hud", "on": True})
         for pid in self.boosted - wanted:
             if pid in self.phones:
                 await self.phones[pid].send({"type": "command", "cmd": "rate", "fps": None})
+                await self.phones[pid].send({"type": "command", "cmd": "hud", "on": False})
         self.boosted = wanted
 
     async def emit(self, event: dict) -> None:
@@ -537,6 +551,15 @@ hub = Hub()
 app = FastAPI(title="Swarm Sight hub")
 
 
+@app.middleware("http")
+async def no_stale_pages(request, call_next):
+    """Pages and scripts change often during development; make browsers (and phones) revalidate every time."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path in ("/console", "/dashboard") or request.url.path.startswith("/web/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 class FrameSubscriber:
     """Pushes each phone's latest frame to one socket, throttled per phone.
 
@@ -568,14 +591,15 @@ class FrameSubscriber:
                 if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq or (self.skip_hidden and p.hidden):
                     continue
                 interval = FOCUS_INTERVAL_MS if p.id == self.focus else self.min_interval
-                if now - self.sent_at.get(p.id, 0) < interval:
+                # 25% slack: frames arrive with jitter, and a strict check would skip every other one
+                if now - self.sent_at.get(p.id, 0) < interval * 0.75:
                     continue
                 self.sent_seq[p.id] = p.frame_seq
                 self.sent_at[p.id] = now
                 header = {"phoneId": p.id, "seq": p.frame_seq, "t": p.frame_t, "pose": p.pose(now)}
                 async with self.lock:
                     await self.ws.send_bytes(pack(header, p.frame))
-            await asyncio.sleep(0.03)
+            await asyncio.sleep(0.015)
 
 
 @app.websocket("/ws/phone")
@@ -590,6 +614,9 @@ async def ws_phone(ws: WebSocket) -> None:
             "type": "welcome", "phoneId": phone.id, "index": phone.index,
             "color": phone.color, "room": ROOM, "phase": hub.phase,
         })
+        if phone.id in hub.boosted:  # a console is watching it: a reconnected phone forgot, so tell it again
+            await phone.send({"type": "command", "cmd": "rate", "fps": FOCUS_FPS})
+            await phone.send({"type": "command", "cmd": "hud", "on": True})
         pinger = asyncio.create_task(_ping_loop(phone, ws))
         while True:
             msg = await ws.receive()
@@ -672,7 +699,7 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
 @app.websocket("/ws/dashboard")
 async def ws_dashboard(ws: WebSocket) -> None:
     """Projector and operator console. The console (role=console) still sees hidden feeds."""
-    fps = float(ws.query_params.get("thumb_fps", 3))
+    fps = float(ws.query_params.get("thumb_fps", 10))
     console = ws.query_params.get("role") == "console"
     await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url},
                             skip_hidden=not console)
@@ -723,19 +750,50 @@ def qr(data: str) -> Response:
     return Response(buf.getvalue(), media_type="image/svg+xml")
 
 
+def build_id() -> str:
+    """Changes whenever any page or script changes. Stamped onto script URLs so browsers can't reuse
+    stale code, and reported back by phones so the console can flag ones running an old page."""
+    h = hashlib.sha1()
+    for f in sorted(WEB.glob("*.*")):
+        st = f.stat()
+        h.update(f"{f.name}:{st.st_mtime_ns}:{st.st_size};".encode())
+    return h.hexdigest()[:8]
+
+
+def _versioned(text: str, build: str) -> str:
+    """Point every /web/*.js reference (script tags and module imports) at ?v=build."""
+    return re.sub(r"(/web/[\w.-]+\.js)(?=['\"])", rf"\1?v={build}", text)
+
+
+def _page(name: str) -> HTMLResponse:
+    build = build_id()
+    html = _versioned((WEB / name).read_text(), build)
+    html = html.replace("<head>", f'<head>\n  <meta name="swarm-build" content="{build}">', 1)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/")
-def phone_page() -> FileResponse:
-    return FileResponse(WEB / "phone.html")
+def phone_page() -> HTMLResponse:
+    return _page("phone.html")
 
 
 @app.get("/dashboard")
-def dashboard_page() -> FileResponse:
-    return FileResponse(WEB / "dashboard.html")
+def dashboard_page() -> HTMLResponse:
+    return _page("dashboard.html")
 
 
 @app.get("/console")
-def console_page() -> FileResponse:
-    return FileResponse(WEB / "console.html")
+def console_page() -> HTMLResponse:
+    return _page("console.html")
+
+
+@app.get("/web/{name}.js")
+def script(name: str) -> Response:
+    path = WEB / f"{name}.js"
+    if not path.is_file() or path.parent != WEB:
+        return Response(status_code=404)
+    return Response(_versioned(path.read_text(), build_id()), media_type="text/javascript",
+                    headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/web", StaticFiles(directory=WEB), name="web")

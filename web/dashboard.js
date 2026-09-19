@@ -2,7 +2,7 @@ import { makeView, drawRoom, drawCone } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
-const THUMB_FPS = Number(params.get('thumb_fps')) || 3;
+const THUMB_FPS = Number(params.get('thumb_fps')) || 10;
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
