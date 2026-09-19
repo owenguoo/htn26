@@ -184,3 +184,99 @@ def test_real_mode_preserves_planner_scanning_and_coverage(monkeypatch):
     assert hub.planner.assignments
     assert not hub.target.responders
     assert not hub.mission_complete
+
+
+@pytest.mark.parametrize('newer', ['search', 'rehearsal', 'threshold'])
+def test_superseded_confirmation_does_not_publish_found_or_success(monkeypatch, newer):
+    import httpx
+    from swarm.hub import Phone
+
+    async def run():
+        hub = Hub()
+        body = sighting(hub)
+        phone = Phone('p', 1)
+        phases = []
+        notes = []
+
+        class Socket:
+            async def send_json(self, message):
+                if message['type'] == 'phase':
+                    phases.append(message['phase'])
+
+        phone.ws = Socket()
+        hub.phones['p'] = phone
+        paused, resume = asyncio.Event(), asyncio.Event()
+        calls = 0
+
+        async def clear():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                paused.set()
+                await resume.wait()
+
+        monkeypatch.setattr(hub, 'clear_detection_overlays', clear)
+        monkeypatch.setattr(hub.planner, 'note', lambda text, *args: notes.append(text))
+        app = FastAPI()
+        auth = Auth(Settings(operator_code='test'))
+        install_routes(app, hub, auth)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test',
+                                     cookies={auth.cookie: auth.token()}) as client:
+            confirmation = asyncio.create_task(client.post('/api/search/confirm', json=body))
+            await paused.wait()
+            if newer == 'search':
+                await hub.set_phase('search')
+            elif newer == 'rehearsal':
+                assert (await client.post('/api/search/rehearsal')).status_code == 200
+            else:
+                assert (await client.put('/api/search/threshold', json={'threshold': .8})).status_code == 200
+            resume.set()
+            response = await confirmation
+        assert 'found' not in phases
+        assert response.status_code == 409
+        assert hub.search.confirmation is None
+        assert not any('Operator confirmed' in note for note in notes)
+
+    asyncio.run(run())
+
+
+def test_phase_send_rechecks_transition_after_phone_lock(monkeypatch):
+    from swarm.hub import Phone
+
+    async def run():
+        hub = Hub()
+        phone = Phone('p', 1)
+        phases = []
+        waiting, release, newer_committed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        class Gate:
+            async def __aenter__(self):
+                waiting.set()
+                await release.wait()
+
+            async def __aexit__(self, *_args):
+                pass
+
+        class Socket:
+            async def send_json(self, message):
+                phases.append(message['phase'])
+
+        async def clear():
+            if hub.phase == 'search':
+                newer_committed.set()
+
+        phone.ws = Socket()
+        phone.send_lock = Gate()
+        hub.phones['p'] = phone
+        monkeypatch.setattr(hub, 'clear_detection_overlays', clear)
+        older = asyncio.create_task(hub.set_phase('found'))
+        await waiting.wait()
+        newer = asyncio.create_task(hub.set_phase('search'))
+        await newer_committed.wait()
+        release.set()
+        await asyncio.gather(older, newer)
+        assert hub.phase == 'search'
+        assert phases == ['search']
+        assert hub.planner.enabled
+
+    asyncio.run(run())

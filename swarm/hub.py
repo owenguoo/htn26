@@ -146,6 +146,7 @@ class Hub:
         self.target = Target(ROOM, self.planner.note, lambda: self.search.mode == "rehearsal")
         # "search" by default so the hub works without an operator; the show starts at "lobby"
         self.phase = "search"
+        self._phase_generation = 0
         self.phase_started = now_ms()
         self.looking_for = ""               # what searchers should look for, shown on phones
         self.pings: list[dict] = []         # {id, x, y, label, t, phones: set | None}
@@ -380,23 +381,46 @@ class Hub:
                         pass
         await asyncio.gather(*(clear(phone) for phone in self.phones.values()))
 
-    async def set_phase(self, phase: str, *, confirmed_visual: bool = False) -> None:
+    async def set_phase(self, phase: str, *, confirmed_visual: bool = False) -> bool:
         """Re-selecting the current phase re-applies its effects (e.g. turns the planner back on)."""
         if phase not in PHASES:
-            return
-        if phase != self.phase:
+            return False
+        self._phase_generation += 1
+        generation = self._phase_generation
+        confirmation = self.search.confirmation
+        changed = phase != self.phase
+        if changed:
             # The audit keeps its original revision while live callbacks are invalidated.
             self.search.reset(preserve_confirmation=confirmed_visual and phase == "found")
             self.phase, self.phase_started = phase, now_ms()
             self.planner.note(f"Phase → {phase}")
-            await self.clear_detection_overlays()
             if self.mission:
                 self.mission.trigger()
+        revision = self.search.revision
         if phase == "search":
             self.planner.enabled = True
         elif phase in ("lobby", "calibrate", "end"):
             self.planner.enabled = False
-        await asyncio.gather(*(p.send({"type": "phase", "phase": phase}) for p in self.phones.values()))
+
+        def current() -> bool:
+            return (generation == self._phase_generation and revision == self.search.revision
+                    and (not confirmed_visual or confirmation is not None and self.search.confirmation is confirmation))
+
+        async def publish(phone: Phone) -> None:
+            # Recheck after the send lock: another transition can overtake a waiting sender.
+            async with phone.send_lock:
+                if current() and phone.ws:
+                    try:
+                        await phone.ws.send_json({"type": "phase", "phase": phase})
+                    except (RuntimeError, WebSocketDisconnect):
+                        pass
+
+        if changed:
+            await self.clear_detection_overlays()
+        if not current():
+            return False
+        await asyncio.gather(*(publish(phone) for phone in self.phones.values()))
+        return current()
 
     # ---- operator actions (console + Mission Control) --------------------------
     def phones_by_index(self, indexes: list[int] | None) -> list[Phone]:

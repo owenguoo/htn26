@@ -268,7 +268,8 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
             raise HTTPException(409, 'sighting expired or search changed')
         hub.target.remove()
         hub.mission_complete = False
-        await hub.set_phase('found', confirmed_visual=True)
+        if not await hub.set_phase('found', confirmed_visual=True):
+            raise HTTPException(409, 'confirmation superseded by newer search state')
         hub.planner.note('Operator confirmed visual sighting; target location unknown', body.phoneId)
         return state()
 
@@ -279,7 +280,8 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
         hub.target.remove()
         hub.search.mode = 'rehearsal'
         hub.mission_complete = False
-        await hub.set_phase('search')
+        if not await hub.set_phase('search'):
+            raise HTTPException(409, 'rehearsal superseded by newer search state')
         return state()
 
     @app.post('/api/search/status')
