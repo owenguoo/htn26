@@ -11,12 +11,15 @@ let st = null;               // latest hub state
 const phones = new Map();    // id → summary
 const thumbs = new Map();    // id → object URL
 let dragPos = null;          // candidate position while dragging
+let roomMap = null;          // walls / obstacles / occupancy from the mapping service
+let mapVersion = -1;
+const layers = { walls: true, unknown: true, points: true, coverage: true };
 let lastDragSend = 0;
 
 // ---------------------------------------------------------------- socket
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=1`);
+  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=2`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => setConn(true);
   ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
@@ -61,6 +64,7 @@ function onFrame(buf) {
 
 // ---------------------------------------------------------------- render
 function render() {
+  syncMap();
   renderViewer();
   renderPhases();
   renderMetrics();
@@ -92,6 +96,8 @@ function renderMetrics() {
   $('#mLive').textContent = live.length;
   $('#mPlaced').textContent = live.filter((p) => p.pose).length;
   $('#mFps').textContent = live.reduce((s, p) => s + p.fps, 0).toFixed(1);
+  const mbps = live.reduce((s, p) => s + (p.kbps || 0), 0) / 1000;
+  $('#mFpsK').textContent = `Frames / s · ${mbps.toFixed(1)} Mbps in`;
   const lats = live.map((p) => p.latencyMs).filter((x) => x != null).sort((a, b) => a - b);
   $('#mLat').textContent = lats.length ? `${lats[Math.floor(lats.length / 2)]}ms` : '–';
   $('#mSearched').textContent = `${Math.round((st.coverage?.searched || 0) * 100)}%`;
@@ -347,6 +353,112 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'p' || e.key === 'P') send({ type: 'planner', enabled: !st?.planner?.enabled });
 });
 
+// ---------------------------------------------------------------- room map (from the mapping service)
+async function syncMap() {
+  const m = st.map;
+  if (!m || m.version === mapVersion) { renderMapStatus(); return; }
+  mapVersion = m.version;
+  try {
+    roomMap = await fetch('/api/map').then((r) => r.json());
+  } catch { /* next state update retries */ mapVersion = -1; }
+  renderMapStatus();
+}
+
+function renderMapStatus() {
+  const m = st.map;
+  const has = m && (m.walls || m.obstacles || m.mapped != null);
+  $('#mapPulse').classList.toggle('live', !!(m?.updatedAt && Date.now() - m.updatedAt < 3000));
+  if (!has) { $('#mapStatus').textContent = 'No map yet · waiting for the mapping service'; return; }
+  const ago = m.updatedAt ? Math.max(0, Math.round((Date.now() - m.updatedAt) / 1000)) : null;
+  $('#mapStatus').textContent = [
+    `Map v${m.version}`, `${m.walls} wall${m.walls === 1 ? '' : 's'}`, `${m.obstacles} obstacle${m.obstacles === 1 ? '' : 's'}`,
+    m.mapped != null ? `${Math.round(m.mapped * 100)}% mapped` : null,
+    m.sources?.length ? m.sources.join(', ') : null,
+    ago != null ? (ago < 2 ? 'live' : `updated ${ago}s ago`) : null,
+  ].filter(Boolean).join(' · ');
+}
+
+$('#layers').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-layer]');
+  if (!b) return;
+  layers[b.dataset.layer] = !layers[b.dataset.layer];
+  b.classList.toggle('on', layers[b.dataset.layer]);
+});
+
+let hatch = null;
+function hatchPattern() {
+  if (hatch) return hatch;
+  const c = document.createElement('canvas');
+  c.width = c.height = 8;
+  const g = c.getContext('2d');
+  g.strokeStyle = 'rgba(255,255,255,0.07)';
+  g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, 8); g.lineTo(8, 0); g.stroke();
+  hatch = ctx.createPattern(c, 'repeat');
+  return hatch;
+}
+
+function drawUnknown() {
+  const occ = roomMap?.occupancy;
+  if (!layers.unknown || !occ) return;
+  const s = occ.cell * view.scale;
+  ctx.fillStyle = hatchPattern();
+  for (let r = 0; r < occ.rows; r++) {
+    for (let c = 0; c < occ.cols; c++) {
+      if (occ.cells[r * occ.cols + c] !== 'u') continue;
+      const [px, py] = view.toPx(occ.x0 + c * occ.cell, occ.y0 + r * occ.cell);
+      ctx.fillRect(px, py, s + 0.5, s + 0.5);
+    }
+  }
+}
+
+function drawStructure() {
+  if (!roomMap || !layers.walls) return;
+  ctx.save();
+  for (const o of roomMap.obstacles) {
+    ctx.beginPath();
+    o.polygon.forEach(([x, y], i) => { const [px, py] = view.toPx(x, y); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(237,237,237,0.16)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(237,237,237,0.7)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    if (o.label) {
+      const cx = o.polygon.reduce((s, v) => s + v[0], 0) / o.polygon.length;
+      const cy = o.polygon.reduce((s, v) => s + v[1], 0) / o.polygon.length;
+      const [px, py] = view.toPx(cx, cy);
+      ctx.fillStyle = '#a1a1a1';
+      ctx.font = '500 10px "Geist Mono", ui-monospace, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(o.label.toUpperCase(), px, py);
+    }
+  }
+  ctx.strokeStyle = '#ededed';
+  ctx.lineWidth = 3;
+  ctx.lineCap = 'round';
+  for (const w of roomMap.walls) {
+    const [ax, ay] = view.toPx(w.a[0], w.a[1]);
+    const [bx, by] = view.toPx(w.b[0], w.b[1]);
+    ctx.globalAlpha = 0.45 + 0.55 * Math.min(1, w.confidence ?? 1);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawScanPoints() {
+  if (!roomMap || !layers.points || !roomMap.points.length) return;
+  const pts = roomMap.points;
+  const shimmer = performance.now() / 600;
+  for (let i = 0; i < pts.length; i++) {
+    const [px, py] = view.toPx(pts[i][0], pts[i][1]);
+    const recent = i > pts.length - 60; // newest points glow brighter
+    ctx.fillStyle = `rgba(255,255,255,${recent ? 0.5 + 0.3 * Math.sin(shimmer + i) : 0.22})`;
+    ctx.fillRect(px - 1, py - 1, 2, 2);
+  }
+}
+
 // ---------------------------------------------------------------- map (monochrome)
 const canvas = $('#map');
 const ctx = canvas.getContext('2d');
@@ -368,9 +480,10 @@ function draw() {
   if (!view || !st) return;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
 
+  drawUnknown();
   // searched floor: faint white
   const cov = st.coverage;
-  if (cov) {
+  if (cov && layers.coverage) {
     const s = cov.cell * view.scale;
     ctx.fillStyle = 'rgba(255,255,255,0.13)';
     for (let r = 0; r < cov.rows; r++) {
@@ -384,6 +497,8 @@ function draw() {
   drawRoom(ctx, room, view, {
     colors: { floor: 'rgba(0,0,0,0)', wall: '#3e3e3e', grid: 'rgba(255,255,255,0.04)', stage: '#1a1a1a', text: '#707070' },
   });
+  drawStructure();
+  drawScanPoints();
 
   // planner assignments: thin dashed lines to the sector
   const x0 = -room.width / 2;

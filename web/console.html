@@ -136,6 +136,13 @@
     .stack { display: grid; gap: 16px; align-content: start; }
 
     #mapWrap { position: relative; height: 480px; }
+    .layers { display: flex; gap: 4px; }
+    .layers button { height: 26px; padding: 0 9px; border-radius: 6px; font-size: 12px; font-weight: 500;
+      color: var(--fg-3); border: 1px solid var(--line); }
+    .layers button:hover { color: var(--fg); }
+    .layers button.on { color: var(--fg); border-color: var(--line-2); background: var(--bg-2); }
+    .mapfoot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line);
+      font: 12px var(--mono); color: var(--fg-3); }
     #map { position: absolute; inset: 0; width: 100%; height: 100%; }
 
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -258,7 +265,7 @@
     <section class="metrics">
       <div class="metric"><div class="k">Phones live</div><div class="v" id="mLive">0</div></div>
       <div class="metric"><div class="k">Placed</div><div class="v" id="mPlaced">0</div></div>
-      <div class="metric"><div class="k">Frames / s</div><div class="v" id="mFps">0</div></div>
+      <div class="metric"><div class="k" id="mFpsK">Frames / s</div><div class="v" id="mFps">0</div></div>
       <div class="metric"><div class="k">Latency p50</div><div class="v" id="mLat">–</div></div>
       <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
       <div class="metric" id="mCandBox"><div class="k">Candidate</div><div class="v" id="mCand">–</div></div>
@@ -267,8 +274,15 @@
     <section class="grid">
       <div class="card">
         <div class="card-h"><h2>Floor plan</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
-          <span class="faint" style="font-size:12px">Drag the candidate · right-click to ping</span></div>
+          <div class="layers" id="layers">
+            <button type="button" data-layer="walls" class="on">Walls</button>
+            <button type="button" data-layer="unknown" class="on">Unexplored</button>
+            <button type="button" data-layer="points" class="on">Scan points</button>
+            <button type="button" data-layer="coverage" class="on">Coverage</button>
+          </div></div>
         <div id="mapWrap"><canvas id="map"></canvas></div>
+        <div class="mapfoot"><span class="pulse" id="mapPulse"></span><span id="mapStatus">No map yet · waiting for the mapping service</span>
+          <span class="spacer"></span><span>Drag the candidate · right-click to ping</span></div>
       </div>
       <div class="stack">
         <div class="card">

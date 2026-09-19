@@ -48,7 +48,7 @@ WORLD_HZ = 2             # how often phones get the shared picture (mini-map, pr
 LOOK_SECONDS = 20        # default time an operator "look" direction holds a phone
 GO_SECONDS = 90          # default time a "walk to" order stays active
 ARRIVE_M = 1.5           # a phone this close to a walk-to spot has arrived
-FOCUS_FPS = 8            # a phone expanded in a console captures and streams this fast
+FOCUS_FPS = 15           # a phone expanded in a console captures and streams this fast
 FOCUS_INTERVAL_MS = 1000 / FOCUS_FPS
 
 
@@ -80,14 +80,17 @@ class Phone:
     frame_t: float = 0              # capture time, server clock
     frame_at: float = 0             # arrival time, server clock
     frames_total: int = 0
-    arrivals: deque = field(default_factory=lambda: deque(maxlen=120))
+    arrivals: deque = field(default_factory=lambda: deque(maxlen=120))  # (arrival ms, bytes)
     latency_ms: float | None = None
     # clock sync: phone_clock - server_clock
     clock_offset: float | None = None
     best_rtt: float = math.inf
 
     def fps(self, now: float, window_ms: float = 2000) -> float:
-        return sum(1 for t in self.arrivals if now - t <= window_ms) * 1000 / window_ms
+        return sum(1 for t, _ in self.arrivals if now - t <= window_ms) * 1000 / window_ms
+
+    def kbps(self, now: float, window_ms: float = 2000) -> float:
+        return sum(n for t, n in self.arrivals if now - t <= window_ms) * 8 / window_ms  # bytes/ms → kbit/s
 
     @property
     def color(self) -> str:
@@ -109,7 +112,7 @@ class Phone:
             "id": self.id, "index": self.index, "name": self.name, "color": self.color,
             "sim": self.sim, "device": self.device, "connected": self.connected,
             "pose": self.pose(now), "pitch": self.pitch, "calibrated": self.calibrated,
-            "fps": round(self.fps(now), 1),
+            "fps": round(self.fps(now), 1), "kbps": round(self.kbps(now)),
             "latencyMs": None if self.latency_ms is None else round(self.latency_ms),
             "stale": self.frame is None or now - self.frame_at > STALE_MS,
             "frames": self.frames_total,
@@ -148,6 +151,8 @@ class Hub:
         self.directives_cleared: list[str] = []
         self.mission_complete = False       # every responder reached the found candidate
         self.boosted: set[str] = set()      # phones told to capture faster (expanded in a console)
+        # room map from the mapping service (walls, obstacles, occupancy); clients fetch /api/map on version change
+        self.room_map: dict = empty_map()
         self.mission = None                 # Mission Control (LLM); created in main()
 
     # ---- phone lifecycle -------------------------------------------------
@@ -197,7 +202,7 @@ class Hub:
         except Exception:
             return
         now = now_ms()
-        phone.arrivals.append(now)
+        phone.arrivals.append((now, len(buf)))
         t_phone = header.get("tCapture")
         if t_phone is not None and phone.clock_offset is not None:
             phone.frame_t = t_phone - phone.clock_offset
@@ -483,7 +488,7 @@ class Hub:
             found = self.target.pos if self.target.found_by else None
             pings = self.active_pings(now)
             base = {
-                "type": "world", "phase": self.phase, "phones": others,
+                "type": "world", "phase": self.phase, "phones": others, "mapVersion": self.room_map["version"],
                 "coverage": {k: cov[k] for k in ("cols", "rows", "cell", "x0", "cells")},
                 "searched": cov["searched"], "searchers": len(live),
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
@@ -511,12 +516,37 @@ class Hub:
                 "target": self.target.snapshot(now),
                 "phase": self.phase, "phaseStartedAt": self.phase_started,
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
+                "map": map_summary(self.room_map),
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
                 "mission": self.mission.status() if self.mission else {"ready": False, "why": "not started"}}
 
     async def command(self, target: str, cmd: dict) -> None:
         phones = self.phones.values() if target == "all" else [self.phones.get(target)]
         await asyncio.gather(*(p.send({"type": "command", **cmd}) for p in phones if p))
+
+
+MAX_MAP_POINTS = 3000
+
+
+def empty_map() -> dict:
+    return {"version": 0, "updatedAt": None, "sources": [], "walls": [], "obstacles": [],
+            "occupancy": None, "points": []}
+
+
+def map_summary(m: dict) -> dict:
+    """Small enough to ride along in every state update; clients GET /api/map when version changes."""
+    occ = m["occupancy"]
+    mapped = None
+    if occ:
+        cells = occ["cells"]
+        mapped = round(sum(ch != "u" for ch in cells) / max(len(cells), 1), 3)
+    return {"version": m["version"], "updatedAt": m["updatedAt"], "walls": len(m["walls"]),
+            "obstacles": len(m["obstacles"]), "points": len(m["points"]), "mapped": mapped,
+            "sources": m["sources"][-3:]}
+
+
+def _pt(v) -> list[float]:
+    return [round(float(v[0]), 3), round(float(v[1]), 3)]
 
 
 def _device(ua: str) -> str:
@@ -535,6 +565,15 @@ def _seat(seat: dict) -> dict | None:
 
 hub = Hub()
 app = FastAPI(title="Swarm Sight hub")
+
+
+@app.middleware("http")
+async def no_stale_pages(request, call_next):
+    """Pages and scripts change often during development; make browsers (and phones) revalidate every time."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path in ("/console", "/dashboard") or request.url.path.startswith("/web/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 class FrameSubscriber:
@@ -568,14 +607,15 @@ class FrameSubscriber:
                 if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq or (self.skip_hidden and p.hidden):
                     continue
                 interval = FOCUS_INTERVAL_MS if p.id == self.focus else self.min_interval
-                if now - self.sent_at.get(p.id, 0) < interval:
+                # 25% slack: frames arrive with jitter, and a strict check would skip every other one
+                if now - self.sent_at.get(p.id, 0) < interval * 0.75:
                     continue
                 self.sent_seq[p.id] = p.frame_seq
                 self.sent_at[p.id] = now
                 header = {"phoneId": p.id, "seq": p.frame_seq, "t": p.frame_t, "pose": p.pose(now)}
                 async with self.lock:
                     await self.ws.send_bytes(pack(header, p.frame))
-            await asyncio.sleep(0.03)
+            await asyncio.sleep(0.015)
 
 
 @app.websocket("/ws/phone")
@@ -672,7 +712,7 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
 @app.websocket("/ws/dashboard")
 async def ws_dashboard(ws: WebSocket) -> None:
     """Projector and operator console. The console (role=console) still sees hidden feeds."""
-    fps = float(ws.query_params.get("thumb_fps", 3))
+    fps = float(ws.query_params.get("thumb_fps", 10))
     console = ws.query_params.get("role") == "console"
     await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url},
                             skip_hidden=not console)
@@ -699,6 +739,61 @@ def get_state() -> dict:
 def post_pose(body: dict) -> dict:
     """Stub for the positioning service: {phoneId, x, y, heading?, confidence?, source?}."""
     return {"ok": hub.set_external_pose(body)}
+
+
+@app.get("/api/map")
+def get_map() -> dict:
+    return hub.room_map
+
+
+@app.post("/api/map")
+def post_map(body: dict) -> dict:
+    """From the mapping service. All positions are room meters (same frame as poses and room.json).
+    {
+      "mode": "merge" | "replace",       # merge (default) appends walls/obstacles; replace swaps everything
+      "source": "mapper-1",              # who sent it (shown on the console)
+      "walls": [{"a": [x, y], "b": [x, y], "confidence": 0.9}],
+      "obstacles": [{"polygon": [[x, y], ...], "label": "table", "confidence": 0.8}],
+      "occupancy": {"cols", "rows", "cell", "x0", "y0",
+                    "cells": "…"},       # row-major string: u = unknown, f = free, o = occupied
+      "points": [[x, y], ...]            # optional scan points (latest wins, capped)
+    }"""
+    m = hub.room_map
+    if body.get("mode") == "replace":
+        m.update({k: v for k, v in empty_map().items() if k not in ("version", "sources")})
+    try:
+        walls = [{"a": _pt(w["a"]), "b": _pt(w["b"]), "confidence": float(w.get("confidence", 1))}
+                 for w in body.get("walls", [])]
+        obstacles = [{"polygon": [_pt(v) for v in o["polygon"]], "label": str(o.get("label", ""))[:24],
+                      "confidence": float(o.get("confidence", 1))}
+                     for o in body.get("obstacles", []) if len(o.get("polygon", [])) >= 3]
+        occ = body.get("occupancy")
+        if occ is not None:
+            occ = {k: occ[k] for k in ("cols", "rows", "cell", "x0", "y0", "cells")}
+            if len(occ["cells"]) != occ["cols"] * occ["rows"]:
+                return {"ok": False, "error": "occupancy cells must be cols*rows long"}
+        points = [_pt(v) for v in body.get("points", [])][-MAX_MAP_POINTS:]
+    except (KeyError, TypeError, ValueError, IndexError) as e:
+        return {"ok": False, "error": f"bad map data: {e}"}
+    m["walls"] += walls
+    m["obstacles"] += obstacles
+    if occ is not None:
+        m["occupancy"] = occ
+    if "points" in body:
+        m["points"] = points
+    src = str(body.get("source") or "mapper")[:32]
+    if src not in m["sources"]:
+        m["sources"].append(src)
+    m["version"] += 1
+    m["updatedAt"] = now_ms()
+    return {"ok": True, "version": m["version"], "walls": len(m["walls"]), "obstacles": len(m["obstacles"])}
+
+
+@app.delete("/api/map")
+def delete_map() -> dict:
+    version = hub.room_map["version"] + 1
+    hub.room_map = empty_map() | {"version": version, "updatedAt": now_ms()}
+    return {"ok": True}
 
 
 @app.post("/api/detections")

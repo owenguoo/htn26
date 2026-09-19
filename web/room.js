@@ -73,6 +73,42 @@ export function drawRoom(ctx, room, view, { grid = true, colors = {} } = {}) {
   ctx.fillText('STAGE', (sx + ex) / 2, (sy + ey) / 2);
 }
 
+// Walls and obstacles from the mapping service (GET /api/map).
+export function drawMapStructure(ctx, view, map, { wall = '#ffffff', wallWidth = 3, obstacleFill = 'rgba(255,255,255,0.15)',
+  obstacleStroke = 'rgba(255,255,255,0.6)', labels = false, labelColor = 'rgba(255,255,255,0.6)' } = {}) {
+  if (!map) return;
+  ctx.save();
+  for (const o of map.obstacles || []) {
+    ctx.beginPath();
+    o.polygon.forEach(([x, y], i) => { const [px, py] = view.toPx(x, y); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
+    ctx.closePath();
+    ctx.fillStyle = obstacleFill;
+    ctx.fill();
+    ctx.strokeStyle = obstacleStroke;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    if (labels && o.label) {
+      const cx = o.polygon.reduce((s, v) => s + v[0], 0) / o.polygon.length;
+      const cy = o.polygon.reduce((s, v) => s + v[1], 0) / o.polygon.length;
+      const [px, py] = view.toPx(cx, cy);
+      ctx.fillStyle = labelColor;
+      ctx.font = '600 10px ui-sans-serif, system-ui';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(o.label.toUpperCase(), px, py);
+    }
+  }
+  ctx.strokeStyle = wall;
+  ctx.lineWidth = wallWidth;
+  ctx.lineCap = 'round';
+  for (const w of map.walls || []) {
+    const [ax, ay] = view.toPx(w.a[0], w.a[1]);
+    const [bx, by] = view.toPx(w.b[0], w.b[1]);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  }
+  ctx.restore();
+}
+
 // Filled view wedge from (x, y) along `heading`.
 export function drawCone(ctx, view, x, y, heading, fovDeg, length, fill, stroke) {
   const [px, py] = view.toPx(x, y);

@@ -1,8 +1,8 @@
-import { makeView, drawRoom, drawCone } from '/web/room.js';
+import { makeView, drawRoom, drawCone, drawMapStructure } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
-const THUMB_FPS = Number(params.get('thumb_fps')) || 3;
+const THUMB_FPS = Number(params.get('thumb_fps')) || 10;
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -20,6 +20,8 @@ let planner = null;         // sector assignments + log from the hub
 let target = null;          // mock candidate from the hub
 let phase = null;           // show phase from the hub
 let pings = [];             // active pings from the hub
+let roomMap = null;         // walls and obstacles from the mapping service
+let mapVersion = -1;
 let dragPos = null;         // candidate position while the operator drags it
 let frameCount = 0;         // thumbnails received, for a sanity check in the console
 
@@ -51,6 +53,10 @@ function onJson(msg) {
     target = msg.target || null;
     phase = msg.phase || null;
     pings = msg.pings || [];
+    if (msg.map && msg.map.version !== mapVersion) {
+      mapVersion = msg.map.version;
+      fetch('/api/map').then((r) => r.json()).then((m) => { roomMap = m; }).catch(() => { mapVersion = -1; });
+    }
     renderPlanner();
     const seen = new Set();
     for (const p of msg.phones) {
@@ -360,6 +366,7 @@ function drawMap() {
   ctx.clearRect(0, 0, w, h);
   drawCoverage();
   drawRoom(ctx, room, view, { colors: { floor: 'rgba(0,0,0,0)' } });
+  drawMapStructure(ctx, view, roomMap, { labels: true });
   drawPlanner();
 
   const list = [...phones.values()].filter((p) => p.pose).sort((a, b) => a.index - b.index);

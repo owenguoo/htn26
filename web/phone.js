@@ -1,11 +1,11 @@
-import { loadRoom, makeView, drawRoom, drawCone } from '/web/room.js';
+import { loadRoom, makeView, drawRoom, drawCone, drawMapStructure } from '/web/room.js';
 import { startSlam, cameraForward, slamDebug } from '/web/slam.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
-const FPS = Number(params.get('fps')) || 2;          // frames per second sent to the hub
+const FPS = Number(params.get('fps')) || 10;          // frames per second sent to the hub
 const WIDTH = Number(params.get('w')) || 480;         // frame width in px
-const QUALITY = Number(params.get('q')) || 0.6;       // JPEG quality
+const QUALITY = Number(params.get('q')) || 0.5;       // JPEG quality
 const FAKE = params.has('fake');                     // no camera: send a generated test pattern
 const SLAM = params.has('slam') && !FAKE;             // 8th Wall world tracking for position + heading
 const SLAM_SCALE = params.get('slam') === 'responsive' ? 'responsive' : 'absolute';
@@ -27,6 +27,7 @@ const state = {
   ori: null, yaw: null, pitch: null, absYaw: null,
   guide: null,  // current search assignment from the planner
   world: null,  // shared picture from the hub: other phones, coverage, pings, progress
+  roomMap: null, mapVersion: -1,  // walls and obstacles from the mapping service
   pings: new Map(),  // id → {x, y, label, until}
   dets: null,   // detection boxes to draw: {boxes, until}
   audio: null,
@@ -480,6 +481,7 @@ function drawSeatMap() {
     }
   }
   drawRoom(ctx, state.room, v, { grid: false, colors: { floor: 'rgba(0,0,0,0)' } });
+  drawMapStructure(ctx, v, state.roomMap, { wallWidth: 2 });
   $('#seatHint').textContent = state.seat ? 'Your spot (tap to move)' : 'Tap where you are on the map';
   // teammates
   for (const p of w?.phones || []) {
@@ -786,6 +788,10 @@ function myPos() {
 
 function onWorld(msg) {
   state.world = msg;
+  if (msg.mapVersion !== state.mapVersion) {
+    state.mapVersion = msg.mapVersion;
+    fetch('/api/map').then((r) => r.json()).then((m) => { state.roomMap = m; }).catch(() => { state.mapVersion = -1; });
+  }
   for (const pg of msg.pings || []) {
     if (!state.pings.has(pg.id)) {
       state.pings.set(pg.id, { x: pg.x, y: pg.y, label: pg.label, until: Date.now() + 12000 - pg.ageMs });
