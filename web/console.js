@@ -1,3 +1,4 @@
+import { frameKey, freshSighting, scoreLabel } from '/web/inference-ui.js';
 import { makeView, drawRoom, drawCone } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
@@ -10,6 +11,10 @@ let room = null;
 let st = null;               // latest hub state
 const phones = new Map();    // id → summary
 const thumbs = new Map();    // id → object URL
+const sourceFrames = new Map();
+let snapshotAt = 0;
+let authenticated = false;
+let searchBusy = false;
 let dragPos = null;          // candidate position while dragging
 let lastDragSend = 0;
 
@@ -24,6 +29,7 @@ function connect() {
 }
 
 function setConn(live) {
+  if (!live) { st = null; clearSourceFrames(); renderSearch(); renderAnalysis(); }
   $('#connDot').classList.toggle('live', live);
   $('#connText').textContent = live ? 'Live' : 'Reconnecting';
 }
@@ -41,6 +47,7 @@ function onJson(msg) {
     onMission(msg);
   } else if (msg.type === 'state') {
     st = msg;
+    snapshotAt = performance.now();
     phones.clear();
     for (const p of msg.phones) phones.set(p.id, p);
     for (const id of [...thumbs.keys()]) if (!phones.has(id)) { URL.revokeObjectURL(thumbs.get(id)); thumbs.delete(id); }
@@ -50,8 +57,19 @@ function onJson(msg) {
 
 function onFrame(buf) {
   const n = new DataView(buf).getUint32(0);
-  const { phoneId } = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  const { phoneId } = header;
   const url = URL.createObjectURL(new Blob([new Uint8Array(buf, 4 + n)], { type: 'image/jpeg' }));
+  if (phoneId === viewing) {
+    const key = frameKey(header);
+    if (sourceFrames.has(key)) URL.revokeObjectURL(sourceFrames.get(key).url);
+    sourceFrames.set(key, { ...header, bytes: buf.byteLength, url: URL.createObjectURL(new Blob([new Uint8Array(buf, 4 + n)], {type: 'image/jpeg'})) });
+    while (sourceFrames.size > 24 || [...sourceFrames.values()].reduce((n, frame) => n + frame.bytes, 0) > 8_000_000) {
+      const first = sourceFrames.keys().next().value;
+      URL.revokeObjectURL(sourceFrames.get(first).url);
+      sourceFrames.delete(first);
+    }
+  }
   if (thumbs.has(phoneId)) URL.revokeObjectURL(thumbs.get(phoneId));
   thumbs.set(phoneId, url);
   const img = document.querySelector(`img[data-thumb="${CSS.escape(phoneId)}"]`);
@@ -62,6 +80,7 @@ function onFrame(buf) {
 // ---------------------------------------------------------------- render
 function render() {
   renderViewer();
+  renderSearch();
   renderPhases();
   renderMetrics();
   renderControls();
@@ -184,6 +203,7 @@ $('#phones').addEventListener('click', (e) => {
 let viewing = null; // phone id shown large
 
 function openViewer(id) {
+  clearSourceFrames();
   viewing = id;
   $('#vImg').removeAttribute('src');
   $('#vNone').style.display = '';
@@ -195,6 +215,7 @@ function openViewer(id) {
 
 function closeViewer() {
   viewing = null;
+  clearSourceFrames();
   $('#viewer').classList.remove('on');
   send({ type: 'focus', phoneId: null });
 }
@@ -207,6 +228,7 @@ function stepViewer(d) {
 
 function renderViewer() {
   if (!viewing) return;
+  renderAnalysis();
   const p = phones.get(viewing);
   if (!p) { closeViewer(); return; }
   $('#vNum').textContent = `#${p.index}`;
@@ -534,3 +556,167 @@ function escapeHtml(s) {
 
 connect();
 requestAnimationFrame(draw);
+
+async function searchApi(path, options = {}) {
+  const response = await fetch(path, {credentials: 'same-origin', ...options});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (response.status === 401) { authenticated = false; renderSearch(); }
+    throw new Error(typeof body.detail === 'string' ? body.detail : `Request failed (${response.status})`);
+  }
+  return body;
+}
+
+function renderSearch() {
+  $('#loginForm').hidden = authenticated;
+  $('#logout').hidden = !authenticated;
+  $('#searchTools').hidden = !authenticated;
+  $('#searchTools').disabled = searchBusy;
+  const search = st?.search;
+  $('#searchStatus').textContent = search ? `Worker: ${search.status.replaceAll('_', ' ')} · ${search.referenceAvailable ? 'Reference registered' : 'No reference'} · ${search.active ? 'Searching' : 'Paused'}` : 'Waiting for hub connection';
+  if (search && document.activeElement !== $('#threshold')) $('#threshold').value = search.threshold.toFixed(2);
+}
+
+async function searchAction(action) {
+  if (searchBusy) return;
+  searchBusy = true;
+  renderSearch();
+  try { await action(); } catch (error) { $('#searchMessage').textContent = error.message; }
+  finally { searchBusy = false; renderSearch(); }
+}
+
+$('#loginForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  searchAction(async () => {
+    await searchApi('/api/session', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code: $('#operatorCode').value})});
+    $('#operatorCode').value = '';
+    authenticated = true;
+    $('#searchMessage').textContent = 'Signed in';
+    ws?.close();
+  });
+});
+$('#logout').addEventListener('click', () => searchAction(async () => {
+  await searchApi('/api/session', {method: 'DELETE'});
+  authenticated = false;
+  $('#searchMessage').textContent = 'Signed out';
+  clearReferencePreview();
+  ws?.close();
+}));
+function clearReferencePreview() {
+  $('#referencePreview').hidden = true;
+  $('#personChoices').replaceChildren();
+  $('#referenceFile').value = '';
+}
+$('#clearReference').addEventListener('click', () => searchAction(async () => {
+  await searchApi('/api/search/reference', {method: 'DELETE'});
+  clearReferencePreview();
+  if (st?.search) st.search.sightings = [];
+  clearSourceFrames();
+  $('#searchMessage').textContent = 'Reference cleared';
+}));
+$('#saveThreshold').addEventListener('click', () => {
+  const input = $('#threshold');
+  if (!input.reportValidity() || !input.value) return;
+  const threshold = Number(input.value);
+  searchAction(async () => {
+    await searchApi('/api/search/threshold', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({threshold})});
+    if (st?.search) st.search.sightings = [];
+    clearSourceFrames();
+    $('#searchMessage').textContent = `Threshold set to ${threshold.toFixed(2)}`;
+  });
+});
+
+function paintPeople(canvas, detections, selected = -1) {
+  const ctx = canvas.getContext('2d');
+  ctx.lineWidth = Math.max(2, canvas.width / 220);
+  ctx.font = `600 ${Math.max(16, canvas.width / 40)}px system-ui`;
+  detections.forEach((d, i) => {
+    const [x1, y1, x2, y2] = d.box;
+    ctx.strokeStyle = selected === i ? '#ff4d4d' : '#fff';
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(x1, Math.max(0, y1 - 32), 120, 32);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`Person ${i + 1}`, x1 + 4, Math.max(24, y1 - 8));
+  });
+}
+$('#referenceFile').addEventListener('change', () => {
+  const file = $('#referenceFile').files[0];
+  if (!file) return;
+  searchAction(async () => {
+    $('#personChoices').replaceChildren();
+    $('#referencePreview').hidden = true;
+    $('#searchMessage').textContent = 'Finding people in the reference…';
+    if (file.size > 25_000_000) throw new Error('Choose a photo smaller than 25 MB.');
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    try { image.src = url; await image.decode(); } finally { URL.revokeObjectURL(url); }
+    const photo = document.createElement('canvas');
+    const scale = Math.min(1, 1280 / Math.max(image.naturalWidth, image.naturalHeight));
+    photo.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    photo.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    photo.getContext('2d').drawImage(image, 0, 0, photo.width, photo.height);
+    const blob = await new Promise((resolve, reject) => photo.toBlob(b => b ? resolve(b) : reject(new Error('Could not read image')), 'image/jpeg', .85));
+    const result = await searchApi('/api/search/reference/people', {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: blob});
+    const preview = $('#referencePreview');
+    preview.width = photo.width; preview.height = photo.height; preview.hidden = false;
+    preview.getContext('2d').drawImage(photo, 0, 0);
+    paintPeople(preview, result.detections);
+    $('#searchMessage').textContent = result.detections.length ? 'Choose the numbered person to search for.' : 'No people detected. Try another photo.';
+    result.detections.forEach((person, index) => {
+      const button = document.createElement('button');
+      button.className = 'btn'; button.textContent = `Person ${index + 1}`;
+      button.addEventListener('click', () => searchAction(async () => {
+        await searchApi(`/api/search/reference?${new URLSearchParams({box: person.box.join(',')})}`, {method: 'PUT', headers: {'Content-Type': 'image/jpeg'}, body: blob});
+        if (st?.search) st.search.sightings = [];
+        clearSourceFrames();
+        preview.getContext('2d').drawImage(photo, 0, 0);
+        paintPeople(preview, result.detections, index);
+        $('#searchMessage').textContent = `Person ${index + 1} selected. Appearance similarity suggests likely sightings, not confirmed identity.`;
+      }));
+      $('#personChoices').append(button);
+    });
+  });
+});
+
+let analysisKey = null;
+function clearSourceFrames() {
+  for (const frame of sourceFrames.values()) URL.revokeObjectURL(frame.url);
+  sourceFrames.clear();
+  analysisKey = null;
+  $('#analyzedFrame').hidden = true;
+}
+function renderAnalysis() {
+  const canvas = $('#analyzedFrame');
+  const result = st?.search?.sightings?.find(s => s.phoneId === viewing && freshSighting(s, st.search, st.t, snapshotAt, performance.now()));
+  if (!result) {
+    analysisKey = null; canvas.hidden = true;
+    $('#analysisMeta').textContent = 'No current result';
+    return;
+  }
+  const age = Math.max(0, Math.round(st.t - result.t + performance.now() - snapshotAt));
+  const scores = result.boxes.map(scoreLabel).join(' / ') || 'No people detected';
+  const frame = sourceFrames.get(frameKey(result));
+  $('#analysisMeta').textContent = `${result.matched ? 'Likely sighting' : 'No likely match'} · Frame ${result.seq} · ${age} ms old · ${scores}${frame ? '' : ' · Exact preview unavailable'}`;
+  if (!frame) { analysisKey = null; canvas.hidden = true; return; }
+  const key = frameKey(result);
+  if (analysisKey === key) return;
+  analysisKey = key;
+  canvas.hidden = true;
+  const image = new Image();
+  image.onload = () => {
+    if (analysisKey !== key || !sourceFrames.has(key)) return;
+    canvas.width = result.width; canvas.height = result.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    ctx.lineWidth = 3;
+    for (const box of result.boxes) {
+      ctx.strokeStyle = box.similarity >= st.search.threshold ? '#ff4d4d' : '#fff';
+      ctx.strokeRect(box.x * canvas.width, box.y * canvas.height, box.w * canvas.width, box.h * canvas.height);
+    }
+    canvas.hidden = false;
+  };
+  image.src = frame.url;
+}
+setInterval(() => { if (viewing) renderAnalysis(); }, 100);
+searchApi('/api/session').then(session => { authenticated = session.authenticated; renderSearch(); }).catch(error => { $('#searchMessage').textContent = error.message; });

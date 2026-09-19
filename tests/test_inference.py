@@ -348,3 +348,34 @@ def test_reference_delete_holds_gate_while_clearing_overlays(monkeypatch):
             assert hub.search.target_version is None
             assert worker_calls == ['DELETE']
     asyncio.run(run())
+
+def test_detection_delivery_preserves_scores_and_current_threshold(monkeypatch):
+    from swarm.control import Auth, Settings
+    from swarm.detection import FrameSnapshot
+    from swarm.protocol import now_ms
+    from starlette.requests import Request
+
+    async def run():
+        hub = module.Hub()
+        hub.search.set_reference('v')
+        hub.search.connect('p', 's')
+        timestamp = now_ms()
+        hub.search.record_frame(FrameSnapshot('p', 's', 1, timestamp, 10, 10, None))
+        delivered = []
+        class Socket:
+            async def send_json(self, message):
+                delivered.append(message)
+        phone = module.Phone(id='p', index=1, name='p')
+        phone.ws = Socket()
+        hub.phones['p'] = phone
+        monkeypatch.setattr(module, 'hub', hub)
+        monkeypatch.setattr(module, 'auth', Auth(Settings(bridge_key='key')))
+        request = Request({'type': 'http', 'headers': [(b'authorization', b'Bearer key')]})
+        box = dict(x=.1, y=.1, w=.5, h=.5, detectionScore=.91, similarity=.73)
+        body = dict(phoneId='p', streamId='s', seq=1, t=timestamp, searchRevision=hub.search.revision,
+            targetVersion='v', width=10, height=10, boxes=[box], queueMs=0., inferenceMs=1., matchingMs=1.)
+        await module.post_detections(body, request)
+        assert delivered[0]['threshold'] == .70
+        assert delivered[0]['boxes'][0]['similarity'] == .73
+        assert delivered[0]['boxes'][0]['detectionScore'] == .91
+    asyncio.run(run())

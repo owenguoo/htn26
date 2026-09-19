@@ -1,3 +1,4 @@
+import { freshSighting } from '/web/inference-ui.js';
 import { makeView, drawRoom, drawCone } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
@@ -18,6 +19,9 @@ let hoverId = null;
 let coverage = null;        // look-count grid from the hub
 let planner = null;         // sector assignments + log from the hub
 let target = null;          // mock candidate from the hub
+let search = null;
+let searchTime = 0;
+let searchReceived = 0;
 let phase = null;           // show phase from the hub
 let pings = [];             // active pings from the hub
 let dragPos = null;         // candidate position while the operator drags it
@@ -30,6 +34,8 @@ function connect() {
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => $('#pulse').classList.add('ok');
   ws.onclose = () => {
+    search = null;
+    renderTiles();
     $('#pulse').classList.remove('ok');
     setTimeout(connect, 1000);
   };
@@ -46,6 +52,9 @@ function onJson(msg) {
     setJoinUrl(store.get('swarm.joinUrl') || msg.joinUrl);
     resizeMap();
   } else if (msg.type === 'state') {
+    search = msg.search;
+    searchTime = msg.t;
+    searchReceived = performance.now();
     coverage = msg.coverage || null;
     planner = msg.planner || null;
     target = msg.target || null;
@@ -130,6 +139,7 @@ function renderTiles() {
       p.gps ? `GPS ±${Math.round(p.gps.accuracy)}m` : null,
     ].filter(Boolean).join(' · ');
     const tags = [];
+    if (search?.sightings?.some(s => s.phoneId === p.id && s.matched && freshSighting(s, search, searchTime, searchReceived, performance.now()))) tags.push(['LIKELY SIGHTING', 'warn']);
     if (p.sim) tags.push(['SIM', '']);
     else if (p.device) tags.push([p.device.toUpperCase(), '']);
     if (!p.connected) tags.push(['OFFLINE', 'bad']);
@@ -535,3 +545,5 @@ function updateGps() {
 window.swarmDebug = () => ({ phones: phones.size, frames: frameCount });
 connect();
 requestAnimationFrame(drawMap);
+
+setInterval(renderTiles, 250);

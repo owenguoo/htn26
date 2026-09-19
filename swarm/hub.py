@@ -799,7 +799,7 @@ async def post_detections(body: dict, request: Request) -> dict:
                     or hub.search.latest[result.phoneId].result.seq != result.seq):
                 raise HTTPException(409, 'search changed')
             if phone.ws:
-                await phone.ws.send_json({'type': 'command', 'cmd': 'detections', **result.model_dump(), 'ttlMs': 1500})
+                await phone.ws.send_json({'type': 'command', 'cmd': 'detections', **result.model_dump(), 'threshold': hub.search.threshold, 'ttlMs': 1500})
     return {'ok': True, 'boxes': len(result.boxes)}
 
 
