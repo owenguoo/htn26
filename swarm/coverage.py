@@ -101,6 +101,24 @@ class Coverage:
                 self.prob[row * self.cols + col] *= 1 + BOOST_GAIN * score * g
         self._normalize()
 
+    def adjust(self, factor: float, x: float | None = None, y: float | None = None, radius: float = 2.0,
+               cells: list[int] | None = None) -> None:
+        """Evidence that isn't a camera look, e.g. "last seen near the stage" or "staff already checked the
+        back rows": multiply the probability around (x, y) (fading out over about `radius` meters), or of
+        the given cells, by `factor` (>1 more likely, <1 less likely), then renormalize."""
+        if cells is not None:
+            for c in cells:
+                self.prob[c] *= factor
+        else:
+            sigma = max(radius, self.cell) / 2
+            for i in range(len(self.prob)):
+                row, col = divmod(i, self.cols)
+                d2 = (self.x0 + (col + 0.5) * self.cell - x) ** 2 + ((row + 0.5) * self.cell - y) ** 2
+                self.prob[i] *= 1 + (factor - 1) * math.exp(-d2 / (2 * sigma * sigma))
+        floor = 1e-6 / len(self.prob)  # never exactly zero: "ruled out" can be wrong
+        self.prob = [max(p, floor) for p in self.prob]
+        self._normalize()
+
     def _normalize(self) -> None:
         total = sum(self.prob)
         if total > 0:
