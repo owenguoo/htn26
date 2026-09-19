@@ -175,8 +175,8 @@ extension View {
     /// which also pinned the phase card and the seat picker — so a light-mode
     /// operator got a dark modal card for no reason. But a material *is*
     /// scheme-dependent: `.ultraThinMaterial` resolved light would put the
-    /// leave button's white glyph on a white blur. So the camera layers opt in
-    /// explicitly, and everything else follows the operator's choice.
+    /// gear's white glyph on a white blur. So the camera layers opt in
+    /// explicitly, and everything else follows the window (always dark).
     func cameraChrome() -> some View {
         environment(\.colorScheme, .dark)
     }

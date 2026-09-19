@@ -6,7 +6,7 @@ import SwarmCore
 /// The HUD proper — compass tape, banner, toast, floating markers, detection
 /// boxes — is drawn from `frame.hud`, the same value sent to the operator
 /// console, so phone and console show the same thing. What is phone-only sits
-/// around it: the identity badge, the status pill, the mini-map, the seat picker.
+/// around it: the status pill, the mini-map, the seat picker.
 ///
 /// Everything it draws comes from `OverlayModel` in SwarmCore, so the decisions
 /// — which way to point, when an arrow is stale, when to stop showing a flash —
@@ -15,17 +15,15 @@ public struct OperatorView: View {
     let model: OperatorViewModel
     var showDebug: Bool
     var showMiniMap: Bool
-    var onRequestLeave: (() -> Void)?
     var onRequestSettings: (() -> Void)?
 
     @State private var isPickingSeat = false
 
     public init(model: OperatorViewModel, showDebug: Bool = false, showMiniMap: Bool = true,
-                onRequestLeave: (() -> Void)? = nil, onRequestSettings: (() -> Void)? = nil) {
+                onRequestSettings: (() -> Void)? = nil) {
         self.model = model
         self.showDebug = showDebug
         self.showMiniMap = showMiniMap
-        self.onRequestLeave = onRequestLeave
         self.onRequestSettings = onRequestSettings
     }
 
@@ -51,7 +49,7 @@ public struct OperatorView: View {
 
             // Under everything interactive, on purpose: the chrome above claims
             // its own taps first, so the status pill, the mini-map, the gear and
-            // the ✕ keep working while a drag anywhere else turns the camera.
+            // the gear keep working while a drag anywhere else turns the camera.
             if model.isDrive {
                 DriveLookLayer(model: model)
             }
@@ -128,17 +126,20 @@ public struct OperatorView: View {
             // Compass first, full width, where the console draws it. Then what
             // the hub is telling this operator, then how the phone itself is doing.
             HUDStackView(hud: model.frame.hud)
-            HStack(alignment: .top, spacing: Space.s) {
-                IdentityBadge(index: overlay.index, colorHex: overlay.colorHex)
+            // Gear right, status centred. Identity used to sit on the leading
+            // edge and shove the status off-centre; it is gone on purpose.
+            ZStack(alignment: .top) {
+                HStack(alignment: .top, spacing: Space.s) {
+                    Spacer(minLength: 0)
+                    if let onRequestSettings {
+                        ChromeButton(symbol: "gearshape.fill", label: "Settings", action: onRequestSettings)
+                    }
+                }
                 OperatorStatusView(status: overlay.status,
                                    onTap: overlay.status.offersSeatPicker ? { isPickingSeat = true } : nil)
-                if overlay.status.hint == nil { Spacer(minLength: 0) }
-                if let onRequestSettings {
-                    ChromeButton(symbol: "gearshape.fill", label: "Settings", action: onRequestSettings)
-                }
-                if let onRequestLeave {
-                    ChromeButton(symbol: "xmark", label: "Leave", action: onRequestLeave)
-                }
+                    // Keep long hint cards from covering the gear.
+                    .padding(.horizontal, 52)
+                    .frame(maxWidth: .infinity, alignment: .top)
             }
             Spacer()
             HStack(alignment: .bottom) {
@@ -163,9 +164,10 @@ public struct OperatorView: View {
 }
 
 /// A round glyph on blur: the shared shape for everything that floats over the
-/// feed. Drawn at 30pt so it covers as little of the camera as possible, tapped
-/// at 44 — the visual size and the hit target are not the same number, and a
-/// 30pt tap target on a phone held at arm's length is a miss.
+/// feed. Sized to match the status capsules in the same row — same type size
+/// and vertical inset — so the circle and the pills share one height. Tapped at
+/// 44pt via `hitTarget`; the visual size and the hit target are not the same
+/// number, and a 30pt tap target on a phone held at arm's length is a miss.
 struct ChromeButton: View {
     let symbol: String
     let label: String
@@ -174,35 +176,15 @@ struct ChromeButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(TypeScale.chromeGlyph)
+                .font(TypeScale.identity)
                 .foregroundStyle(.hudInk)
-                .frame(width: 30, height: 30)
+                // Same vertical inset as `OperatorStatusView`.
+                .padding(Space.s)
                 .background(Surface.hudChrome, in: Circle())
                 .hitTarget()
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-    }
-}
-
-/// "#3" in the colour the dashboard draws this phone in, so an operator and the
-/// person at the console can agree which phone they are talking about.
-struct IdentityBadge: View {
-    let index: Int?
-    let colorHex: String?
-
-    var body: some View {
-        Text(index.map { "#\($0)" } ?? "#–")
-            .font(TypeScale.identity)
-            // The hub's colour for this phone, so the operator and the person
-            // at the console can agree which phone they mean. Wire, not theme.
-            .foregroundStyle(Color(hex: colorHex) ?? .hudInk)
-            // Same insets as the status pill beside it, so the two capsules are
-            // the same height however long the sentence in the pill gets.
-            .padding(.horizontal, Space.m)
-            .padding(.vertical, Space.s)
-            .background(Surface.hudChrome, in: Capsule())
-            .accessibilityLabel(index.map { "Phone \($0)" } ?? "Phone, no number yet")
     }
 }
 

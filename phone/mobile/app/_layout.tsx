@@ -1,6 +1,5 @@
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useColorScheme } from 'react-native';
 
 /**
  * Routes only, and no colour. The navigator is already a UIKit
@@ -8,17 +7,13 @@ import { useColorScheme } from 'react-native';
  * large title and the sheet detents are Apple's — the three hardcoded hexes
  * that used to pin them to black are gone.
  *
- * `ThemeProvider` keys React Navigation's own palette off the window's trait
- * collection. `useColorScheme()` follows `overrideUserInterfaceStyle`, which is
- * what `SwarmSight.setTheme()` writes, so the Settings theme picker moves this
- * too. Nothing passes a `colorScheme` prop to a `Host`: omitted, the SwiftUI
- * subtree inherits the same traits.
+ * Dark always: `app.json` pins `userInterfaceStyle` and `ThemeController`
+ * paints every window. React Navigation follows with `DarkTheme`.
  */
 export default function RootLayout() {
-  const scheme = useColorScheme();
   return (
-    <ThemeProvider value={scheme === 'light' ? DefaultTheme : DarkTheme}>
-      <StatusBar style="auto" />
+    <ThemeProvider value={DarkTheme}>
+      <StatusBar style="light" />
       <Stack>
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="join" options={{ title: 'SwarmSight', headerLargeTitleEnabled: true }} />

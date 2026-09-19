@@ -11,7 +11,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if model.isJoined {
-                OperatorView(model: model, onRequestLeave: { Task { await SwarmRuntime.shared.leave() } })
+                OperatorView(model: model)
             } else {
                 joinForm
             }

@@ -109,15 +109,16 @@ struct DriveMotionTests {
 
     // MARK: - Walking
 
-    /// Heading 90 faces venue +x, so a second of full forward walks +1.4 m in x
-    /// and nowhere in y.
+    /// Heading 90 faces venue +x, so a second of full forward walks +6 m in x
+    /// and nowhere in y. Start near the −x wall so the measure second does not
+    /// hit the +x clamp.
     @Test func walkingIntegratesAlongTheHeading() {
-        var m = model(RoomPose(x: 0, y: 5, heading: 90, pitch: 0))
+        var m = model(RoomPose(x: -8, y: 5, heading: 90, pitch: 0))
         // Let the ramp settle first, then measure a clean second.
-        run(&m, seconds: 3, input: DriveInput(walk: SIMD2(0, 1)))
+        run(&m, seconds: 1, input: DriveInput(walk: SIMD2(0, 1)))
         let x0 = m.x, y0 = m.y
         run(&m, seconds: 1, input: DriveInput(walk: SIMD2(0, 1)))
-        #expect(isClose(m.x - x0, 1.4, within: 0.02), "walked \(m.x - x0) m in a second")
+        #expect(isClose(m.x - x0, 6.0, within: 0.05), "walked \(m.x - x0) m in a second")
         #expect(isClose(m.y - y0, 0, within: 0.01))
     }
 
@@ -266,10 +267,10 @@ struct DriveMotionTests {
     }
 
     @Test func distanceIsAccumulatedAndConsumedOnce() {
-        var m = model(RoomPose(x: 0, y: 10, heading: 90, pitch: 0))
-        run(&m, seconds: 3, input: DriveInput(walk: SIMD2(0, 1)))
+        var m = model(RoomPose(x: -8, y: 10, heading: 90, pitch: 0))
+        run(&m, seconds: 2, input: DriveInput(walk: SIMD2(0, 1)))
         let walked = m.consumeDistance()
-        #expect(walked > 2 && walked < 5, "walked \(walked) m in three seconds")
+        #expect(walked > 8 && walked < 13, "walked \(walked) m in two seconds")
         #expect(m.consumeDistance() == 0, "the same metres were reported twice")
     }
 }

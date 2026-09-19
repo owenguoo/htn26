@@ -47,6 +47,10 @@ struct OperatorStatusView: View {
         }
         .buttonStyle(.plain)
         .disabled(!status.offersSeatPicker)
+        // Without this a ZStack proposes the full row width and the button
+        // fills it, so a one-line title like "Reconnecting…" sits on the left
+        // even though the stack is meant to centre it.
+        .fixedSize(horizontal: status.hint == nil, vertical: true)
         .accessibilityLabel([status.title, status.hint].compactMap { $0 }.joined(separator: ". "))
         .accessibilityHint(status.offersSeatPicker ? "Opens the map so you can tap where you are standing" : "")
     }

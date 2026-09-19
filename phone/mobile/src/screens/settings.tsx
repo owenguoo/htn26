@@ -1,19 +1,18 @@
 import { Host } from '@expo/ui';
-import { Button, Form, Label, LabeledContent, Picker, Section, Text, Toggle } from '@expo/ui/swift-ui';
+import { Button, Form, Label, LabeledContent, Section, Text, Toggle } from '@expo/ui/swift-ui';
 import {
   disabled,
   font,
   foregroundStyle,
   monospacedDigit,
-  pickerStyle,
-  tag,
   textSelection,
+  tint,
 } from '@expo/ui/swift-ui/modifiers';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
-import SwarmSight, { type Diagnostics, type MicState, type ThemePreference } from '../../modules/swarm-sight';
+import SwarmSight, { type Diagnostics, type MicState } from '../../modules/swarm-sight';
 import { setPreference, usePreferences } from '../preferences';
 import { colors, secondaryStyle, textStyles } from '../theme/tokens';
 
@@ -54,7 +53,7 @@ const CONNECTION_SYMBOL = {
 } as const;
 
 export default function Settings() {
-  const { showDebug, showMiniMap, theme } = usePreferences();
+  const { showDebug, showMiniMap } = usePreferences();
   const [state, setState] = useState<Diagnostics>({ joined: false });
   // The native side is the truth and pushes it at 2 Hz, but 500 ms of a switch
   // sitting where you did not leave it reads as a broken switch. `setMicrophoneMuted`
@@ -94,20 +93,6 @@ export default function Settings() {
   return (
     <Host style={styles.fill} useViewportSizeMeasurement>
       <Form>
-        <Section title="Appearance" footer={<Text modifiers={[font({ textStyle: textStyles.footnote })]}>
-          Dark by default. The choice is remembered on this phone.
-        </Text>}>
-          <Picker<ThemePreference>
-            label="Theme"
-            selection={theme}
-            onSelectionChange={(next) => setPreference('theme', next)}
-            modifiers={[pickerStyle('segmented')]}>
-            <Text modifiers={[tag('system')]}>System</Text>
-            <Text modifiers={[tag('light')]}>Light</Text>
-            <Text modifiers={[tag('dark')]}>Dark</Text>
-          </Picker>
-        </Section>
-
         <Section title="Over the camera">
           <Toggle
             label="Marker outlines"
@@ -184,16 +169,11 @@ export default function Settings() {
 
         <Section>
           <Button
-            label="Forget the marker lock"
-            systemImage="arrow.clockwise"
-            role="destructive"
-            onPress={() => void SwarmSight.resetOrigin()}
-          />
-          <Button
             label="Leave the hub"
             systemImage="rectangle.portrait.and.arrow.right"
             role="destructive"
             onPress={() => void leave()}
+            modifiers={[tint(colors.problem)]}
           />
         </Section>
       </Form>

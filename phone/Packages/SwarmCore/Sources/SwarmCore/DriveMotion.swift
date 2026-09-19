@@ -90,11 +90,11 @@ public struct DriveMotionModel: Sendable, Equatable {
         /// Without it the compass tape judders at 60 Hz; much more than this and
         /// the phone feels like it is on a rope.
         public var lookTau: Double = 0.06
-        /// Normal walking pace.
-        public var forwardSpeed: Double = 1.4
-        public var strafeSpeed: Double = 1.0
+        /// Simulator pace — fast enough to cross a 20 m room in a few seconds.
+        public var forwardSpeed: Double = 6.0
+        public var strafeSpeed: Double = 4.5
         /// People back up slower than they walk.
-        public var reverseSpeed: Double = 0.8
+        public var reverseSpeed: Double = 3.5
         /// Velocity ramps in and out over this, both ways, so starting and
         /// stopping read as walking rather than teleporting. Not momentum: let
         /// go and it stops.

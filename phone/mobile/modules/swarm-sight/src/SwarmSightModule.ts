@@ -6,17 +6,11 @@ import type {
   MicState,
   StoredConfig,
   SwarmSightModuleEvents,
-  ThemePreference,
 } from './SwarmSight.types';
 
 declare class SwarmSightModule extends NativeModule<SwarmSightModuleEvents> {
   configure(options: ConfigureOptions): void;
   getConfig(): StoredConfig;
-  /**
-   * Stores the appearance choice and applies it immediately, by setting
-   * `overrideUserInterfaceStyle` on every window. Synchronous.
-   */
-  setTheme(theme: ThemePreference): void;
   /** QR / typed text / deep link → the hub's phone socket URL, or null if it is not one. */
   resolveHubURL(scanned: string): string | null;
   join(hubURL: string, name: string): Promise<void>;

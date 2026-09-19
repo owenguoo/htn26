@@ -6,7 +6,7 @@ import SwarmCore
 ///
 /// **Two views, not one, and that is the whole design.** The look layer has to
 /// be *under* the operator chrome so the status pill, the seat picker, the
-/// mini-map, the leave button and the settings button keep their taps; a
+/// mini-map and the settings button keep their taps; a
 /// full-screen `contentShape` over the top would eat every one of them. The
 /// stick has to be *over* it so it is visible and so a thumb on the puck is not
 /// competing with the chrome's layout. So `OperatorView` inserts
@@ -24,7 +24,7 @@ import SwarmCore
 /// no hardware check to write. What a human has to check **in the Simulator**:
 ///
 ///  1. **The chrome still works while driving.** Tap the status pill (when it
-///     offers the seat picker), tap the mini-map, tap the gear and tap the ✕.
+///     offers the seat picker), tap the mini-map and tap the gear.
 ///     All four sit above `DriveLookLayer` in the `ZStack`, so SwiftUI
 ///     hit-tests them first and the drag never begins.
 ///  2. **A drag that *starts* on one of those does nothing.** That is accepted,
@@ -33,7 +33,7 @@ import SwarmCore
 ///     the drag over the middle of the screen.
 ///  3. **The compass tape and the HUD canvases do not block.** Both carry
 ///     `.allowsHitTesting(false)`, so a drag across the top strip turns.
-///     A drag beginning exactly on the identity badge or the status pill's
+///     A drag beginning exactly on the status pill's
 ///     capsule may not, per (2).
 ///  4. **The puck clears everything.** Centred at `(W − 72, H − 72)` it must
 ///     miss the 132 × 150 mini-map at the bottom-left and the settings control.
@@ -43,9 +43,9 @@ import SwarmCore
 ///     operator the moment they held still — `DrivePoseProvider` latches it on
 ///     purpose and `onEnded` below is the only thing that clears it.
 ///  6. **Double-tap levels the pitch** and a single tap does not.
-///  7. **Directions.** Drag right ⇒ the compass tape moves so the heading grows
-///     and the mini-map cone swings clockwise. Drag up ⇒ look up. Push the
-///     stick up ⇒ the dot walks the way the cone points.
+///  7. **Directions.** Drag right ⇒ the compass tape moves so the heading
+///     shrinks and the mini-map cone swings counter-clockwise. Drag up ⇒ look
+///     down. Push the stick up ⇒ the dot walks the way the cone points.
 
 /// The full-screen drag surface. Belongs **below** `chrome`.
 struct DriveLookLayer: View {
@@ -68,10 +68,10 @@ struct DriveLookLayer: View {
                         let dx = value.translation.width - last.width
                         let dy = value.translation.height - last.height
                         last = value.translation
-                        // UIKit's y grows downward and the model's pitch grows
-                        // upward, so this is the flip HANDOFF-S §7 asks for.
+                        // Drag is inverted relative to the model contract
+                        // (right ⇒ +yaw, up ⇒ +pitch): grab-the-world feel.
                         // No other scaling: `Tuning` owns the sensitivity.
-                        model.drive(DriveInput(yawPoints: Double(dx), pitchPoints: Double(-dy)))
+                        model.drive(DriveInput(yawPoints: Double(-dx), pitchPoints: Double(dy)))
                     }
                     .onEnded { _ in last = .zero }
             )

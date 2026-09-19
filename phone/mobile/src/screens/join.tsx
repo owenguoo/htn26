@@ -34,8 +34,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
 import SwarmSight from '../../modules/swarm-sight';
-import { parseJoinLink, poseSourceFor, requestedPoseSource } from '../joinLink';
-import { colors, secondaryStyle, textStyles } from '../theme/tokens';
+import { parseJoinLink, poseSourceFor } from '../joinLink';
+import { colors, textStyles } from '../theme/tokens';
 
 /** Test hook: what an operator does in the native seat picker, through the JS API. */
 async function tapSeat(seat: { x: number; y: number }) {
@@ -171,28 +171,10 @@ export default function Join() {
 
   const submit = useCallback(() => void join(hub, name), [join, hub, name]);
 
-  // What this build will actually do for poses, said plainly. The Simulator's
-  // default is now `drive`, not `replay`, so a footnote that only knew about
-  // replay would have gone quiet on the one case it exists for.
-  const poseSource = requestedPoseSource(stored.poseSource);
-  const aboutPoses =
-    poseSource === 'drive'
-      ? ' · no ARKit here, so drag to look around and use the stick to walk'
-      : poseSource === 'replay'
-        ? ' · no ARKit here, so this will replay a recorded walk'
-        : '';
-  const hint = `The address on the dashboard’s QR code. Phone ${stored.phoneId.slice(0, 8)}${aboutPoses}.`;
-
   return (
     <Host style={styles.fill} useViewportSizeMeasurement>
       <Form>
-        <Section
-          title="Hub"
-          footer={
-            <Text modifiers={[font({ textStyle: textStyles.footnote }), foregroundStyle(secondaryStyle)]}>
-              {hint}
-            </Text>
-          }>
+        <Section title="Hub">
           <TextField
             ref={hubField.ref}
             testID="hub"

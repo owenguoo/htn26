@@ -120,7 +120,7 @@ public struct OperatorStatus: Sendable, Equatable {
             self.init(level: .problem, title: "Connecting to the hub…", hint: "Check you're on the venue Wi-Fi")
             return
         case .reconnecting:
-            self.init(level: .problem, title: "Reconnecting…", hint: "Lost the hub. Check the Wi-Fi")
+            self.init(level: .problem, title: "Reconnecting…")
             return
         case .online:
             break

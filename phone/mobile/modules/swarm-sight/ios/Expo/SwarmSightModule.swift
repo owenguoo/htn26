@@ -39,11 +39,11 @@ public class SwarmSightModule: Module {
       self.binder = binder
       self.observer = SwarmRuntime.shared.observe { session in binder.bind(session) }
 
-      // Before the first frame, so an app whose stored preference is dark never
-      // shows a light one. The module is created before the React root window
+      // Before the first frame, so the app never flashes light while the root
+      // window is still coming up. The module is created before that window
       // exists, hence the observer as well as the immediate apply.
       Task { @MainActor in
-        ThemeController.applyStored()
+        ThemeController.applyDark()
         ThemeController.followNewWindows()
       }
     }
@@ -75,24 +75,10 @@ public class SwarmSightModule: Module {
         "lastHubURL": PhoneIdentity.lastHubURL,
         "venueHubURL": (try? ModuleResources.loadVenue())?.hubURL ?? "",
         "poseSource": SwarmRuntime.shared.currentOptions.poseSource.rawValue,
-        // "system" | "light" | "dark", defaulting to dark. See ThemeController.
-        "theme": ThemeController.stored,
         // `simctl launch … -SwarmSightJoin <link>`: iOS puts a confirmation in
         // front of `simctl openurl` that nothing headless can tap.
         "launchJoin": UserDefaults.standard.string(forKey: "SwarmSightJoin") ?? "",
       ]
-    }
-
-    /// "system" | "light" | "dark". Synchronous, and writes the default *and*
-    /// applies it: a preference that only took effect on the next launch would
-    /// read as a broken switch.
-    Function("setTheme") { (theme: String) in
-      ThemeController.store(theme)
-      // Applies the value it was handed, not the one it can read back. A
-      // `-SwarmSightTheme light` launch argument lands in `NSArgumentDomain`,
-      // which outranks anything `store` writes — so re-reading would silently
-      // ignore the tap for the whole of that run.
-      Task { @MainActor in ThemeController.apply(theme) }
     }
 
     /// QR / typed text / deep link → the hub's phone socket, or null.
@@ -155,7 +141,7 @@ public class SwarmSightModule: Module {
     }
 
     View(OperatorExpoView.self) {
-      Events("onRequestLeave", "onRequestSettings")
+      Events("onRequestSettings")
 
       Prop("showDebug") { (view: OperatorExpoView, value: Bool) in
         view.showDebug = value

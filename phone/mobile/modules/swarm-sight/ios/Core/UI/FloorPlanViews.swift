@@ -145,8 +145,7 @@ struct MiniMapView: View {
                 .clipShape(Radius.rect(Radius.plate))
                 .overlay(Radius.rect(Radius.plate).stroke(MapInk.plateBorder, lineWidth: 1))
             if let searched = world?.searched {
-                Text("\(Int((searched * 100).rounded()))% searched"
-                     + (world?.stats?.rank.map { " · rank \($0)" } ?? ""))
+                Text("\(Int((searched * 100).rounded()))% searched")
                     .font(TypeScale.readout)
                     .foregroundStyle(.hudInk)
                     // The caption sits on the camera, not on the plate, so it

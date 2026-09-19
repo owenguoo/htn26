@@ -13,10 +13,8 @@ import SwiftUI
 // React's), that the idle timer stays off while it is up, and that backgrounding
 // and returning leaves the preview running and the session in `recalibrating`.
 final class OperatorExpoView: ExpoView {
-  let onRequestLeave = EventDispatcher()
-  /// The gear lives next to the leave button inside SwiftUI, so both pieces of
-  /// camera chrome share one style and one layout. A React button floating over
-  /// this view has to guess at a SwiftUI layout it cannot see.
+  /// The gear lives in the camera chrome inside SwiftUI. A React button
+  /// floating over this view has to guess at a SwiftUI layout it cannot see.
   let onRequestSettings = EventDispatcher()
 
   var showDebug = false { didSet { render() } }
@@ -37,7 +35,6 @@ final class OperatorExpoView: ExpoView {
 
   private func makeRoot() -> OperatorView {
     OperatorView(model: model, showDebug: showDebug, showMiniMap: showMiniMap,
-                 onRequestLeave: { [weak self] in self?.onRequestLeave([:]) },
                  onRequestSettings: { [weak self] in self?.onRequestSettings([:]) })
   }
 
