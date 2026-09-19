@@ -101,16 +101,22 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/');
   draco.setWorkerLimit(1);
   loader.setDRACOLoader(draco);
-  let transformKey = '', fitted = false, cutaway = false;
+  let transformKey = '', fitted = false, cutaway = true;
+  let cleanupWorker = null, cleanupEpoch = 0, cleanupEnabled = true;
   const cutPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
 
   const toolbar = document.createElement('div');
   toolbar.className = 's3d-tools';
-  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="false">Cutaway</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
+  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="true">Cutaway</button><button type="button" data-view="clean" aria-pressed="true">Clean overlap</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
   host.appendChild(toolbar);
   toolbar.addEventListener('click', (e) => {
     const action = e.target.closest('button')?.dataset.view;
     if (action === 'fit' || action === 'top') fitView(action === 'top');
+    if (action === 'clean') {
+      cleanupEnabled = !cleanupEnabled;
+      e.target.setAttribute('aria-pressed', String(cleanupEnabled));
+      scheduleCleanup();
+    }
     if (action === 'heat') {
       heat.visible = !heat.visible;
       e.target.setAttribute('aria-pressed', String(heat.visible));
@@ -220,7 +226,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
       scanLabel = label;
       outline.visible = stage.visible = !live;
       updateCutaway();
-      if (!fitted) { fitView(); fitted = true; }
+      if (!fitted) { fitView(true); fitted = true; }
       heatMask = live ? footprint(obj) : null;
       heatKey = ''; // redraw the heatmap with the new mask
     }, undefined, () => { if (!scanObj) scanStatus = 'failed'; });
@@ -268,9 +274,66 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     scanLabel = `live map · ${sections.length} retained sections · v${version}`;
     outline.visible = stage.visible = false;
     updateCutaway();
-    if (!fitted) { fitView(); fitted = true; }
+    if (!fitted) { fitView(true); fitted = true; }
     heatMask = footprint(group);
     heatKey = '';
+    scheduleCleanup();
+  }
+
+  async function scheduleCleanup() {
+    const started = performance.now();
+    const epoch = ++cleanupEpoch;
+    cleanupWorker?.terminate(); cleanupWorker = null;
+    const root = scanObj;
+    if (!root) return;
+    const objects = [];
+    root.traverse(o => { if (o.isMesh) objects.push(o); });
+    for (const o of objects) {
+      const g = o.geometry;
+      if (!o.userData.originalIndex) {
+        o.userData.originalIndex = g.index || new THREE.BufferAttribute(
+          Uint32Array.from({length:g.attributes.position.count}, (_,i)=>i),1);
+      }
+      g.setIndex(o.userData.originalIndex);
+    }
+    if (!cleanupEnabled || !root.children.some(o=>o.userData.sectionURL)) {
+      scanLabel = `live map · ${root.children.length} retained sections · original surfaces`;
+      return;
+    }
+    // Meshes are visible immediately. Yield while preparing each buffer, then do
+    // the expensive spatial matching off the UI thread.
+    const meshes = [];
+    root.updateMatrixWorld(true);
+    for (const o of objects) {
+      await new Promise(resolve => setTimeout(resolve,0));
+      if (epoch !== cleanupEpoch || scanObj !== root) return;
+      const attr = o.geometry.attributes.position;
+      const positions = new Float32Array(attr.count*3), v = new THREE.Vector3();
+      for (let i=0;i<attr.count;i++) {
+        v.fromBufferAttribute(attr,i).applyMatrix4(o.matrixWorld);
+        positions[i*3]=v.x; positions[i*3+1]=v.y; positions[i*3+2]=v.z;
+        if (i && i % 16384 === 0) {
+          await new Promise(resolve => setTimeout(resolve,0));
+          if (epoch !== cleanupEpoch || scanObj !== root) return;
+        }
+      }
+      let section = o;
+      while (section.parent && !section.userData.sectionURL) section=section.parent;
+      meshes.push({positions,indices:new Uint32Array(o.userData.originalIndex.array),section:section.userData.sectionURL});
+    }
+    if (epoch !== cleanupEpoch || scanObj !== root) return;
+    const worker = new Worker('/web/mesh-cleanup-worker.js',{type:'module'});
+    cleanupWorker = worker;
+    worker.onmessage = ({data}) => {
+      worker.terminate();
+      if (cleanupWorker === worker) cleanupWorker = null;
+      if (epoch !== cleanupEpoch || scanObj !== root || data.error) return;
+      host.dataset.cleanupMs = String(Math.round(performance.now()-started));
+      objects.forEach((o,i) => o.geometry.setIndex(new THREE.BufferAttribute(data.masks[i],1)));
+      scanLabel = `live map · ${root.children.length} retained sections · ${(data.removed/Math.max(1,data.total)*100).toFixed(1)}% overlap hidden · cleanup ${Math.round(data.ms)} ms`;
+    };
+    worker.onerror = () => { worker.terminate(); if (cleanupWorker === worker) cleanupWorker=null; };
+    worker.postMessage({meshes},meshes.flatMap(m=>[m.positions.buffer,m.indices.buffer]));
   }
 
   // floor cells (same grid as the coverage heatmap) that have scan points above them, grown by a cell
@@ -318,7 +381,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
           if (child) applyTransform(child, section.transform);
         }
         transformKey = JSON.stringify(live.sections.map(s => s.transform));
-        heatMask = footprint(scanObj); heatKey = ''; updateCutaway();
+        heatMask = footprint(scanObj); heatKey = ''; updateCutaway(); scheduleCleanup();
       }
       return;
     }
@@ -525,10 +588,17 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     }
   }
 
+  let measuredFrames = 0, frameWindow = performance.now();
   function frame() {
     if (!running) return;
     frameId = requestAnimationFrame(frame);
     const dt = Math.min(0.1, clock.getDelta()), k = 1 - Math.exp(-dt * 8), t = clock.elapsedTime;
+    measuredFrames++;
+    const stamp=performance.now();
+    if (stamp-frameWindow >= 1000) {
+      host.dataset.renderFps = (measuredFrames*1000/(stamp-frameWindow)).toFixed(1);
+      measuredFrames=0; frameWindow=stamp;
+    }
     const st = getState();
     syncScan(st);
     if (st) {

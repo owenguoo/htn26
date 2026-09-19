@@ -193,3 +193,23 @@ synthetic drive/replay clients do not seed it, and the first phone must have a r
 pose before capture starts. After anchoring, visual registration controls map
 placement rather than later ARKit origin changes. Metric accuracy still requires
 valid initial calibration and cannot be inferred from the internal fit residual.
+
+### Display-only overlap cleanup
+
+The minimap opens top-down with cutaway enabled. A module Web Worker conservatively
+hides triangles in later sections only when an earlier near-coplanar triangle
+covers their projected vertices (2.5 cm plane tolerance, 1 cm boundary tolerance,
+normal agreement > .97).
+Eight candidate triangles per 4 cm cell bound matching work. Distinct surfaces,
+new coverage and source GLBs remain unchanged; uncertain overlap stays visible.
+This is not surface fusion or semantic person/hand removal. The Clean overlap
+switch restores original indices for comparison. New sections display before
+cleanup finishes; the status reports worker time and fraction hidden. Cleanup
+cancels when superseded and never invokes the reconstruction worker.
+
+Validation on the saved 15-section scan: 2.1% of triangles hidden, 2415 ms worker
+time / 3121 ms including preparation and application. DOM render-loop telemetry
+reported approximately 120 fps with cleanup enabled and disabled after completion;
+this is not a worst-frame-time guarantee during processing. Five geometry tests
+cover duplicates, new coverage, distinct surfaces, same-section geometry, invalid
+input, and disjoint details. Large registration seams intentionally remain.
