@@ -48,6 +48,18 @@ public enum TransportState: Sendable, Equatable {
 /// Control traffic — hello, pong, seat, name — is never dropped: a lost pong
 /// leaves the hub without a clock offset and therefore without latency.
 ///
+/// **Audio is the third kind.** Voice chunks may not be dropped — the hub
+/// concatenates them into one WAV (`hub.py` `end_utterance`), so a missing chunk
+/// is not a lost moment but a hole spliced into the middle of a sentence, and
+/// the transcript comes back wrong rather than short. But they may not be sent
+/// ahead of everything else either: a held microphone produces about twelve
+/// messages a second, and putting those in the control queue — which is drained
+/// to empty before any perishable lane gets a turn — would starve frames on a
+/// slow socket, and no frames means no inference, which is the whole system.
+/// So audio has a never-dropped FIFO that takes its turn in the same round-robin
+/// as frames and poses. It is bounded by `VoiceGate`'s 12 s utterance cut, not
+/// by dropping.
+///
 /// **Hello goes first, alone.** The hub registers the phone from the first
 /// message on the socket. With more than one send in flight the socket does not
 /// promise ordering, so after every connect the hello is sent by itself and
@@ -116,6 +128,8 @@ public actor Transport {
 
     /// Never dropped, FIFO.
     private var controlQueue: [HubOutbound] = []
+    /// Never dropped either, but rotated rather than prioritised.
+    private var audioQueue: [HubOutbound] = []
     /// Latest-wins, one shallow buffer per perishable lane so a burst of frames
     /// cannot starve poses.
     private var perishable: [HubOutbound.Lane: [HubOutbound]] = [:]
@@ -188,7 +202,9 @@ public actor Transport {
         // Hello is the transport's to send, first and alone. See `adopt`.
         if case .hello = message { return }
         let lane = message.lane
-        if lane != .control {
+        if lane == .audio {
+            audioQueue.append(message)
+        } else if lane != .control {
             var bucket = perishable[lane] ?? []
             bucket.append(message)
             while bucket.count > configuration.bufferDepth {
@@ -207,11 +223,12 @@ public actor Transport {
     }
 
     private var bufferedCount: Int {
-        controlQueue.count + perishable.values.reduce(0) { $0 + $1.count }
+        controlQueue.count + audioQueue.count + perishable.values.reduce(0) { $0 + $1.count }
     }
 
-    /// The perishable lanes, in the order the cursor rotates through them.
-    private static let perishableOrder: [HubOutbound.Lane] = [.slam, .frame, .debug, .hud]
+    /// The lanes the cursor rotates through. `.audio` is here so it takes a turn
+    /// like the rest, even though its queue is never dropped.
+    private static let rotatingOrder: [HubOutbound.Lane] = [.slam, .frame, .audio, .debug, .hud]
 
     private func nextMessage() -> HubOutbound? {
         if !controlQueue.isEmpty { return controlQueue.removeFirst() }
@@ -222,11 +239,16 @@ public actor Transport {
         // refills at 10 Hz, so it is never empty at a send opportunity, and
         // frames would never leave the phone. No frames means no inference,
         // which is the entire point of the system.
-        let order = Self.perishableOrder
+        let order = Self.rotatingOrder
         for step in 0..<order.count {
             let index = (perishableCursor + step) % order.count
             let lane = order[index]
-            if var bucket = perishable[lane], !bucket.isEmpty {
+            if lane == .audio {
+                if !audioQueue.isEmpty {
+                    perishableCursor = (index + 1) % order.count
+                    return audioQueue.removeFirst()
+                }
+            } else if var bucket = perishable[lane], !bucket.isEmpty {
                 let message = bucket.removeFirst()
                 perishable[lane] = bucket
                 perishableCursor = (index + 1) % order.count
@@ -434,6 +456,13 @@ public actor Transport {
             for (lane, bucket) in perishable where !bucket.isEmpty {
                 stats.dropped += bucket.count
                 stats.droppedByLane[lane, default: 0] += bucket.count
+            }
+            // The hub's buffer for this phone died with the socket, so a
+            // half-utterance waiting here has nothing to be appended to.
+            if !audioQueue.isEmpty {
+                stats.dropped += audioQueue.count
+                stats.droppedByLane[.audio, default: 0] += audioQueue.count
+                audioQueue.removeAll()
             }
             perishable.removeAll()
             controlQueue.removeAll()

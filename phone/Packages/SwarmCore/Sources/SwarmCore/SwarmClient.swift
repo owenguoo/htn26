@@ -54,8 +54,24 @@ public struct ClientSnapshot: Sendable, Equatable {
     public var thermal: ThermalState = .nominal
     public var lastCommand: String?
     public var lastError: String?
+    /// What the microphone control should show.
+    public var micState: MicrophoneState = .unavailable
 
     public init() {}
+}
+
+/// What the microphone pill shows, mirroring `.mic` / `.mic.off` / `.mic.live`
+/// in `web/phone.html`.
+public enum MicrophoneState: String, Sendable, Equatable {
+    /// No capture at all: voice disabled in the configuration, or no microphone
+    /// permission. The control is struck through and does nothing.
+    case unavailable
+    /// The operator turned it off.
+    case muted
+    /// Listening, gate closed. Nothing is leaving the phone.
+    case idle
+    /// Gate open — the green ring.
+    case speaking
 }
 
 /// The whole phone, headless.
@@ -90,12 +106,17 @@ public actor SwarmClient {
         /// Replay only: pose timestamps come from a recording, not from this
         /// machine's uptime, so the device clock is anchored to the first one.
         public var anchorsClockToPoses: Bool
+        /// Whether `offerAudio` does anything. Off by default so `swarm-replay`
+        /// and the hub e2e stay silent, and so a caller has to opt a real
+        /// microphone in rather than discover one.
+        public var voiceEnabled: Bool
 
         public init(socketURL: URL, phoneId: String, name: String, build: String = "swarmsight-ios",
                     venue: Venue,
                     rates: SessionMachine.Rates = .init(poseHz: 10, frameFPS: 2, depthHz: 0),
                     encoding: FrameEncodingConfiguration = .standard,
-                    anchorsClockToPoses: Bool = false) {
+                    anchorsClockToPoses: Bool = false,
+                    voiceEnabled: Bool = false) {
             self.socketURL = socketURL
             self.phoneId = phoneId
             self.name = name
@@ -104,6 +125,7 @@ public actor SwarmClient {
             self.rates = rates
             self.encoding = encoding
             self.anchorsClockToPoses = anchorsClockToPoses
+            self.voiceEnabled = voiceEnabled
         }
     }
 
@@ -159,6 +181,11 @@ public actor SwarmClient {
     private var frameSendTimes: [Double] = []
     /// Set by the hub's `hud` command while a console has this phone expanded.
     private var hudRequested = false
+    /// The voice loudness gate. It lives on the actor, so the audio tap thread
+    /// only ever hands over a buffer — the same shape as the pose and frame
+    /// paths.
+    private var voice = VoiceGate()
+    private var audioSeq: UInt64 = 0
     /// Display width ÷ height, so the mirror can say which part of the frame
     /// the operator actually sees. An iPhone's, until the view reports its own.
     private var screenAspect = 393.0 / 852.0
@@ -311,7 +338,59 @@ public actor SwarmClient {
         snapshot.thermal = diagnostics.thermalState
         snapshot.lastCommand = lastCommand?.name
         snapshot.lastError = lastError
+        snapshot.micState = microphoneState
         return snapshot
+    }
+
+    // MARK: - Voice
+
+    public var microphoneState: MicrophoneState {
+        guard configuration.voiceEnabled else { return .unavailable }
+        if voice.isMuted { return .muted }
+        return voice.isTalking ? .speaking : .idle
+    }
+
+    /// Hands one buffer of microphone samples to the gate.
+    ///
+    /// Called from the AVFoundation tap in the Expo module — the only place
+    /// AVFoundation is allowed — at whatever rate and sample rate the audio
+    /// session gives it. Everything from here on is the web client's behaviour:
+    /// nearest-neighbour decimation to 16 kHz, an RMS loudness gate with one
+    /// chunk of pre-roll and 600 ms of hang, `{type:"audio"}` binary frames and
+    /// an `{type:"audio_end"}` when the talking stops.
+    ///
+    /// - Parameters:
+    ///   - samples: mono float samples, nominally −1…1.
+    ///   - sourceRate: the capture sample rate, e.g. 48000.
+    ///   - capturedAt: the tap's own monotonic timestamp, in `uptime`'s domain.
+    public func offerAudio(samples: [Float], sourceRate: Double, capturedAt: Double? = nil) async {
+        guard configuration.voiceEnabled, !samples.isEmpty else { return }
+        let (pcm, rms) = VoiceGate.downsample(samples, from: sourceRate)
+        guard !pcm.isEmpty else { return }
+        let now = capturedAt ?? dependencies.uptime()
+        await emit(voice.offer(pcm, rms: rms, now: now), capturedAt: now)
+    }
+
+    /// Tapping the microphone control. Returns the state the control should now
+    /// show, so the caller does not have to poll a snapshot to redraw it.
+    @discardableResult
+    public func setMicrophoneMuted(_ muted: Bool) async -> MicrophoneState {
+        guard configuration.voiceEnabled else { return .unavailable }
+        await emit(voice.setMuted(muted), capturedAt: dependencies.uptime())
+        return microphoneState
+    }
+
+    private func emit(_ outputs: [VoiceGate.Output], capturedAt: Double) async {
+        for output in outputs {
+            switch output {
+            case .send(let pcm):
+                let header = HubAudioHeader(seq: audioSeq, tCapture: epochMs(forDeviceTime: capturedAt))
+                audioSeq &+= 1
+                await transport.send(.audio(header, pcm: VoiceGate.pcmData(pcm)))
+            case .end:
+                await transport.send(.audioEnd)
+            }
+        }
     }
 
     // MARK: - Clock
@@ -458,6 +537,11 @@ public actor SwarmClient {
                 // A fresh connection starts un-viewed, as in phone.js; the hub
                 // re-sends `hud on` after the welcome if a console is watching.
                 hudRequested = false
+                // The hub's audio buffer for this phone died with the old
+                // socket. Anything half-said is unrecoverable, and an
+                // `audio_end` on the new one would close an utterance the hub
+                // never started. Mute state is the operator's and survives.
+                voice.reset()
                 model.apply(welcome)
                 welcomeContinuation?.yield(welcome)
             case .phase(let phase):
