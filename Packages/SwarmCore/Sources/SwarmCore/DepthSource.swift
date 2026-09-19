@@ -124,7 +124,8 @@ public struct ServerDepthSource: DepthSource {
     /// Separated out so the fitting can be tested without an async round trip.
     public func scale(_ estimate: ServerDepthEstimate, against request: DepthRequest) throws -> DepthResult {
         guard estimate.maps.allSatisfy(\.isWellFormed),
-              estimate.predictedCameras.count == request.metricPositions.count else {
+              estimate.predictedCameras.count == request.metricPositions.count,
+              !estimate.predictedCameras.isEmpty else {
             throw DepthSourceError.malformedEstimate
         }
         guard let fit = DepthScaleFit.fit(predictedCameras: estimate.predictedCameras,

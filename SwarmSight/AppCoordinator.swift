@@ -25,6 +25,8 @@ public final class AppCoordinator {
     private var transport: Transport?
     private var provider: ARKitPoseProvider?
     private var depthSource: (any DepthSource)?
+    /// Remembers the metric poses for chunks awaiting a server reconstruction.
+    private var depthNegotiator = DepthScaleNegotiator()
     private var tasks: [Task<Void, Never>] = []
     private var pingID: UInt64 = 0
     private var clockOffset: Double?
@@ -81,9 +83,12 @@ public final class AppCoordinator {
         let inbound = await transport.inbound()
         await transport.start()
 
-        // The one place device class is branched on.
+        // The one place device class is branched on. A non-Pro device has no
+        // local depth at all: it uploads chunks and answers the server's
+        // reconstruction with the scale factor, which is what
+        // `depthNegotiator` does.
         let lidar = LiDARDepthSource(frames: provider)
-        depthSource = lidar.isAvailable ? lidar : makeServerDepthSource()
+        depthSource = lidar.isAvailable ? lidar : nil
 
         let pipeline = FrameEncodePipeline(encoder: encoder)
         self.pipeline = pipeline
@@ -125,17 +130,6 @@ public final class AppCoordinator {
               venueID: venue.id,
               hasLiDAR: hasLiDAR,
               capabilities: hasLiDAR ? ["lidar", "haptics"] : ["haptics"])
-    }
-
-    /// Server depth comes back scene-normalized. The estimate is fitted against
-    /// ARKit's metric baselines before anything treats it as metres.
-    private func makeServerDepthSource() -> ServerDepthSource {
-        ServerDepthSource { _ in
-            // The orchestrator returns depth asynchronously over the socket, so
-            // there is nothing to await inline. Chunks are uploaded and the
-            // reply is matched by chunk id in `consume(inbound:)`.
-            nil
-        }
     }
 
     private func consume(sessionEvents: AsyncStream<SessionEvent>) async {
@@ -183,7 +177,13 @@ public final class AppCoordinator {
         let request = DepthRequest(chunkID: depthTicket.chunkID, frames: depthTicket.frames)
         let source = depthSource
         let result = try? await source?.depth(for: request)
-        let kind: DepthSourceKind = (source as? LiDARDepthSource) != nil ? .lidar : .server
+        let kind: DepthSourceKind = source == nil ? .server : .lidar
+        if kind == .server {
+            // Nothing to send but the metric poses. The server reconstructs the
+            // chunk and comes back with its own cameras; the phone is the only
+            // thing that knows metres, so it answers with the factor.
+            depthNegotiator.record(depthTicket)
+        }
         let chunk = FrameAssembly.chunk(deviceID: deviceID, ticket: depthTicket, source: kind,
                                         sentAt: serverNow, depth: result)
         await transport.send(.depth(chunk))
@@ -203,6 +203,15 @@ public final class AppCoordinator {
                     haptics.play(haptic)
                 }
                 overlay = model.state
+            case .depth(let inbound):
+                // A reconstruction to be made metric. Returning nothing rather
+                // than a guess is deliberate: a scale invented from a chunk with
+                // no parallax would be drawn as though it had been measured.
+                if let reply = depthNegotiator.reply(to: inbound, deviceID: deviceID,
+                                                     sentAt: serverNow),
+                   let transport {
+                    await transport.send(.depth(reply))
+                }
             case .pong(let pong):
                 await session?.ingest(pong: pong, receivedAt: CACurrentMediaTime())
             default:

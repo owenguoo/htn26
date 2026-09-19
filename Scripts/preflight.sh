@@ -15,10 +15,15 @@ else
 fi
 
 echo "=== iOS Simulator runtime ==="
-if [ -d /Library/Developer/CoreSimulator/Profiles/Runtimes ] \
-   || [ -d /Library/Developer/CoreSimulator/Volumes ]; then
+# Directory existence is not enough: those appear as soon as a download starts.
+# The only thing that means anything is simctl listing a bootable device.
+if xcrun simctl list devices available 2>/dev/null | grep -qi "iPhone"; then
   echo "  ok: a runtime is installed"
   xcrun simctl list devices available 2>/dev/null | grep -i "iPhone 16" | head -3
+elif xcrun simctl list runtimes 2>/dev/null | grep -qi "iOS"; then
+  echo "  PARTIAL: a runtime is installed but no iPhone device exists yet. Run:"
+  echo "      xcrun simctl create 'iPhone 16' 'iPhone 16'"
+  status=1
 else
   echo "  MISSING. This Xcode does not ship the iOS Simulator runtime, so there"
   echo "  are no simulator devices and -destination cannot resolve. Run:"

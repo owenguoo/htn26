@@ -259,6 +259,127 @@ struct DepthScaleFitTests {
         }
     }
 
+    // MARK: - Closing the loop with the server
+
+    private func ticket(chunkID: UInt64, cameras: [SIMD3<Float>]) -> DepthTicket {
+        DepthTicket(chunkID: chunkID,
+                    frames: cameras.enumerated().map { index, position in
+                        DepthChunk.FrameRef(frameID: UInt64(index),
+                                            serverTimestamp: 1_000 + Double(index) * 0.7,
+                                            position: [position.x, position.y, position.z],
+                                            quaternion: [0, 0, 0, 1])
+                    },
+                    baseline: DepthScaleFit.widestBaseline(of: cameras))
+    }
+
+    private func serverReply(chunkID: UInt64, predicted: [SIMD3<Float>]) -> DepthChunk {
+        DepthChunk(deviceID: "orchestrator", chunkID: chunkID, serverTimestamp: 1_001,
+                   source: .server,
+                   frames: predicted.enumerated().map { index, position in
+                       DepthChunk.FrameRef(frameID: UInt64(index), serverTimestamp: 0,
+                                           position: [position.x, position.y, position.z],
+                                           quaternion: [0, 0, 0, 1])
+                   },
+                   metricScale: nil)
+    }
+
+    /// The phone is the only thing in the system that knows metres, so it has to
+    /// be the one that answers with the factor.
+    @Test func thePhoneRepliesToAServerReconstructionWithTheFittedFactor() throws {
+        let factor: Float = 5.8
+        let metric = metricCameras()
+        var negotiator = DepthScaleNegotiator()
+        negotiator.record(ticket(chunkID: 9, cameras: metric))
+
+        let replied = negotiator.reply(
+            to: serverReply(chunkID: 9, predicted: normalized(metric, by: factor)),
+            deviceID: "phone-a", sentAt: 1_002)
+        let reply = try #require(replied)
+        let scale = try #require(reply.metricScale)
+        #expect(abs(scale - factor) / factor <= 0.02, "replied with \(scale) against \(factor)")
+        #expect(reply.chunkID == 9)
+        #expect(reply.frames.count == metric.count)
+        #expect(reply.depth == nil, "the reply echoed the depth back over the link")
+        #expect(negotiator.replied == 1)
+    }
+
+    /// A stationary chunk has no parallax. Replying with a number would have the
+    /// dashboard draw invented depth as though it had been measured.
+    @Test func noReplyWhenTheChunkHadNoParallax() {
+        let stationary = (0..<6).map { SIMD3<Float>(0.001 * Float($0), 1.5, 3) }
+        var negotiator = DepthScaleNegotiator()
+        negotiator.record(ticket(chunkID: 3, cameras: stationary))
+        let noParallaxReply = negotiator.reply(to: serverReply(chunkID: 3, predicted: stationary),
+                                               deviceID: "phone-a", sentAt: 1_002)
+        #expect(noParallaxReply == nil)
+        #expect(negotiator.unscalable == 1)
+    }
+
+    @Test func aReplyForAnUnknownChunkIsCountedNotGuessedAt() {
+        var negotiator = DepthScaleNegotiator()
+        let unknownReply = negotiator.reply(to: serverReply(chunkID: 77, predicted: metricCameras()),
+                                            deviceID: "phone-a", sentAt: 1_002)
+        #expect(unknownReply == nil)
+        #expect(negotiator.unmatched == 1)
+    }
+
+    /// LiDAR chunks come back already metric; echoing a factor at them is noise.
+    @Test func anAlreadyMetricChunkNeedsNoReply() {
+        var negotiator = DepthScaleNegotiator()
+        negotiator.record(ticket(chunkID: 4, cameras: metricCameras()))
+        var inbound = serverReply(chunkID: 4, predicted: metricCameras())
+        inbound.metricScale = 1
+        let metricReply = negotiator.reply(to: inbound, deviceID: "phone-a", sentAt: 1_002)
+        #expect(metricReply == nil)
+        #expect(negotiator.replied == 0)
+        #expect(negotiator.unmatched == 0)
+    }
+
+    /// This runs for the length of the demo; a map of every chunk ever sent is a
+    /// leak with a schedule.
+    @Test func outstandingChunksStayBounded() {
+        var negotiator = DepthScaleNegotiator(capacity: 8)
+        for id in 0..<500 {
+            negotiator.record(ticket(chunkID: UInt64(id), cameras: metricCameras()))
+        }
+        #expect(negotiator.outstandingCount == 8)
+        // The oldest are gone, so a very late reply is counted rather than kept.
+        let agedOut = negotiator.reply(to: serverReply(chunkID: 0, predicted: metricCameras()),
+                                       deviceID: "phone-a", sentAt: 1_002)
+        #expect(agedOut == nil)
+        #expect(negotiator.unmatched == 1)
+    }
+
+    /// End to end over the replayed walk: every chunk the session forms gets a
+    /// server reconstruction back and is answered with a factor within 2%.
+    @Test func everyChunkFromTheReplayedWalkIsAnswered() async throws {
+        let harness = try ReplayHarness(fixture: "trajectory-walk-2min.json")
+        let chunks = try await harness.run().depthChunks
+        #expect(chunks.count > 3, "only \(chunks.count) chunks to negotiate over")
+
+        let factor: Float = 11.4
+        var negotiator = DepthScaleNegotiator()
+        var answered = 0
+        for chunk in chunks {
+            negotiator.record(chunk)
+            let metric = chunk.frames.compactMap { frame -> SIMD3<Float>? in
+                guard frame.position.count == 3 else { return nil }
+                return SIMD3<Float>(frame.position[0], frame.position[1], frame.position[2])
+            }
+            let inbound = serverReply(chunkID: chunk.chunkID,
+                                      predicted: normalized(metric, by: factor))
+            guard let reply = negotiator.reply(to: inbound, deviceID: "phone-a", sentAt: 0),
+                  let scale = reply.metricScale else { continue }
+            answered += 1
+            #expect(abs(scale - factor) / factor <= 0.02,
+                    "chunk \(chunk.chunkID) recovered \(scale) against \(factor)")
+        }
+        #expect(answered == chunks.count,
+                "\(answered) of \(chunks.count) chunks were answered")
+        #expect(negotiator.unmatched == 0)
+        #expect(negotiator.unscalable == 0)
+    }
+
     // MARK: - Against the replayed fixtures
 
     /// The walk gives parallax; the stationary sweep does not. Both come from
