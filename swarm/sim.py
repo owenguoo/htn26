@@ -159,7 +159,7 @@ async def run(args: argparse.Namespace) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Swarm Sight phone simulator")
     ap.add_argument("--n", type=int, default=20, help="number of fake phones")
-    ap.add_argument("--fps", type=float, default=2)
+    ap.add_argument("--fps", type=float, default=10)
     ap.add_argument("--url", default="ws://localhost:8000/ws/phone")
     ap.add_argument("--seed", type=int, default=7)
     try:

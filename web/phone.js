@@ -3,9 +3,9 @@ import { startSlam, cameraForward, slamDebug } from '/web/slam.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
-const FPS = Number(params.get('fps')) || 2;          // frames per second sent to the hub
+const FPS = Number(params.get('fps')) || 10;          // frames per second sent to the hub
 const WIDTH = Number(params.get('w')) || 480;         // frame width in px
-const QUALITY = Number(params.get('q')) || 0.6;       // JPEG quality
+const QUALITY = Number(params.get('q')) || 0.5;       // JPEG quality
 const FAKE = params.has('fake');                     // no camera: send a generated test pattern
 const SLAM = params.has('slam') && !FAKE;             // 8th Wall world tracking for position + heading
 const SLAM_SCALE = params.get('slam') === 'responsive' ? 'responsive' : 'absolute';
@@ -136,6 +136,7 @@ function connect() {
     state.retry = 0;
     ws.send(JSON.stringify({
       type: 'hello', phoneId: state.phoneId, name: state.name, seat: state.seat,
+      build: document.querySelector('meta[name="swarm-build"]')?.content || '',
       ua: navigator.userAgent, sim: false,
     }));
   };
@@ -146,6 +147,8 @@ function connect() {
       ws.send(JSON.stringify({ type: 'pong', ts: msg.ts, tp: Date.now() }));
     } else if (msg.type === 'welcome') {
       state.connected = true;
+      hud.on = false;          // a fresh connection starts un-viewed:
+      setCaptureRate(FPS);     // the hub re-sends these if a console is watching
       if (state.gps) sendJson({ type: 'gps', ...state.gps });
       state.index = msg.index;
       state.color = msg.color;
@@ -590,6 +593,10 @@ function onCommand(msg) {
     };
     return;
   }
+  if (msg.cmd === 'hud') {
+    hud.on = !!msg.on;
+    return;
+  }
   if (msg.cmd === 'rate') {
     setCaptureRate(msg.fps || FPS);
     return;
@@ -656,6 +663,7 @@ function drawCompass() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   if (center === null) {
+    hud.compass = null;
     ctx.fillStyle = '#8b93b0';
     ctx.font = '600 13px system-ui';
     ctx.fillText('No compass data', w / 2, h / 2);
@@ -698,6 +706,7 @@ function drawCompass() {
     if (t.kind === 'candidate' && state.guide?.kind === 'respond') continue; // already shown as the guide marker
     markers.push({ off: t.off, label: `${t.label} ${t.dist.toFixed(0)}m`, color: t.color });
   }
+  hud.compass = { center, abs: abs !== null, markers: markers.map(({ off, label, color, big }) => ({ off, label, color, big: !!big })) };
   for (const m of markers) {
     const edge = Math.abs(m.off) > SPAN / 2 - 8;
     const x = edge ? (m.off > 0 ? w - 22 : 22) : w / 2 + m.off * ppd;
@@ -838,6 +847,38 @@ function frameToScreen(nx, ny, W, H) {
   return [dx + nx * v.videoWidth * s, dy + ny * v.videoHeight * s];
 }
 
+// Inverse of frameToScreen: screen pixels → 0..1 position in the captured frame.
+function screenToFrame(x, y, W, H) {
+  const v = $('#video');
+  if (SLAM || FAKE || !v.videoWidth) return [x / W, y / H];
+  const s = Math.max(W / v.videoWidth, H / v.videoHeight);
+  const dx = (W - v.videoWidth * s) / 2, dy = (H - v.videoHeight * s) / 2;
+  return [(x - dx) / (v.videoWidth * s), (y - dy) / (v.videoHeight * s)];
+}
+
+// ---------------------------------------------------------------- HUD mirror
+// While an operator has this phone expanded in the console, send a description of what's on
+// screen (compass, banners, AR markers, boxes) so the console can draw the same HUD over the feed.
+const hud = { on: false, compass: null, ar: [], screen: null };
+setInterval(() => {
+  if (!hud.on) return;
+  const shown = (sel) => ($(sel).classList.contains('on') ? $(sel).textContent : null);
+  const g = $('#guide');
+  const card = $('#phaseCard');
+  sendJson({
+    type: 'hud',
+    compass: hud.compass,
+    banner: g.classList.contains('on')
+      ? { text: g.textContent, tone: g.classList.contains('alert') ? 'alert' : g.classList.contains('ok') ? 'ok' : 'warn' } : null,
+    lookingFor: shown('#lookingFor'),
+    toast: shown('#toast'),
+    card: card.classList.contains('on') ? { title: $('#phaseTitle').textContent, text: $('#phaseText').textContent } : null,
+    ar: hud.ar,
+    screen: hud.screen,
+    dets: state.dets && state.dets.until > Date.now() ? state.dets.boxes : null,
+  });
+}, 200);
+
 function drawAR() {
   const c = $('#ar');
   const W = c.clientWidth, H = c.clientHeight;
@@ -875,6 +916,8 @@ function drawAR() {
     targets.push({ off: g, dist: state.guide.distance ?? 3, label: 'CANDIDATE', color: '#ff5d73', kind: 'candidate' });
   }
   const seen = new Set();
+  hud.ar = [];
+  hud.screen = [...screenToFrame(0, 0, W, H), ...screenToFrame(W, H, W, H)]; // the part of the frame this screen shows
   for (const t of targets) {
     if (t.kind === 'candidate' && seen.has('candidate')) continue;
     seen.add(t.kind);
@@ -882,6 +925,8 @@ function drawAR() {
     if (!p) continue;
     const [x, y] = p;
     const r = Math.max(9, Math.min(22, 60 / Math.max(t.dist, 1)));
+    const [fx, fy] = screenToFrame(x, y, W, H);
+    hud.ar.push({ x: fx, y: fy, r: r / H, label: `${t.label.replace(/^◆ /, '')} · ${t.dist.toFixed(1)} m`, color: t.color });
     ctx.fillStyle = t.color;
     ctx.strokeStyle = 'rgba(0,0,0,0.6)';
     ctx.lineWidth = 2;
