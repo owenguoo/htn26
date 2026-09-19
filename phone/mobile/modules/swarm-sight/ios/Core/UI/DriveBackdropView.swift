@@ -1,0 +1,227 @@
+import SwiftUI
+import SwarmCore
+
+/// The room, drawn where the camera would be.
+///
+/// It replaces `ReplayBackdrop` on the drive path, and it exists for one
+/// reason: a HUD floating on a flat gradient can only be judged as typography.
+/// Over a floor that slides and a stage wall that swings out of shot as you
+/// turn, you can see whether the compass tape moves the right way, whether the
+/// mini-map cone agrees with what is in front of you, and whether a heading
+/// sign is mirrored — which `phone/CLAUDE.md` calls out as the most
+/// consequential class of bug here.
+///
+/// **It is a backdrop, not a game.** A floor grid on the room's own metre
+/// lines, the room's bounds, and the stage wall are enough to answer "which way
+/// am I facing"; everything is drawn in the mini-map's own palette at low
+/// contrast so it stays behind the HUD rather than competing with it. There is
+/// no texture, no lighting and no motion that is not the operator's.
+///
+/// Nothing here is new plumbing: `overlay.room` and `overlay.roomPose` are
+/// already on every `OverlayFrame`.
+struct DriveBackdropView: View {
+    /// From the hub's `welcome`. nil until it arrives, and then `room.json`'s
+    /// own numbers stand in — the same default `DriveBounds` starts with, so
+    /// the picture does not jump when `welcome` lands.
+    let room: HubRoom?
+    /// Where the operator has driven to. nil before the first pose.
+    let pose: RoomPose?
+
+    private var width: Double { max(1, room?.width ?? DriveBounds.roomJSON.width) }
+    private var depth: Double { max(1, room?.depth ?? DriveBounds.roomJSON.depth) }
+
+    var body: some View {
+        GeometryReader { geometry in
+            Canvas(opaque: false, rendersAsynchronously: false) { context, size in
+                let camera = RoomCamera(
+                    x: pose?.x ?? 0,
+                    y: pose?.y ?? depth / 3,
+                    heading: pose?.heading ?? 0,
+                    pitch: pose?.pitch ?? 0,
+                    // Matches `DriveBounds.eyeHeight`. The two are the same
+                    // camera; a mismatch would put the horizon somewhere the
+                    // poses say it is not.
+                    eye: DriveBounds.roomJSON.eyeHeight,
+                    // The mini-map's cone angle, so the slice of room in shot
+                    // and the slice the cone claims are the same slice. The
+                    // vertical field is therefore wide — which is what puts
+                    // enough floor on screen for a turn to be legible.
+                    fovDegrees: room?.cameraFovDeg ?? 55,
+                    size: size)
+                draw(&context, camera: camera)
+            }
+        }
+        .background(
+            // As dark as the feed it stands in for, so the HUD's contrast is
+            // the same thing in the Simulator as it is on a device.
+            LinearGradient(colors: [Color(red: 0.05, green: 0.07, blue: 0.16), .hudVoid],
+                           startPoint: .top, endPoint: .bottom)
+        )
+        .cameraChrome()
+        .ignoresSafeArea()
+        // The whole point is that `DriveLookLayer` underneath gets the drag.
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// Metres, floor to the top of the drawn walls. Head height plus a bit, so
+    /// the wall line sits above the horizon and reads as a wall.
+    private static let wallHeight: Double = 2.6
+
+    private func draw(_ context: inout GraphicsContext, camera: RoomCamera) {
+        let halfWidth = width / 2
+
+        // The floor, darker than the space above it. The horizon then needs no
+        // line of its own: it is where the two meet.
+        if let floor = camera.polygon([(-halfWidth, 0, 0), (halfWidth, 0, 0),
+                                       (halfWidth, depth, 0), (-halfWidth, depth, 0)]) {
+            context.fill(floor, with: .color(MapInk.floor))
+        }
+
+        // Metre lines, on the room's own grid — the same numbers the mini-map
+        // is drawn in, so pacing across one is a metre in both.
+        var grid = Path()
+        var line = -halfWidth.rounded(.up)
+        while line <= halfWidth {
+            camera.add(&grid, from: (line, 0, 0), to: (line, depth, 0))
+            line += 1
+        }
+        var row: Double = 0
+        while row <= depth {
+            camera.add(&grid, from: (-halfWidth, row, 0), to: (halfWidth, row, 0))
+            row += 1
+        }
+        context.stroke(grid, with: .color(.white.opacity(0.13)), lineWidth: 1)
+
+        // The stage wall: the one landmark that makes "facing the stage"
+        // unambiguous without reading anything. Same fill the mini-map gives
+        // the stage, so the two pictures name it the same way.
+        let stageWidth = min(width, room?.stage?.width ?? width * 0.4)
+        let stageHalf = stageWidth / 2
+        if let band = camera.polygon([(-stageHalf, 0, 0), (stageHalf, 0, 0),
+                                      (stageHalf, 0, Self.wallHeight), (-stageHalf, 0, Self.wallHeight)]) {
+            context.fill(band, with: .color(MapInk.stage.opacity(0.22)))
+            context.stroke(band, with: .color(MapInk.outline.opacity(0.5)), lineWidth: 1.5)
+            label(&context, in: band.boundingRect)
+        }
+        // The stage platform's own footprint, so its depth is visible from the
+        // side as well as head-on.
+        if let stage = room?.stage, stage.depth > 0 {
+            var footprint = Path()
+            camera.add(&footprint, from: (-stageHalf, stage.depth, 0), to: (stageHalf, stage.depth, 0))
+            camera.add(&footprint, from: (-stageHalf, 0, 0), to: (-stageHalf, stage.depth, 0))
+            camera.add(&footprint, from: (stageHalf, 0, 0), to: (stageHalf, stage.depth, 0))
+            context.stroke(footprint, with: .color(MapInk.outline.opacity(0.35)), lineWidth: 1)
+        }
+
+        // The room's bounds, floor line and wall top, so a wall arrives before
+        // you walk into it.
+        var walls = Path()
+        let corners: [(Double, Double)] = [(-halfWidth, 0), (halfWidth, 0), (halfWidth, depth), (-halfWidth, depth)]
+        for index in corners.indices {
+            let a = corners[index], b = corners[(index + 1) % corners.count]
+            camera.add(&walls, from: (a.0, a.1, Self.wallHeight), to: (b.0, b.1, Self.wallHeight))
+            camera.add(&walls, from: (a.0, a.1, 0), to: (a.0, a.1, Self.wallHeight))
+        }
+        context.stroke(walls, with: .color(MapInk.outline.opacity(0.28)), lineWidth: 1)
+    }
+
+    /// "STAGE" across the band, but only when the band is big enough on screen
+    /// for the word to be a landmark rather than clutter.
+    private func label(_ context: inout GraphicsContext, in rect: CGRect) {
+        guard rect.width > 90, rect.height > 24 else { return }
+        context.draw(Text("STAGE").font(.system(size: 13, weight: .heavy))
+            .foregroundStyle(MapInk.outline.opacity(0.75)),
+                     at: CGPoint(x: rect.midX, y: rect.midY))
+    }
+}
+
+/// A pinhole camera standing in the room frame.
+///
+/// Room coordinates in, screen points out. Kept next to the only view that uses
+/// it rather than in SwarmCore: it is a drawing convenience, not a claim about
+/// where anything is, and `RoomAlignment` already owns the real transform.
+private struct RoomCamera {
+    let x: Double
+    let y: Double
+    /// Degrees clockwise, 0 = facing the stage, as everywhere else in the room
+    /// frame.
+    let heading: Double
+    /// Degrees, positive up.
+    let pitch: Double
+    let eye: Double
+    let fovDegrees: Double
+    let size: CGSize
+
+    /// Anything closer than this is behind or on top of the lens and has to be
+    /// clipped away rather than projected, or a line whips across the screen.
+    private static let near: Double = 0.35
+
+    /// Points per unit of `f = 1`, from the horizontal field of view.
+    private var focal: Double {
+        let half = max(5, min(150, fovDegrees)) / 2 * .pi / 180
+        return Double(size.width) / 2 / max(tan(half), 1e-3)
+    }
+
+    /// Room point → camera space: right of the lens, above it, in front of it.
+    private func view(_ point: (Double, Double, Double)) -> SIMD3<Double> {
+        let dx = point.0 - x, dy = point.1 - y
+        let radians = heading * .pi / 180
+        // Heading 0 faces the stage, which is −y; +90 faces +x. Same convention
+        // as `DriveMotionModel`, which is the point of writing it out here.
+        let forward = dx * sin(radians) - dy * cos(radians)
+        let right = dx * cos(radians) + dy * sin(radians)
+        let up = point.2 - eye
+        let tilt = pitch * .pi / 180
+        return SIMD3(right, up * cos(tilt) - forward * sin(tilt), forward * cos(tilt) + up * sin(tilt))
+    }
+
+    private func screen(_ v: SIMD3<Double>) -> CGPoint {
+        let depth = max(v.z, Self.near)
+        return CGPoint(x: Double(size.width) / 2 + v.x / depth * focal,
+                       y: Double(size.height) / 2 - v.y / depth * focal)
+    }
+
+    /// Appends one room-frame segment, clipped to the near plane.
+    ///
+    /// World → camera is affine, so `z` varies linearly along the segment and
+    /// the crossing can be found by interpolating the camera-space endpoints
+    /// directly. No projection happens before the clip, which is what stops a
+    /// point behind the lens from being drawn in front of it, mirrored.
+    func add(_ path: inout Path, from a: (Double, Double, Double), to b: (Double, Double, Double)) {
+        var va = view(a), vb = view(b)
+        if va.z < Self.near, vb.z < Self.near { return }
+        if va.z < Self.near {
+            va = mix(va, vb, t: (Self.near - va.z) / (vb.z - va.z))
+        } else if vb.z < Self.near {
+            vb = mix(vb, va, t: (Self.near - vb.z) / (va.z - vb.z))
+        }
+        path.move(to: screen(va))
+        path.addLine(to: screen(vb))
+    }
+
+    /// A convex room-frame polygon, clipped to the near plane by
+    /// Sutherland–Hodgman against the single plane that matters.
+    func polygon(_ points: [(Double, Double, Double)]) -> Path? {
+        var clipped: [SIMD3<Double>] = []
+        let corners = points.map(view)
+        for index in corners.indices {
+            let current = corners[index], next = corners[(index + 1) % corners.count]
+            let currentIn = current.z >= Self.near, nextIn = next.z >= Self.near
+            if currentIn { clipped.append(current) }
+            if currentIn != nextIn {
+                clipped.append(mix(current, next, t: (Self.near - current.z) / (next.z - current.z)))
+            }
+        }
+        guard clipped.count >= 3 else { return nil }
+        var path = Path()
+        path.addLines(clipped.map(screen))
+        path.closeSubpath()
+        return path
+    }
+
+    private func mix(_ a: SIMD3<Double>, _ b: SIMD3<Double>, t: Double) -> SIMD3<Double> {
+        guard t.isFinite else { return a }
+        return a + (b - a) * min(1, max(0, t))
+    }
+}

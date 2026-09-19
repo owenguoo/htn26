@@ -208,9 +208,34 @@ public final class SwarmRuntime: @unchecked Sendable {
                                                          encoder: SyntheticFrameEncoder(now: uptime),
                                                          uptime: uptime, thermal: thermal))
             session = RuntimeSession(client: client, preview: nil, venue: venue, socketURL: socketURL)
+        case .drive:
+            #if targetEnvironment(simulator)
+            let provider = DrivePoseProvider(
+                venue: venue,
+                configuration: .init(emitsMarkers: options.replayMarkers),
+                // The same clock `SwarmClient` gets, which is precisely why
+                // `anchorsClockToPoses` stays false here: unlike a fixture,
+                // whose timestamps are somebody else's uptime, these poses are
+                // already stamped in this process's `CACurrentMediaTime`.
+                now: uptime)
+            configuration.build += "-drive"
+            let client = SwarmClient(configuration: configuration,
+                                     dependencies: .init(provider: provider,
+                                                         encoder: SyntheticFrameEncoder(now: uptime),
+                                                         uptime: uptime, thermal: thermal))
+            // `preview: nil` is what puts `DriveBackdropView` on screen — the
+            // same branch `ReplayBackdrop` used to take.
+            session = RuntimeSession(client: client, preview: nil, venue: venue,
+                                     socketURL: socketURL, drive: provider)
+            #else
+            // Unreachable: `source` was rewritten to `.arkit` above. The
+            // compiler still wants a value out of this arm, and a throw is more
+            // honest than a silently different session.
+            throw RuntimeError.unavailablePoseSource(source.rawValue)
+            #endif
         }
 
-        PhoneIdentity.name = name
+        PhoneIdentity.name = configuration.name
         PhoneIdentity.lastHubURL = scanned
         publish(session)
         await MainActor.run {
@@ -236,11 +261,13 @@ public final class SwarmRuntime: @unchecked Sendable {
     public enum RuntimeError: Error, LocalizedError {
         case badHubURL(String)
         case notJoined
+        case unavailablePoseSource(String)
 
         public var errorDescription: String? {
             switch self {
             case .badHubURL(let text): "“\(text)” is not a hub address. Scan the QR on the dashboard."
             case .notJoined: "Not joined to a hub."
+            case .unavailablePoseSource(let kind): "The “\(kind)” pose source does not run on this device."
             }
         }
     }

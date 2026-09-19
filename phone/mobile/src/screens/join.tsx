@@ -34,7 +34,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
 import SwarmSight from '../../modules/swarm-sight';
-import { parseJoinLink } from '../joinLink';
+import { parseJoinLink, poseSourceFor, requestedPoseSource } from '../joinLink';
 import { colors, secondaryStyle, textStyles } from '../theme/tokens';
 
 /** Test hook: what an operator does in the native seat picker, through the JS API. */
@@ -91,7 +91,13 @@ function useSeededField(initial: string) {
  * harness drives.
  */
 export default function Join() {
-  const params = useLocalSearchParams<{ hub?: string; replay?: string; markers?: string; seat?: string }>();
+  const params = useLocalSearchParams<{
+    hub?: string;
+    replay?: string;
+    drive?: string;
+    markers?: string;
+    seat?: string;
+  }>();
   const [stored] = useState(() => SwarmSight.getConfig());
   const [hub, setHub] = useState(stored.lastHubURL || stored.venueHubURL);
   const [name, setName] = useState(stored.name);
@@ -117,22 +123,32 @@ export default function Join() {
   }, []);
 
   // A deep link (swarmsight://join?hub=…) or the launch-argument test hook prefills
-  // the form. Only `replay=1` joins without a tap.
+  // the form. Only `replay=1` or `drive=1` joins without a tap.
   useEffect(() => {
     if (autoJoined.current) return;
     const fromRoute = params.hub
-      ? `swarmsight://join?hub=${encodeURIComponent(params.hub)}&replay=${params.replay ?? ''}&markers=${params.markers ?? ''}&seat=${params.seat ?? ''}`
+      ? `swarmsight://join?hub=${encodeURIComponent(params.hub)}&replay=${params.replay ?? ''}&drive=${params.drive ?? ''}&markers=${params.markers ?? ''}&seat=${params.seat ?? ''}`
       : stored.launchJoin;
     const link = parseJoinLink(fromRoute);
     if (!link) return;
     autoJoined.current = true;
     setHub(link.hub);
     hubField.set(link.hub);
-    if (link.replay) {
-      SwarmSight.configure({ poseSource: 'replay', replayMarkers: link.markers });
+    if (link.replay || link.drive) {
+      SwarmSight.configure({ poseSource: poseSourceFor(link), replayMarkers: link.markers });
       void join(link.hub, name || 'sim').then(() => (link.seat ? tapSeat(link.seat) : undefined));
     }
-  }, [params.hub, params.replay, params.markers, params.seat, stored.launchJoin, join, name, hubField]);
+  }, [
+    params.hub,
+    params.replay,
+    params.drive,
+    params.markers,
+    params.seat,
+    stored.launchJoin,
+    join,
+    name,
+    hubField,
+  ]);
 
   // Apple's own scanner sheet (DataScanner): nothing of ours to render or get wrong.
   const scan = useCallback(async () => {
@@ -155,9 +171,17 @@ export default function Join() {
 
   const submit = useCallback(() => void join(hub, name), [join, hub, name]);
 
-  const hint = `The address on the dashboard’s QR code. Phone ${stored.phoneId.slice(0, 8)}${
-    stored.poseSource === 'replay' ? ' · no ARKit here, so this will replay a recorded walk' : ''
-  }.`;
+  // What this build will actually do for poses, said plainly. The Simulator's
+  // default is now `drive`, not `replay`, so a footnote that only knew about
+  // replay would have gone quiet on the one case it exists for.
+  const poseSource = requestedPoseSource(stored.poseSource);
+  const aboutPoses =
+    poseSource === 'drive'
+      ? ' · no ARKit here, so drag to look around and use the stick to walk'
+      : poseSource === 'replay'
+        ? ' · no ARKit here, so this will replay a recorded walk'
+        : '';
+  const hint = `The address on the dashboard’s QR code. Phone ${stored.phoneId.slice(0, 8)}${aboutPoses}.`;
 
   return (
     <Host style={styles.fill} useViewportSizeMeasurement>

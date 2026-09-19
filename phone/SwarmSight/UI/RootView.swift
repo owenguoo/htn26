@@ -37,13 +37,19 @@ struct RootView: View {
         // swarmsight://join?hub=… from the dashboard QR prefills the form.
         guard HubURL.derive(url.absoluteString) != nil else { return }
         hub = url.absoluteString
-        // `&replay=1` is the test hook: replay a recorded walk instead of ARKit
-        // and join without a tap. `&markers=0` strips sightings, for the seat
-        // fallback.
+        // Two test hooks join without a tap. `&drive=1` is the interactive one:
+        // drag to look, stick to walk, a synthetic room behind the HUD.
+        // `&replay=1` replays a recorded walk and means exactly what it always
+        // did, so existing `-SwarmSightJoin` recipes are untouched.
+        // `&markers=0` strips sightings for the seat fallback, on both.
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        guard items.contains(where: { $0.name == "replay" && $0.value == "1" }) else { return }
+        func flag(_ name: String) -> Bool { items.contains { $0.name == name && $0.value == "1" } }
+        let source: PoseSourceKind? = flag("drive") ? .drive : flag("replay") ? .replay : nil
+        guard let source else { return }
         let markers = !items.contains { $0.name == "markers" && $0.value == "0" }
-        SwarmRuntime.shared.configure(RuntimeOptions(poseSource: .replay, replayMarkers: markers))
+        // `configure` drops `.drive` off-simulator, so a link that reaches a
+        // real phone joins with ARKit rather than a joystick.
+        SwarmRuntime.shared.configure(RuntimeOptions(poseSource: source, replayMarkers: markers))
         if name.isEmpty { name = "sim" }
         join()
     }

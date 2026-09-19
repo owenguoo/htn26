@@ -40,8 +40,20 @@ public struct OperatorView: View {
             // a camera they cannot see through.
             if let preview = model.preview {
                 CameraPreviewView(source: preview)
+            } else if model.isDrive {
+                // The Simulator, driving. A room that turns with the heading,
+                // so the HUD can be judged over something that moves the way
+                // the operator moved rather than over a flat gradient.
+                DriveBackdropView(room: overlay.room, pose: overlay.roomPose)
             } else {
                 ReplayBackdrop(isJoined: model.isJoined)
+            }
+
+            // Under everything interactive, on purpose: the chrome above claims
+            // its own taps first, so the status pill, the mini-map, the gear and
+            // the ✕ keep working while a drag anywhere else turns the camera.
+            if model.isDrive {
+                DriveLookLayer(model: model)
             }
             // Everything from here to `chrome` is drawn over a live video frame.
 
@@ -59,6 +71,20 @@ public struct OperatorView: View {
             HUDFrameLayerView(hud: model.frame.hud, captureSize: captureSize)
 
             chrome
+
+            // Over the chrome so a thumb on the puck is not competing with the
+            // chrome's layout, and because the one control the operator has to
+            // find should not be underneath anything.
+            if model.isDrive, !isPickingSeat {
+                DriveStickView(model: model)
+            }
+
+            // The glance-speed form of the elevation half of the banner. Only
+            // ever present when the operator is already on target horizontally,
+            // so it never appears beside a turn instruction.
+            if let elevation = overlay.elevation, !isPickingSeat {
+                ElevationCueView(cue: elevation)
+            }
 
             if let phase = overlay.phase, PhaseCardView.covers(phase), !isPickingSeat {
                 PhaseCardView(phase: phase, alignment: overlay.alignment,
