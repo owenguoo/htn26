@@ -23,3 +23,18 @@ This is a bounded room preview, not lossless accumulation: areas outside the
 selected views may disappear, weakly observed surfaces can have holes, and
 moving people can still produce artifacts. Failed registration is held rather
 than silently reanchoring the map. Large rooms may exceed this view budget.
+
+## Saved-scan measurements
+
+On the existing A100 quality worker, using the saved 96-view archive:
+
+| Selected views | Fusion resolution | Worker time | Request round trip |
+| --- | --- | --- | --- |
+| 24 | 128 | 24.5 s | 27.9 s |
+| 32 | 128 | 51.4 s | 59.3 s |
+| 24 | 80 | 10.7 s | 12.7 s |
+
+The first actual hub rebuild with the selected 24/80 settings took 15.5 s.
+These are individual measurements, not latency guarantees. Browser inspection
+showed fewer layered wall surfaces, but substantial holes and less floor coverage
+than the accumulated sections. This mode does not solve missing observations.
