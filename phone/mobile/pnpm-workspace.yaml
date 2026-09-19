@@ -1,0 +1,5 @@
+nodeLinker: hoisted
+# pnpm 11 refuses to install until every dependency build script is ruled on.
+# unrs-resolver is an optional native resolver for lint tooling; not needed.
+allowBuilds:
+  unrs-resolver: false

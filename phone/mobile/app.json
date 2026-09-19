@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "SwarmSight",
+    "slug": "swarmsight",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.swarmsight.SwarmSight",
+      "supportsTablet": false,
+      "requireFullScreen": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "SwarmSight tracks where this phone is and streams what it sees to the search dashboard.",
+        "NSLocalNetworkUsageDescription": "SwarmSight connects to the search hub on this Wi-Fi network.",
+        "NSBonjourServices": [
+          "_swarmsight._tcp"
+        ],
+        "NSMotionUsageDescription": "Motion tells SwarmSight whether you moved while camera tracking was lost.",
+        "UIRequiredDeviceCapabilities": [
+          "arm64",
+          "arkit"
+        ],
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "SwarmSight tracks where this phone is and streams what it sees to the search dashboard.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ],
+      "./plugins/withSwarmSight"
+    ],
+    "scheme": "swarmsight",
+    "newArchEnabled": true,
+    "platforms": [
+      "ios"
+    ]
+  }
+}
