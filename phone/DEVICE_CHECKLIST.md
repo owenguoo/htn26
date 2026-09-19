@@ -401,3 +401,30 @@ the Simulator in replay mode. None of that involved ARKit or a camera.
       banner, toast, ping diamonds and detection boxes drawn over the feed line
       up with what the phone shows, and the dimmed side strips match what the
       phone's screen actually crops.
+
+## Expo shell (mobile/) — unverified on hardware
+
+Verified so far: Release build for the Simulator (no Metro), JS → module →
+SwarmCore, join via link, hosted operator view, hub e2e assertions for
+`marker`, `none` and `seat` alignment. All in replay mode; no ARKit, no camera.
+
+Build for a phone (Release, no Metro needed on stage):
+
+    cd phone/mobile
+    SWARMSIGHT_TEAM_ID=<10-char team id> LANG=en_US.UTF-8 pnpm expo prebuild -p ios --clean
+    LANG=en_US.UTF-8 pnpm expo run:ios --device --configuration Release
+
+- [ ] It launches without Metro, and the local-network prompt appears on first join.
+- [ ] The marker PNGs load from the pod's resource bundle (`SwarmSightResources`):
+      calibration starts, no "missing marker image" error on the join screen.
+- [ ] "Scan the dashboard QR" opens Apple's scanner and fills the hub field for
+      all three QR forms (http LAN, https LAN :8443, tunnel).
+- [ ] `swarmsight://join?hub=…` from the Camera app prefills the form.
+- [ ] Hosted view: content clears the Dynamic Island and the home indicator; the
+      status bar is hidden; the screen never sleeps while joined.
+- [ ] Settings (gear) shows live diagnostics at ~2 Hz; toggles hide the pill /
+      mini-map; "Leave the hub" returns to the join form and the tile goes
+      disconnected on the dashboard.
+- [ ] Background → foreground: preview resumes, session is `recalibrating`.
+- [ ] Then run every section above this one on the Expo build. When they pass,
+      retire `SwarmSight.xcodeproj` (Gate 10).

@@ -6,8 +6,18 @@ import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInpu
 import SwarmSight from '../modules/swarm-sight';
 import { parseJoinLink } from '../src/joinLink';
 
+/** Test hook: what an operator does in the native seat picker, through the JS API. */
+async function tapSeat(seat: { x: number; y: number }) {
+  await SwarmSight.setSeat(seat.x, seat.y);
+  // Needs a first pose to anchor to, as an operator would wait for the camera.
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (await SwarmSight.calibrateFacingStage()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 export default function Join() {
-  const params = useLocalSearchParams<{ hub?: string; replay?: string; markers?: string }>();
+  const params = useLocalSearchParams<{ hub?: string; replay?: string; markers?: string; seat?: string }>();
   const [stored] = useState(() => SwarmSight.getConfig());
   const [hub, setHub] = useState(stored.lastHubURL || stored.venueHubURL);
   const [name, setName] = useState(stored.name);
@@ -35,7 +45,7 @@ export default function Join() {
   useEffect(() => {
     if (autoJoined.current) return;
     const fromRoute = params.hub
-      ? `swarmsight://join?hub=${encodeURIComponent(params.hub)}&replay=${params.replay ?? ''}&markers=${params.markers ?? ''}`
+      ? `swarmsight://join?hub=${encodeURIComponent(params.hub)}&replay=${params.replay ?? ''}&markers=${params.markers ?? ''}&seat=${params.seat ?? ''}`
       : stored.launchJoin;
     const link = parseJoinLink(fromRoute);
     if (!link) return;
@@ -43,9 +53,9 @@ export default function Join() {
     setHub(link.hub);
     if (link.replay) {
       SwarmSight.configure({ poseSource: 'replay', replayMarkers: link.markers });
-      void join(link.hub, name || 'sim');
+      void join(link.hub, name || 'sim').then(() => (link.seat ? tapSeat(link.seat) : undefined));
     }
-  }, [params.hub, params.replay, params.markers, stored.launchJoin, join, name]);
+  }, [params.hub, params.replay, params.markers, params.seat, stored.launchJoin, join, name]);
 
   // Apple's own scanner sheet (DataScanner): nothing of ours to render or get wrong.
   const scan = useCallback(async () => {
