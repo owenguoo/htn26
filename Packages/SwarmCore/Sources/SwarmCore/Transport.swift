@@ -108,6 +108,8 @@ public actor Transport {
     /// Latest-wins, one shallow buffer per perishable type so a burst of frames
     /// cannot starve poses.
     private var perishable: [WireMessageType: [WireMessage]] = [:]
+    /// Where the round-robin resumes, so every perishable type gets a turn.
+    private var perishableCursor = 0
 
     /// Re-sent on every successful connect so the server can re-register the
     /// device after a drop. Everything else perishable is discarded on
@@ -194,14 +196,26 @@ public actor Transport {
         controlQueue.count + perishable.values.reduce(0) { $0 + $1.count }
     }
 
+    /// The perishable types, in the order the cursor rotates through them.
+    private static let perishableOrder: [WireMessageType] = [.pose, .frame, .depth]
+
     private func nextMessage() -> WireMessage? {
         if !controlQueue.isEmpty { return controlQueue.removeFirst() }
-        // Round-robin across perishable types, oldest-first within a type, so a
-        // full frame buffer cannot starve pose updates.
-        for type in WireMessageType.allCases {
+
+        // Genuine round-robin, not priority order. Under the starvation this
+        // whole design exists for — a socket accepting one message a second —
+        // strict priority would send nothing but poses forever: the pose buffer
+        // refills at 10 Hz, so it is never empty at a send opportunity, and
+        // frames would never leave the phone. No frames means no inference,
+        // which is the entire point of the system.
+        let order = Self.perishableOrder
+        for step in 0..<order.count {
+            let index = (perishableCursor + step) % order.count
+            let type = order[index]
             if var bucket = perishable[type], !bucket.isEmpty {
                 let message = bucket.removeFirst()
                 perishable[type] = bucket
+                perishableCursor = (index + 1) % order.count
                 return message
             }
         }

@@ -250,6 +250,42 @@ struct TransportTests {
         await transport.stop()
     }
 
+    /// A socket slow enough that the pose buffer is never empty at a send
+    /// opportunity. Strict priority would send nothing but poses forever, and no
+    /// frames means no inference — the entire point of the system.
+    @Test func aContinuousPoseStreamDoesNotStarveFrames() async throws {
+        let channel = GatedChannel()
+        let (transport, _) = makeTransport(channels: [channel])
+        await transport.start()
+        await waitUntil("connected") { await transport.currentState() == .connected }
+
+        // Ten poses per frame, which is the real ratio, into a socket that
+        // accepts one message for every eleven offered.
+        for round in 1...30 {
+            for index in 1...10 {
+                await transport.send(.pose(Sample.poseUpdate(seq: UInt64(round * 10 + index))))
+                await Task.yield()
+            }
+            await transport.send(.frame(Sample.frameChunk(id: UInt64(round))))
+            await Task.yield()
+            await channel.grant(1)
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        await channel.grant(20)
+        await waitUntil("drained and settled") {
+            let buffered = await transport.bufferedMessageCount()
+            let inFlight = await transport.currentStats().inFlight
+            return buffered == 0 && inFlight == 0
+        }
+
+        let delivered = await channel.deliveredEnvelopes()
+        let poses = delivered.filter { if case .pose = $0.message { true } else { false } }.count
+        let frames = delivered.filter { if case .frame = $0.message { true } else { false } }.count
+        #expect(poses > 0)
+        #expect(frames > 0, "the pose stream starved frames out entirely over 30 rounds")
+        #expect(frames >= 5, "only \(frames) of 30 frames got a turn against \(poses) poses")
+    }
+
     @Test func inboundCommandsAreDecodedAndDelivered() async throws {
         let channel = GatedChannel()
         let (transport, _) = makeTransport(channels: [channel])
