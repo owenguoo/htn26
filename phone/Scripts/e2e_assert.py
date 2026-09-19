@@ -35,7 +35,7 @@ def check(phone: dict | None, args: argparse.Namespace) -> list[str]:
     expect(phone.get("stale") is False, "stale == false")
     expect((phone.get("fps") or 0) > 0, f"fps > 0 (got {phone.get('fps')})")
     expect(phone.get("latencyMs") is not None, "latencyMs non-null")
-    expect(debug.get("client") == "swarmsight-ios", "debug.client")
+    expect(debug.get("client") == "beacon-ios", "debug.client")
     expect(debug.get("alignment") == args.alignment,
            f"debug.alignment == {args.alignment} (got {debug.get('alignment')!r})")
     if args.alignment == "none":

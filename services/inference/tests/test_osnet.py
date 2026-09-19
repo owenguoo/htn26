@@ -9,7 +9,7 @@ from PIL import Image
 
 
 def test_osnet_module_available():
-    from swarm_sight.osnet import OSNetEmbedder
+    from beacon.osnet import OSNetEmbedder
 
     assert callable(OSNetEmbedder)
 
@@ -17,8 +17,8 @@ def test_osnet_module_available():
 @pytest.fixture
 def embedder(monkeypatch, tmp_path):
     torch = pytest.importorskip("torch")
-    from swarm_sight._vendor import osnet as architecture
-    from swarm_sight.osnet import OSNetEmbedder
+    from beacon._vendor import osnet as architecture
+    from beacon.osnet import OSNetEmbedder
 
     class Backbone(torch.nn.Module):
         def __init__(self):
@@ -79,7 +79,7 @@ def test_concurrent_calls_serialize_model_access(embedder):
 @pytest.mark.model
 @pytest.mark.skipif(os.environ.get("SWARM_TEST_REID") != "1", reason="Set SWARM_TEST_REID=1")
 def test_pretrained_osnet_real_encoding():
-    from swarm_sight.osnet import OSNetEmbedder
+    from beacon.osnet import OSNetEmbedder
 
     model = OSNetEmbedder(device="cpu")
     images = [Image.new("RGB", (128, 256), color) for color in ("red", "blue", "red")]
@@ -94,7 +94,7 @@ def test_pretrained_osnet_real_encoding():
 def test_checkpoint_requires_complete_backbone(embedder, tmp_path):
     import torch
 
-    from swarm_sight.osnet import OSNetEmbedder
+    from beacon.osnet import OSNetEmbedder
 
     path = tmp_path / "incomplete.pth"
     torch.save({}, path)
@@ -106,7 +106,7 @@ def test_default_download_uses_pinned_reid_weights(embedder, monkeypatch, tmp_pa
     import huggingface_hub
     import torch
 
-    from swarm_sight.osnet import MODEL_FILENAME, MODEL_REPO, MODEL_REVISION, OSNetEmbedder
+    from beacon.osnet import MODEL_FILENAME, MODEL_REPO, MODEL_REVISION, OSNetEmbedder
 
     path = tmp_path / "weights.pth"
     torch.save(embedder.model.state_dict(), path)

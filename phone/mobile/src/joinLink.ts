@@ -1,5 +1,5 @@
-import SwarmSight from '../modules/swarm-sight';
-import type { PoseSource } from '../modules/swarm-sight/src/SwarmSight.types';
+import Beacon from '../modules/beacon';
+import type { PoseSource } from '../modules/beacon/src/Beacon.types';
 
 export type JoinLink = {
   hub: string;
@@ -13,7 +13,7 @@ export type JoinLink = {
  * The pose sources this screen can ask for.
  *
  * `'drive'` is missing from `PoseSource` in
- * `modules/swarm-sight/src/SwarmSight.types.ts`, which is not this agent's file —
+ * `modules/beacon/src/Beacon.types.ts`, which is not this agent's file —
  * the request is in `HANDOFF-D2.md`. Until the union grows, the widening is
  * declared once, here, rather than cast at each call site: one place to delete.
  */
@@ -43,13 +43,13 @@ export function poseSourceFor(link: JoinLink): PoseSource {
 }
 
 /**
- * `swarmsight://join?hub=…` from the dashboard QR, or the bare page URL the QR
+ * `beacon://join?hub=…` from the dashboard QR, or the bare page URL the QR
  * encodes.
  *
  * Two test hooks join without a tap. `&drive=1` is the interactive one: no
  * ARKit, a room you drag to look around and a stick to walk with, which is what
  * makes the Simulator worth judging the UI on. `&replay=1` is the recorded walk
- * and **means exactly what it always did** — every `-SwarmSightJoin` recipe and
+ * and **means exactly what it always did** — every `-BeaconJoin` recipe and
  * every e2e script that passes it keeps working unchanged.
  *
  * `&markers=0` strips sightings to exercise the seat fallback (both sources
@@ -59,7 +59,7 @@ export function poseSourceFor(link: JoinLink): PoseSource {
  * Whether the text is a hub at all is SwarmCore's call, not ours.
  */
 export function parseJoinLink(text: string): JoinLink | null {
-  if (!text || SwarmSight.resolveHubURL(text) === null) return null;
+  if (!text || Beacon.resolveHubURL(text) === null) return null;
   const query = text.includes('?') ? text.slice(text.indexOf('?') + 1) : '';
   const params = new Map(
     query.split('&').map((pair) => {
@@ -67,7 +67,7 @@ export function parseJoinLink(text: string): JoinLink | null {
       return [key, decodeURIComponent(value)] as const;
     })
   );
-  const isDeepLink = text.trim().toLowerCase().startsWith('swarmsight:');
+  const isDeepLink = text.trim().toLowerCase().startsWith('beacon:');
   return {
     hub: isDeepLink ? (params.get('hub') ?? text) : text,
     replay: params.get('replay') === '1',

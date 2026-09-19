@@ -1039,7 +1039,7 @@ wheels = [
 ]
 
 [[package]]
-name = "swarm-sight-inference"
+name = "beacon-inference"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

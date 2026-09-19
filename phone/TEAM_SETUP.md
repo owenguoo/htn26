@@ -1,4 +1,4 @@
-# Team setup — getting SwarmSight onto your phone
+# Team setup — getting Beacon onto your phone
 
 One person runs the hub on their laptop. Everyone else builds the iOS app on
 their own Mac, installs it on their own iPhone, and joins over Wi-Fi.
@@ -54,7 +54,7 @@ It prints three things worth keeping:
 ```
 Operator code: <code>
 
-  Swarm Sight hub
+  Beacon hub
   Console:     http://localhost:8000/console
   Phones join: http://192.168.x.x:8000/
 ```
@@ -116,14 +116,14 @@ waits for you.
 
 **4. Give yourself a unique bundle identifier.** With free Apple ID signing, an
 app identifier can only be registered by one person's team — if two of us build
-`com.swarmsight.SwarmSight`, the second gets a signing error. In
+`com.beacon.Beacon`, the second gets a signing error. In
 `phone/mobile/app.json`, change:
 
 ```json
-"bundleIdentifier": "com.swarmsight.SwarmSight"
+"bundleIdentifier": "com.beacon.Beacon"
 ```
 
-to something like `"com.swarmsight.SwarmSight.yourname"`.
+to something like `"com.beacon.Beacon.yourname"`.
 
 **Do not commit this change.** It is yours alone.
 
@@ -137,17 +137,17 @@ cd phone/mobile && pnpm install
 pnpm prebuild
 ```
 
-`prebuild` regenerates `ios/` from `app.json` and the `withSwarmSight` config
+`prebuild` regenerates `ios/` from `app.json` and the `withBeacon` config
 plugin. That folder is gitignored and disposable — rerun this any time the
 native config changes, or when something looks corrupted.
 
 **6. Set your signing team.** Open the workspace:
 
 ```bash
-open ios/SwarmSight.xcworkspace
+open ios/Beacon.xcworkspace
 ```
 
-Select the **SwarmSight** target → **Signing & Capabilities** → check
+Select the **Beacon** target → **Signing & Capabilities** → check
 *Automatically manage signing* → set **Team** to your personal team. If your
 Apple ID is not listed, add it under Xcode → Settings → Accounts.
 
@@ -177,13 +177,13 @@ does. Nothing is lost; it takes a couple of minutes once the toolchain is warm.
 **1.** The host opens `http://localhost:8000/console` and clicks **Join QR** — it shows a QR code and
 the join URL.
 
-**2.** Open SwarmSight on your phone. It starts on the join screen. Scan the QR.
+**2.** Open Beacon on your phone. It starts on the join screen. Scan the QR.
 
 **3.** Or type the address by hand if the QR is awkward. The app accepts a bare
 `192.168.x.x:8000` and works out the socket itself.
 
 **4.** Accept the local-network permission prompt on first launch. Declining it
-blocks the connection silently, and the only way back is Settings → SwarmSight →
+blocks the connection silently, and the only way back is Settings → Beacon →
 Local Network.
 
 **5.** You should appear on the host's console within a second or two. If the

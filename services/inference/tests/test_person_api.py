@@ -4,8 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from swarm_sight.api import Settings, create_app
-from swarm_sight.schemas import Detection
+from beacon.api import Settings, create_app
+from beacon.schemas import Detection
 
 KEY = "test-key-with-16-chars"
 HEADERS = {"Authorization": f"Bearer {KEY}", "Content-Type": "image/png"}

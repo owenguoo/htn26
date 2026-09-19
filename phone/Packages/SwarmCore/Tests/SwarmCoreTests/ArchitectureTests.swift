@@ -21,7 +21,7 @@ struct ArchitectureTests {
 
     /// The native shell: the Expo module (where the code lives) and what is
     /// left of the plain-Swift app target (its entry point, until it is retired).
-    private static let shellRoots = ["mobile/modules/swarm-sight/ios", "SwarmSight"]
+    private static let shellRoots = ["mobile/modules/beacon/ios", "Beacon"]
 
     private func shellFiles() -> [(url: URL, source: String)] {
         Self.shellRoots.flatMap { swiftFiles(under: $0) }
@@ -161,11 +161,11 @@ struct ArchitectureTests {
     /// missing file.
     @Test func everyVenueMarkerHasArtwork() throws {
         let venue = try Venue.load(from: Fixtures.url("venue.json"))
-        let directory = repositoryRoot.appendingPathComponent("mobile/modules/swarm-sight/ios/Resources/Markers")
+        let directory = repositoryRoot.appendingPathComponent("mobile/modules/beacon/ios/Resources/Markers")
         for marker in venue.markers {
             let url = directory.appendingPathComponent("\(marker.id).png")
             #expect(FileManager.default.fileExists(atPath: url.path),
-                    "no artwork for \(marker.id): expected mobile/modules/swarm-sight/ios/Resources/Markers/\(marker.id).png")
+                    "no artwork for \(marker.id): expected mobile/modules/beacon/ios/Resources/Markers/\(marker.id).png")
         }
     }
 
@@ -204,7 +204,7 @@ struct ArchitectureTests {
         let mobile = repositoryRoot.appendingPathComponent("mobile")
         guard FileManager.default.fileExists(atPath: mobile.path) else { return }
         var offenders: [String] = []
-        for directory in ["app", "src", "modules/swarm-sight/src", "modules/swarm-sight/index.ts", "App.tsx"] {
+        for directory in ["app", "src", "modules/beacon/src", "modules/beacon/index.ts", "App.tsx"] {
             let root = mobile.appendingPathComponent(directory)
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) else { continue }

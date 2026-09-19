@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "swarm-sight-inference"
+name = "beacon-inference"
 version = "0.1.0"
 description = "Shared open-vocabulary perception for phone camera feeds"
 requires-python = ">=3.12,<3.13"
@@ -34,7 +34,7 @@ dev = [
 ]
 
 [project.scripts]
-swarm-sight = "swarm_sight.cli:main"
+beacon = "beacon.cli:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -52,7 +52,7 @@ select = ["E", "F", "I", "UP", "B"]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/swarm_sight"]
+packages = ["src/beacon"]
 
 [tool.ruff.format]
-exclude = ["src/swarm_sight/_vendor/**"]
+exclude = ["src/beacon/_vendor/**"]

@@ -1,4 +1,4 @@
-SwarmSight iOS — Build Plan
+Beacon iOS — Build Plan
 
 Read CLAUDE.md first. It contains the constraints. This file contains the sequence.
 
@@ -6,7 +6,7 @@ Why this shape
 
 ARKit does not run in the iOS Simulator, so an unattended agent cannot execute a single line of positioning code. The repo is therefore split so that ~95% of the work lives in a pure-Swift package the agent can build and test in seconds, behind a protocol that the real ARKit session plugs into by hand in the morning.
 
-SwarmSight/
+Beacon/
 ├── Packages/SwarmCore/              # pure Swift. no ARKit, no UIKit.
 │   ├── Sources/SwarmCore/
 │   │   ├── PoseProvider.swift       # protocol: THE ARKit seam
@@ -20,7 +20,7 @@ SwarmSight/
 │   │   ├── LatencyTrace.swift       # per-frame stage timing
 │   │   └── SessionMachine.swift     # state machine, throttling, staleness
 │   └── Tests/SwarmCoreTests/
-├── SwarmSight.xcodeproj             # thin app target
+├── Beacon.xcodeproj             # thin app target
 │   ├── ARKitPoseProvider.swift      # ONLY file that imports ARKit
 │   ├── LiDARDepthSource.swift
 │   ├── FrameEncoder.swift           # CVPixelBuffer → JPEG

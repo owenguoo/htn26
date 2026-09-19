@@ -7,7 +7,7 @@ No phone app or on-device model installation is needed.
 
 ```sh
 uv sync --frozen --extra yolo --extra reid
-uv run --no-sync swarm-sight demo --device cpu --port 8765
+uv run --no-sync beacon demo --device cpu --port 8765
 ```
 
 Open `http://localhost:8765/demo` on the same computer.

@@ -7,10 +7,10 @@ Model weights are downloaded when the image builds, and the worker uses its own 
 ## Deploy with the Baseten CLI
 
 From the repository root, authenticate with `baseten auth login` if needed.
-Store the worker's existing `SWARM_INFERENCE_API_KEY` as the Baseten secret `swarm_sight_worker_key` using the interactive prompt:
+Store the worker's existing `SWARM_INFERENCE_API_KEY` as the Baseten secret `beacon_worker_key` using the interactive prompt:
 
 ```sh
-baseten org secret set --name swarm_sight_worker_key
+baseten org secret set --name beacon_worker_key
 baseten model push --dir services/inference --region us --environment production
 ```
 
@@ -65,7 +65,7 @@ Use `baseten model deployment activate` with the same IDs to resume, then upload
 
 Deployed with the Baseten CLI on 2026-09-19 in the Hack the North workspace:
 
-- Model: `wgvz266w` (`swarm-sight-yoloe-osnet`).
+- Model: `wgvz266w` (`beacon-yoloe-osnet`).
 - Production deployment: `qe9xrz1`, one `L4:4x16` replica in `us`.
 - [Deployment dashboard](https://app.baseten.co/models/wgvz266w/deployments/qe9xrz1).
 - Hub endpoint: `https://model-wgvz266w-region-us.api.baseten.co/environments/production/sync`.

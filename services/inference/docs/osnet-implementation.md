@@ -12,7 +12,7 @@ Imports of Torch, Torchvision, and Hugging Face Hub are lazy so the basic servic
 The single vendored model source is [torchreid/models/osnet.py](https://github.com/KaiyangZhou/deep-person-reid/blob/f8cd150fdf77e8d9e1ed143b7f308c2c609ded50/torchreid/models/osnet.py), pinned to commit `f8cd150fdf77e8d9e1ed143b7f308c2c609ded50`.
 Its upstream contents are unchanged, with only a provenance and Ruff-exemption header added.
 The original source SHA-256 is `c7c1c29187d6330f859c91da229271531920464c7011aec13842a086b2263cae`.
-The upstream MIT license, copyright 2018 Kaiyang Zhou, is preserved in `src/swarm_sight/_vendor/OSNET_LICENSE`.
+The upstream MIT license, copyright 2018 Kaiyang Zhou, is preserved in `src/beacon/_vendor/OSNET_LICENSE`.
 Only the `osnet_x1_0(pretrained=False)` entry point is used, so the upstream ImageNet downloader and training dependencies are not executed.
 
 The [author's Hugging Face repository](https://huggingface.co/kaiyangzhou/osnet/tree/a5c5cc037c24235cda3b21085b93ad77c9616224) supplies the weights at revision `a5c5cc037c24235cda3b21085b93ad77c9616224`.
@@ -30,6 +30,6 @@ Tests cover input ordering, 32-item batching, RGB conversion, normalization, emp
 The real test verifies repeated-image consistency and different output for different images.
 A direct CPU encode returned two 512-dimensional vectors with norms 1.0000000931 and 1.0000000066; their cosine similarity was 0.3866623929 for synthetic red and blue images.
 This verifies inference plumbing, not cross-camera person retrieval accuracy.
-`ruff check src/swarm_sight/osnet.py src/swarm_sight/_vendor tests/test_osnet.py` passed.
+`ruff check src/beacon/osnet.py src/beacon/_vendor tests/test_osnet.py` passed.
 The verification environment used Torch 2.10.0, Torchvision 0.25.0, Hugging Face Hub 1.32.0, and Pillow 12.3.0.
 The real test is opt-in with `SWARM_TEST_REID=1`; ordinary tests do not download pretrained weights.

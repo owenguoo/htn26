@@ -47,7 +47,7 @@ export const colors = {
  * feed must be fixed light-on-dark in both themes — its backdrop is arbitrary
  * video, so a semantic colour would flip and vanish against a bright frame —
  * and every last piece of it now lives in SwiftUI, in
- * `modules/swarm-sight/ios/Core/UI/`. Nothing in the Expo layer draws over the
+ * `modules/beacon/ios/Core/UI/`. Nothing in the Expo layer draws over the
  * camera any more, and nothing here should start.
  */
 

@@ -1,4 +1,4 @@
-# Swarm Sight inference
+# Beacon inference
 
 A standalone Python service that finds candidate matches for a reference person in phone camera frames.
 It supports pretrained YOLO-World, YOLOE, and SAM 3 through one HTTP contract.
@@ -20,7 +20,7 @@ VLM confirmation, phone capture, positioning, and orchestration belong to the ot
 
 ## Try it from your phone
 
-Run `uv run --no-sync swarm-sight demo --device cpu --port 8765` after installing the YOLO and re-identification extras.
+Run `uv run --no-sync beacon demo --device cpu --port 8765` after installing the YOLO and re-identification extras.
 The demo lets you upload a reference photo, choose a person, and send live camera frames for matching.
 It prints an access code and serves the page at `http://localhost:8765/demo`.
 Use an HTTPS tunnel to open the camera on your phone.
@@ -34,7 +34,7 @@ OSNet downloads the authors' pinned pretrained MSMT17 checkpoint, approximately 
 YOLOE also downloads its detector and text encoder as described below.
 
 ```sh
-uv run --no-sync swarm-sight match artifacts/bus.jpg artifacts/bus.jpg \
+uv run --no-sync beacon match artifacts/bus.jpg artifacts/bus.jpg \
   --reference-box 50 398 247 903 --similarity-threshold 0.7 --device cpu \
   --output artifacts/person-match.json --annotated artifacts/person-match.jpg
 ```
@@ -55,7 +55,7 @@ export SWARM_API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(
 export SWARM_BACKEND=yoloe
 export SWARM_ENABLE_REID=true
 export SWARM_DEVICE=cpu
-uv run --no-sync swarm-sight serve
+uv run --no-sync beacon serve
 ```
 
 From another terminal using the same key, register a reference, then submit frames:
@@ -91,7 +91,7 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if needed,
 uv sync --frozen --extra yolo --extra reid
 mkdir -p artifacts
 curl -fL https://raw.githubusercontent.com/ultralytics/assets/main/im/bus.jpg -o artifacts/bus.jpg
-uv run --no-sync swarm-sight detect artifacts/bus.jpg \
+uv run --no-sync beacon detect artifacts/bus.jpg \
   --backend yolo-world --device cpu --labels bus person \
   --output artifacts/detections.json --annotated artifacts/detections.jpg
 ```
@@ -113,7 +113,7 @@ Use `uv run --no-sync` after installing all extras to preserve that environment.
 export SWARM_API_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export SWARM_BACKEND=yolo-world
 export SWARM_DEVICE=cpu
-uv run --no-sync swarm-sight serve
+uv run --no-sync beacon serve
 ```
 
 Use `SWARM_BACKEND=yoloe` or `SWARM_BACKEND=sam3` to select another model.
@@ -233,7 +233,7 @@ See the [evaluation results](docs/sam3-evaluation.md) for examples, CPU timings,
 4. Run a real test:
 
 ```sh
-uv run --no-sync swarm-sight detect artifacts/bus.jpg \
+uv run --no-sync beacon detect artifacts/bus.jpg \
   --backend sam3 --device cuda:0 --labels bus person \
   --output artifacts/sam3.json --annotated artifacts/sam3.jpg
 ```
@@ -250,12 +250,12 @@ The locked Linux PyTorch build supplies CUDA libraries; confirm driver compatibi
 Check actual available memory before raising batch size or running multiple services.
 
 ```sh
-docker build -t swarm-sight .
-docker run --rm --gpus all --entrypoint python swarm-sight \
+docker build -t beacon .
+docker run --rm --gpus all --entrypoint python beacon \
   -c 'import torch; print(torch.__version__, torch.version.cuda); assert torch.cuda.is_available(); print(torch.cuda.get_device_name())'
 docker run --rm --gpus all -p 127.0.0.1:8001:8001 \
   -e SWARM_API_KEY -e SWARM_BACKEND=yoloe -e SWARM_ENABLE_REID=true \
-  -v swarm-sight-data:/data swarm-sight
+  -v beacon-data:/data beacon
 ```
 
 The image runs as a non-root user and defaults to `cuda:0`.
@@ -271,7 +271,7 @@ CUDA execution still requires a cloud GPU; see [verification](docs/verification.
 Run every backend sequentially on the same images, freeing process GPU memory between backends:
 
 ```sh
-uv run --no-sync swarm-sight compare artifacts/bus.jpg \
+uv run --no-sync beacon compare artifacts/bus.jpg \
   --labels bus person --device cuda:0 --batch-size 1 --warmup 2 --runs 20 \
   --output artifacts/comparison.json
 ```

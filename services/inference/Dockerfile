@@ -20,4 +20,4 @@ WORKDIR /data
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=3s --start-period=300s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/readyz', timeout=2)"
-CMD ["swarm-sight", "serve", "--host", "0.0.0.0"]
+CMD ["beacon", "serve", "--host", "0.0.0.0"]

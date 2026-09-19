@@ -12,7 +12,7 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
-import SwarmSight, { type Diagnostics, type MicState } from '../../modules/swarm-sight';
+import Beacon, { type Diagnostics, type MicState } from '../../modules/beacon';
 import { setPreference, usePreferences } from '../preferences';
 import { colors, secondaryStyle, textStyles } from '../theme/tokens';
 
@@ -39,7 +39,7 @@ const MIC_STATUS: Record<MicState, string> = {
 
 const MIC_FOOTER: Record<MicState, string> = {
   unavailable:
-    'No microphone on this session — either it is a replay, or the prompt was declined. iOS Settings › SwarmSight can grant it.',
+    'No microphone on this session — either it is a replay, or the prompt was declined. iOS Settings › Beacon can grant it.',
   muted: 'Off. Nothing is captured while this is off, and the hub was told your last sentence had ended.',
   idle: 'Listening. Nothing leaves the phone until you speak; quiet room audio is never sent.',
   speaking: 'Sending. The operator sees what you say as a live caption. Used live, never stored.',
@@ -74,18 +74,18 @@ export default function Settings() {
         return (pending === 'muted') === (live === 'muted') ? null : pending;
       });
     };
-    void SwarmSight.getDiagnostics().then(apply);
-    const subscription = SwarmSight.addListener('onState', apply);
+    void Beacon.getDiagnostics().then(apply);
+    const subscription = Beacon.addListener('onState', apply);
     return () => subscription.remove();
   }, []);
 
   const setMicrophoneOn = async (on: boolean) => {
     setPendingMic(on ? 'idle' : 'muted');
-    setPendingMic(await SwarmSight.setMicrophoneMuted(!on));
+    setPendingMic(await Beacon.setMicrophoneMuted(!on));
   };
 
   const leave = async () => {
-    await SwarmSight.leave();
+    await Beacon.leave();
     router.dismissAll();
     router.replace('/join');
   };

@@ -82,7 +82,7 @@ public struct HubHello: Sendable, Equatable, Codable {
     public var native = true
 
     public init(phoneId: String, name: String, seat: HubSeat? = nil,
-                ua: String = "SwarmSight (iPhone; ARKit)", sim: Bool = false, build: String = "") {
+                ua: String = "Beacon (iPhone; ARKit)", sim: Bool = false, build: String = "") {
         self.phoneId = phoneId
         self.name = name
         self.seat = seat
@@ -130,7 +130,7 @@ public struct HubDebug: Sendable, Equatable, Codable {
         }
     }
 
-    public var client = "swarmsight-ios"
+    public var client = "beacon-ios"
     public var session: String
     /// Venue frame, metres: +X east along the stage, +Y up, +Z out from the stage.
     public var venuePosition: [Float]?

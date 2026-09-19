@@ -40,7 +40,7 @@ Start each command in its own terminal, from the repository root:
 
 ```bash
 # Terminal 1: worker, port 8001, first launch downloads model weights
-HF_HOME="$PWD/.cache/huggingface" SWARM_MODEL_CACHE="$PWD/.cache/models" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 uv run --project services/inference --no-sync swarm-sight serve --host 127.0.0.1 --port 8001
+HF_HOME="$PWD/.cache/huggingface" SWARM_MODEL_CACHE="$PWD/.cache/models" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 uv run --project services/inference --no-sync beacon serve --host 127.0.0.1 --port 8001
 
 # Terminal 2: hub, HTTP 8000 and development HTTPS 8443
 uv run python -m swarm.hub

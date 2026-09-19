@@ -4,8 +4,8 @@ import threading
 import pytest
 from PIL import Image
 
-from swarm_sight.schemas import Detection
-from swarm_sight.worker import Busy, Frame, Replaced, Worker
+from beacon.schemas import Detection
+from beacon.worker import Busy, Frame, Replaced, Worker
 
 
 def frame(phone, labels=("toy",)):

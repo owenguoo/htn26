@@ -3,8 +3,8 @@ import json
 import pytest
 from PIL import Image, ImageStat
 
-from swarm_sight import cli, match_cli
-from swarm_sight.schemas import Detection
+from beacon import cli, match_cli
+from beacon.schemas import Detection
 
 
 class Detector:

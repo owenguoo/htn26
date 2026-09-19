@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from swarm_sight.backends import load_detector
-from swarm_sight.images import decode_image
+from beacon.backends import load_detector
+from beacon.images import decode_image
 
 
 @pytest.mark.model
@@ -45,7 +45,7 @@ def test_yolo_persists_configuration_in_requested_directory(tmp_path):
         [
             sys.executable,
             "-c",
-            "from swarm_sight.backends import YoloDetector; import sys; "
+            "from beacon.backends import YoloDetector; import sys; "
             "YoloDetector('yolo-world', 'cpu', sys.argv[1])",
             str(checkpoint),
         ],

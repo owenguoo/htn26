@@ -45,7 +45,7 @@ The endpoint currently strips extra result fields and does not track sequence, r
 Phone reconnects reuse IDs and can restart sequence numbers.
 `swarm/target.py` explicitly models a mock candidate at known room coordinates and declares it found from camera-cone geometry.
 `swarm/mission.py` can place that mock candidate and change phases; real visual evidence must remain distinguishable from simulation.
-Both projects currently use the distribution name `swarm-sight`, and their Python version requirements differ.
+Both projects currently use the distribution name `beacon`, and their Python version requirements differ.
 No test suite is present in the inspected htn26 checkout.
 
 ## Real sightings versus simulated targets

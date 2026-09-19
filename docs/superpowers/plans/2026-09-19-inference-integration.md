@@ -23,14 +23,14 @@ Do not require GPUs in ordinary CI.
 
 ## Task 1: Import the working model service as an isolated subproject
 
-**Files:** Create `services/inference/` from `/Users/brianan/Documents/code/swarm-sight/`; update root `.gitignore` and `README.md`.
-Copy `src/swarm_sight/`, tests, `pyproject.toml`, `uv.lock`, `.python-version`, Dockerfile, and relevant source/license notices.
+**Files:** Create `services/inference/` from `/Users/brianan/Documents/code/beacon/`; update root `.gitignore` and `README.md`.
+Copy `src/beacon/`, tests, `pyproject.toml`, `uv.lock`, `.python-version`, Dockerfile, and relevant source/license notices.
 Do not copy `.git`, `.env`, `.venv`, model caches, credentials, downloaded binaries, or experimental artifacts.
 The separate camera demo may remain as a diagnostic tool but is not the main app UI.
 
 **Interface:** Preserve `PUT /v1/targets/{target_id}`, `DELETE /v1/targets/{target_id}`, `POST /v1/detect`, and `POST /v1/match`.
 
-- [ ] Rename the nested distribution to `swarm-sight-inference`, retaining the existing `swarm_sight` import package and CLI entry point, and regenerate its lockfile.
+- [ ] Rename the nested distribution to `beacon-inference`, retaining the existing `beacon` import package and CLI entry point, and regenerate its lockfile.
 - [ ] Install only `yolo` and `reid` extras for the default deployment; preserve other backends as optional existing code.
 - [ ] Run the imported unit tests and build its wheel, checking that the OSNet architecture/license and static demo assets are packaged.
 - [ ] Run the existing opt-in real person test with the public sample image on CPU.

@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, View } from 'react-native';
 
-import { OperatorView } from '../../modules/swarm-sight';
+import { OperatorView } from '../../modules/beacon';
 import { usePreferences } from '../preferences';
 
 /**

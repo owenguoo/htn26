@@ -1,23 +1,23 @@
 {
   "expo": {
-    "name": "SwarmSight",
-    "slug": "swarmsight",
+    "name": "Beacon",
+    "slug": "beacon",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "ios": {
-      "bundleIdentifier": "com.swarmsight.SwarmSight",
+      "bundleIdentifier": "com.beacon.Beacon",
       "supportsTablet": false,
       "requireFullScreen": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "SwarmSight tracks where this phone is and streams what it sees to the search dashboard.",
-        "NSLocalNetworkUsageDescription": "SwarmSight connects to the search hub on this Wi-Fi network.",
+        "NSCameraUsageDescription": "Beacon tracks where this phone is and streams what it sees to the search dashboard.",
+        "NSLocalNetworkUsageDescription": "Beacon connects to the search hub on this Wi-Fi network.",
         "NSBonjourServices": [
-          "_swarmsight._tcp"
+          "_beacon._tcp"
         ],
-        "NSMotionUsageDescription": "Motion tells SwarmSight whether you moved while camera tracking was lost.",
-        "NSMicrophoneUsageDescription": "SwarmSight listens while you hold the voice button so you can say what the team is looking for. Speech goes to the search hub to set that target and is discarded once it has been read; SwarmSight never identifies anyone by voice or face.",
+        "NSMotionUsageDescription": "Motion tells Beacon whether you moved while camera tracking was lost.",
+        "NSMicrophoneUsageDescription": "Beacon listens while you hold the voice button so you can say what the team is looking for. Speech goes to the search hub to set that target and is discarded once it has been read; Beacon never identifies anyone by voice or face.",
         "UIRequiredDeviceCapabilities": [
           "arm64",
           "arkit"
@@ -36,7 +36,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "SwarmSight tracks where this phone is and streams what it sees to the search dashboard.",
+          "cameraPermission": "Beacon tracks where this phone is and streams what it sees to the search dashboard.",
           "recordAudioAndroid": false
         }
       ],
@@ -48,9 +48,9 @@
           }
         }
       ],
-      "./plugins/withSwarmSight"
+      "./plugins/withBeacon"
     ],
-    "scheme": "swarmsight",
+    "scheme": "beacon",
     "newArchEnabled": true,
     "platforms": [
       "ios"

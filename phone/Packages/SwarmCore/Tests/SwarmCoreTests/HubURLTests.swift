@@ -16,14 +16,14 @@ struct HubURLTests {
         ("wss://swarm.example.dev/ws/phone", "wss://swarm.example.dev/ws/phone"),
         ("10.0.0.5:8000", "ws://10.0.0.5:8000/ws/phone"),
         ("  http://10.0.0.5:8000/\n", "ws://10.0.0.5:8000/ws/phone"),
-        ("swarmsight://join?hub=http%3A%2F%2F10.0.0.5%3A8000%2F", "ws://10.0.0.5:8000/ws/phone"),
-        ("swarmsight://join?hub=https://10.0.0.5:8443/&replay=1", "ws://10.0.0.5:8000/ws/phone"),
+        ("beacon://join?hub=http%3A%2F%2F10.0.0.5%3A8000%2F", "ws://10.0.0.5:8000/ws/phone"),
+        ("beacon://join?hub=https://10.0.0.5:8443/&replay=1", "ws://10.0.0.5:8000/ws/phone"),
     ])
     func derives(scanned: String, expected: String) {
         #expect(HubURL.derive(scanned)?.absoluteString == expected)
     }
 
-    @Test(arguments: ["", "   ", "ftp://host/", "swarmsight://join", "swarmsight://join?hub=", "http://"])
+    @Test(arguments: ["", "   ", "ftp://host/", "beacon://join", "beacon://join?hub=", "http://"])
     func rejects(scanned: String) {
         #expect(HubURL.derive(scanned) == nil)
     }
@@ -31,7 +31,7 @@ struct HubURLTests {
     @Test func aDeepLinkCannotRecurseForever() {
         var link = "http://10.0.0.5:8000/"
         for _ in 0..<6 {
-            link = "swarmsight://join?hub=" + (link.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
+            link = "beacon://join?hub=" + (link.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")
         }
         #expect(HubURL.derive(link) == nil)
     }

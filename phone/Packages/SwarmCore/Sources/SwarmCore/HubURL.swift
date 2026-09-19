@@ -30,7 +30,7 @@ public enum HubURL {
         guard let components = URLComponents(string: text),
               let scheme = components.scheme?.lowercased() else { return nil }
 
-        if scheme == "swarmsight" {
+        if scheme == "beacon" {
             guard let hub = components.queryItems?.first(where: { $0.name == "hub" })?.value else {
                 return nil
             }

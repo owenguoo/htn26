@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from swarm_sight.api import Settings, create_app
+from beacon.api import Settings, create_app
 
 
 @pytest.mark.model

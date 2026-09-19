@@ -46,7 +46,7 @@ can get into it.
       simulator needs none; a device will not install without one. A free Apple
       ID works, with a seven-day provisioning profile.
 - [ ] The bundle identifier is unique to you if you are on a free Apple ID —
-      `com.swarmsight.SwarmSight` will collide with anyone else who tries it.
+      `com.beacon.Beacon` will collide with anyone else who tries it.
 
 ---
 
@@ -411,15 +411,15 @@ SwarmCore, join via link, hosted operator view, hub e2e assertions for
 Build for a phone (Release, no Metro needed on stage):
 
     cd phone/mobile
-    SWARMSIGHT_TEAM_ID=<10-char team id> LANG=en_US.UTF-8 pnpm expo prebuild -p ios --clean
+    BEACON_TEAM_ID=<10-char team id> LANG=en_US.UTF-8 pnpm expo prebuild -p ios --clean
     LANG=en_US.UTF-8 pnpm expo run:ios --device --configuration Release
 
 - [ ] It launches without Metro, and the local-network prompt appears on first join.
-- [ ] The marker PNGs load from the pod's resource bundle (`SwarmSightResources`):
+- [ ] The marker PNGs load from the pod's resource bundle (`BeaconResources`):
       calibration starts, no "missing marker image" error on the join screen.
 - [ ] "Scan the dashboard QR" opens Apple's scanner and fills the hub field for
       all three QR forms (http LAN, https LAN :8443, tunnel).
-- [ ] `swarmsight://join?hub=…` from the Camera app prefills the form.
+- [ ] `beacon://join?hub=…` from the Camera app prefills the form.
 - [ ] Hosted view: content clears the Dynamic Island and the home indicator; the
       status bar is hidden; the screen never sleeps while joined.
 - [ ] Settings (gear) shows live diagnostics at ~2 Hz; toggles hide the pill /
@@ -427,7 +427,7 @@ Build for a phone (Release, no Metro needed on stage):
       disconnected on the dashboard.
 - [ ] Background → foreground: preview resumes, session is `recalibrating`.
 - [ ] Then run every section above this one on the Expo build. When they pass,
-      retire `SwarmSight.xcodeproj` (Gate 10).
+      retire `Beacon.xcodeproj` (Gate 10).
 
 ## Voice capture (`MicrophoneCapture.swift`) — unverified on hardware
 
@@ -444,7 +444,7 @@ with synthetic PCM over a real socket. Neither involved a microphone.
 - [ ] **Denial degrades, it does not wedge.** Decline the prompt: the app stays
       joined, keeps streaming frames and taking commands, and Settings › Voice
       shows `no microphone` with the switch greyed. Nothing re-prompts.
-- [ ] Granting it later in iOS Settings › SwarmSight, then rejoining, brings
+- [ ] Granting it later in iOS Settings › Beacon, then rejoining, brings
       voice back.
 - [ ] **The beep does not kill the tap.** This is the one that
       `AudioSessionOwner` exists to prevent, and the one that only shows up on

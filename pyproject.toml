@@ -1,5 +1,5 @@
 [project]
-name = "swarm-sight"
+name = "beacon"
 version = "0.1.0"
 description = "Hub + dashboard that turns audience phones into one shared camera network"
 requires-python = ">=3.11"

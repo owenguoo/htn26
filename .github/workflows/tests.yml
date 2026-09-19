@@ -60,7 +60,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: services/inference/.cache
-          key: pretrained-${{ runner.os }}-${{ hashFiles('services/inference/uv.lock', 'services/inference/src/swarm_sight/osnet.py') }}
+          key: pretrained-${{ runner.os }}-${{ hashFiles('services/inference/uv.lock', 'services/inference/src/beacon/osnet.py') }}
       - run: uv sync --frozen --extra yolo --extra reid
       - run: mkdir -p artifacts && curl --fail --location https://ultralytics.com/images/bus.jpg --output artifacts/bus.jpg
       - run: uv run --no-sync python -m pytest -m model -q

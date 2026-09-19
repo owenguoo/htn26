@@ -7,6 +7,6 @@ IP="${1:-$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '
 mkdir -p certs
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
   -keyout certs/key.pem -out certs/cert.pem \
-  -subj "/CN=swarm-sight" \
+  -subj "/CN=beacon" \
   -addext "subjectAltName=IP:${IP},IP:127.0.0.1,DNS:localhost"
 echo "Wrote certs/cert.pem and certs/key.pem for ${IP}"

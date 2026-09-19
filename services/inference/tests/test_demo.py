@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from test_person_api import KEY, Detector, Embedder, png
 
-from swarm_sight.api import Settings, create_app
+from beacon.api import Settings, create_app
 
 CODE = "demo-access-code-12345"
 
@@ -82,7 +82,7 @@ def test_demo_rejects_cross_origin_and_tampered_cookie():
 
 
 def test_demo_https_cookie_and_expiry(monkeypatch):
-    import swarm_sight.demo as demo
+    import beacon.demo as demo
 
     with TestClient(demo_app(), base_url="https://testserver") as client:
         login = client.post("/demo/login", json={"code": CODE})

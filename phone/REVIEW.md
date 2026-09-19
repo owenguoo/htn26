@@ -29,7 +29,7 @@ Side effect of F2 worth knowing: `latestVenuePose()` is now nil while
 recalibrating, so a tracked arrow hides until a marker is re-seen. That is the
 behaviour the overlay already has for a stale pose.
 
-`SwarmSight.xcodeproj/project.pbxproj` was modified in the working tree during
+`Beacon.xcodeproj/project.pbxproj` was modified in the working tree during
 my session (not by me — it looks like Xcode rewriting build configurations). I
 left it alone and out of the commit. The simulator gate passed with it as-is.
 

@@ -111,7 +111,7 @@ public actor SwarmClient {
         /// microphone in rather than discover one.
         public var voiceEnabled: Bool
 
-        public init(socketURL: URL, phoneId: String, name: String, build: String = "swarmsight-ios",
+        public init(socketURL: URL, phoneId: String, name: String, build: String = "beacon-ios",
                     venue: Venue,
                     rates: SessionMachine.Rates = .init(poseHz: 10, frameFPS: 2, depthHz: 0),
                     encoding: FrameEncodingConfiguration = .standard,

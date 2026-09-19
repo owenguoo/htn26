@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>SwarmSight</string>
+	<string>Beacon</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,10 +22,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.swarmsight.SwarmSight</string>
+			<string>com.beacon.Beacon</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>swarmsight</string>
+				<string>beacon</string>
 			</array>
 		</dict>
 	</array>
@@ -37,16 +37,16 @@
 	<true/>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_swarmsight._tcp</string>
-		<string>_swarmsight._udp</string>
+		<string>_beacon._tcp</string>
+		<string>_beacon._udp</string>
 		<string>_http._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>SwarmSight uses the camera to track this phone's position in the room and to send occasional frames to the search orchestrator.</string>
+	<string>Beacon uses the camera to track this phone's position in the room and to send occasional frames to the search orchestrator.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>SwarmSight connects to the search orchestrator running on this local network.</string>
+	<string>Beacon connects to the search orchestrator running on this local network.</string>
 	<key>NSMotionUsageDescription</key>
-	<string>SwarmSight uses device motion only to tell whether this phone moved while camera tracking was unavailable.</string>
+	<string>Beacon uses device motion only to tell whether this phone moved while camera tracking was unavailable.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

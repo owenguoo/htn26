@@ -3,7 +3,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from swarm_sight.images import decode_image
+from beacon.images import decode_image
 
 
 def test_decodes_rgb_and_applies_orientation():

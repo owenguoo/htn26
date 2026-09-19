@@ -1,4 +1,4 @@
-model_name: swarm-sight-yoloe-osnet
+model_name: beacon-yoloe-osnet
 python_version: py312
 base_image:
   image: python:3.12-slim-bookworm
@@ -15,7 +15,7 @@ resources:
 runtime:
   predict_concurrency: 8
 secrets:
-  swarm_sight_worker_key: null
+  beacon_worker_key: null
 environment_variables:
   OMP_NUM_THREADS: "2"
   MKL_NUM_THREADS: "2"
@@ -35,7 +35,7 @@ external_data:
   - url: https://huggingface.co/kaiyangzhou/osnet/resolve/a5c5cc037c24235cda3b21085b93ad77c9616224/osnet_x1_0_msmt17_combineall_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter.pth
     local_data_path: osnet.pth
 docker_server:
-  start_command: /app/worker-env/bin/python -m swarm_sight.baseten
+  start_command: /app/worker-env/bin/python -m beacon.baseten
   server_port: 8001
   predict_endpoint: /v1/detect
   readiness_endpoint: /readyz

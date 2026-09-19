@@ -1,6 +1,6 @@
 import pytest
 
-from swarm_sight.backends import normalize_detections
+from beacon.backends import normalize_detections
 
 
 def test_normalization_clips_boxes_filters_invalid_predictions_and_sorts():

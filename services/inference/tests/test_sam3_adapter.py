@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-from swarm_sight.backends import Sam3Detector
+from beacon.backends import Sam3Detector
 
 
 def test_sam3_boxes_use_original_sizes_without_materializing_masks():

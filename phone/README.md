@@ -1,4 +1,4 @@
-# SwarmSight iOS
+# Beacon iOS
 
 Phones become tracked cameras. Each one reports its 6DoF pose in a shared venue
 frame plus periodic JPEG frames to the orchestrator over WebSocket, and displays
@@ -16,7 +16,7 @@ for the constraints and `PLAN.md` for the sequence.
 
 ```
 Packages/SwarmCore/       pure Swift; no ARKit, UIKit, SwiftUI, CoreMotion or CoreHaptics
-SwarmSight/               the thin app target
+Beacon/               the thin app target
   ARKitPoseProvider.swift the ONLY file that imports ARKit
 Fixtures/                 recorded trajectories and venue.json
 tools/fixture-gen/        generates the stand-in fixtures
@@ -67,7 +67,7 @@ which is exactly:
 
 ```
 cd Packages/SwarmCore && swift test
-xcodebuild -scheme SwarmSight -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -scheme Beacon -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
 
 **Neither proves positioning works.** ARKit does not run in the Simulator, so no

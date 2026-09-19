@@ -1,4 +1,4 @@
-"""Swarm Sight hub: phone sessions, frame routing, and live state for the dashboard.
+"""Beacon hub: phone sessions, frame routing, and live state for the dashboard.
 
 Run:  uv run python -m swarm.hub [--public-url https://xyz.trycloudflare.com]
 """
@@ -800,7 +800,7 @@ def _seat(seat: dict) -> dict | None:
 
 
 hub = Hub()
-app = FastAPI(title="Swarm Sight hub")
+app = FastAPI(title="Beacon hub")
 load_env()
 settings = Settings()
 auth = Auth(settings)
@@ -1090,7 +1090,7 @@ def main() -> None:
     load_env()
     from .mission import MissionControl  # after load_env so it sees the API key
     hub.mission = MissionControl(hub, ROOM)
-    ap = argparse.ArgumentParser(description="Swarm Sight hub")
+    ap = argparse.ArgumentParser(description="Beacon hub")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8000, help="plain HTTP (dashboard, simulator, tunnel)")
     ap.add_argument("--https-port", type=int, default=8443, help="HTTPS for phones on the LAN (needs certs/)")
@@ -1108,7 +1108,7 @@ def main() -> None:
         configs.append(uvicorn.Config(app, host=args.host, port=args.https_port, log_level="warning",
                                       lifespan="off", ssl_certfile=str(cert), ssl_keyfile=str(key)))
 
-    print("\n  Swarm Sight hub")
+    print("\n  Beacon hub")
     print(f"  Console:     http://localhost:{args.port}/console")
     print(f"  Phones join: {hub.join_url}")
     if not has_tls and not args.public_url:

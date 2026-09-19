@@ -23,7 +23,7 @@ Scripts/preflight.sh --core >/dev/null 2>&1 || {
   Scripts/preflight.sh --core
   exit 1
 }
-xcodebuild -scheme SwarmSight -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -scheme Beacon -destination 'platform=iOS Simulator,name=iPhone 16' build
 
 echo
 echo "=== expo shell: typecheck + lint ==="
@@ -36,7 +36,7 @@ if [ "${1:-}" = "--expo" ] || [ "${2:-}" = "--expo" ]; then
   # CocoaPods crashes on a non-UTF-8 locale.
   export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
   (cd mobile && pnpm expo prebuild -p ios --clean >/dev/null)
-  (cd mobile/ios && xcodebuild -workspace SwarmSight.xcworkspace -scheme SwarmSight -configuration Release \
+  (cd mobile/ios && xcodebuild -workspace Beacon.xcworkspace -scheme Beacon -configuration Release \
       -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath ../../build/expo-dd build \
       | grep -E '^\*\* BUILD|[^-]error: ')
 fi

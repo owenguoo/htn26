@@ -1,4 +1,4 @@
-# Swarm Sight
+# Beacon
 
 Audience phones stream their cameras into one hub. The operator console shows every live
 feed and a floor plan with each phone's position and view cone.
@@ -61,7 +61,7 @@ Follow [deployment and verification](docs/inference.md) to configure the matchin
 After that setup, run these in separate terminals from the repository root:
 
 ```bash
-HF_HOME="$PWD/.cache/huggingface" SWARM_MODEL_CACHE="$PWD/.cache/models" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 uv run --project services/inference --no-sync swarm-sight serve --host 127.0.0.1 --port 8001
+HF_HOME="$PWD/.cache/huggingface" SWARM_MODEL_CACHE="$PWD/.cache/models" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 uv run --project services/inference --no-sync beacon serve --host 127.0.0.1 --port 8001
 uv run python -m swarm.hub
 uv run python -m swarm.inference
 ```

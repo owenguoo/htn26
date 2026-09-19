@@ -33,16 +33,16 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
-import SwarmSight from '../../modules/swarm-sight';
+import Beacon from '../../modules/beacon';
 import { parseJoinLink, poseSourceFor } from '../joinLink';
 import { colors, textStyles } from '../theme/tokens';
 
 /** Test hook: what an operator does in the native seat picker, through the JS API. */
 async function tapSeat(seat: { x: number; y: number }) {
-  await SwarmSight.setSeat(seat.x, seat.y);
+  await Beacon.setSeat(seat.x, seat.y);
   // Needs a first pose to anchor to, as an operator would wait for the camera.
   for (let attempt = 0; attempt < 50; attempt++) {
-    if (await SwarmSight.calibrateFacingStage()) return;
+    if (await Beacon.calibrateFacingStage()) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }
@@ -98,7 +98,7 @@ export default function Join() {
     markers?: string;
     seat?: string;
   }>();
-  const [stored] = useState(() => SwarmSight.getConfig());
+  const [stored] = useState(() => Beacon.getConfig());
   const [hub, setHub] = useState(stored.lastHubURL || stored.venueHubURL);
   const [name, setName] = useState(stored.name);
   const [error, setError] = useState<string | null>(null);
@@ -107,13 +107,13 @@ export default function Join() {
   const hubField = useSeededField(stored.lastHubURL || stored.venueHubURL);
   const nameField = useSeededField(stored.name);
 
-  const valid = SwarmSight.resolveHubURL(hub) !== null;
+  const valid = Beacon.resolveHubURL(hub) !== null;
 
   const join = useCallback(async (target: string, as: string) => {
     setJoining(true);
     setError(null);
     try {
-      await SwarmSight.join(target, as);
+      await Beacon.join(target, as);
       router.replace('/operator');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -122,12 +122,12 @@ export default function Join() {
     }
   }, []);
 
-  // A deep link (swarmsight://join?hub=…) or the launch-argument test hook prefills
+  // A deep link (beacon://join?hub=…) or the launch-argument test hook prefills
   // the form. Only `replay=1` or `drive=1` joins without a tap.
   useEffect(() => {
     if (autoJoined.current) return;
     const fromRoute = params.hub
-      ? `swarmsight://join?hub=${encodeURIComponent(params.hub)}&replay=${params.replay ?? ''}&drive=${params.drive ?? ''}&markers=${params.markers ?? ''}&seat=${params.seat ?? ''}`
+      ? `beacon://join?hub=${encodeURIComponent(params.hub)}&replay=${params.replay ?? ''}&drive=${params.drive ?? ''}&markers=${params.markers ?? ''}&seat=${params.seat ?? ''}`
       : stored.launchJoin;
     const link = parseJoinLink(fromRoute);
     if (!link) return;
@@ -135,7 +135,7 @@ export default function Join() {
     setHub(link.hub);
     hubField.set(link.hub);
     if (link.replay || link.drive) {
-      SwarmSight.configure({ poseSource: poseSourceFor(link), replayMarkers: link.markers });
+      Beacon.configure({ poseSource: poseSourceFor(link), replayMarkers: link.markers });
       void join(link.hub, name || 'sim').then(() => (link.seat ? tapSeat(link.seat) : undefined));
     }
   }, [

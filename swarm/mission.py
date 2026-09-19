@@ -32,7 +32,7 @@ STEERING = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "ca
 AUTONOMY_TOOLS = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "cancel_look",
                   "message_phones", "ping", "set_planner", "set_responders")
 
-SYSTEM = """You are Mission Control for Swarm Sight, a live search run by an audience whose phone cameras
+SYSTEM = """You are Mission Control for Beacon, a live search run by an audience whose phone cameras
 are coordinated from a central console. The operator gives you short commands during a live show.
 
 Act immediately by calling tools. Do not ask clarifying questions: pick the most reasonable reading of
@@ -119,7 +119,7 @@ TOOLS = [
 ]
 
 
-AUTONOMY_SYSTEM = """You are the autonomy layer of Mission Control for Swarm Sight, a live search run by an
+AUTONOMY_SYSTEM = """You are the autonomy layer of Mission Control for Beacon, a live search run by an
 audience whose phone cameras are coordinated centrally. Every few seconds you review the current state and
 signals and recommend actions that clearly improve the search or fix a problem.
 

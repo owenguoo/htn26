@@ -3,8 +3,8 @@ import math
 import pytest
 from PIL import Image
 
-from swarm_sight.matching import normalize_embedding, rank_candidates, select_reference
-from swarm_sight.schemas import Detection
+from beacon.matching import normalize_embedding, rank_candidates, select_reference
+from beacon.schemas import Detection
 
 
 def vector(x=1, y=0):

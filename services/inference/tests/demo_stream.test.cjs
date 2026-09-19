@@ -105,7 +105,7 @@ function harness() {
   };
   vm.runInNewContext(
     fs.readFileSync(
-      path.join(__dirname, "../src/swarm_sight/static/demo.js"),
+      path.join(__dirname, "../src/beacon/static/demo.js"),
       "utf8",
     ),
     sandbox,

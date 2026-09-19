@@ -16,7 +16,7 @@ export default function RootLayout() {
       <StatusBar style="light" />
       <Stack>
         <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="join" options={{ title: 'SwarmSight', headerLargeTitleEnabled: true }} />
+        <Stack.Screen name="join" options={{ title: 'Beacon', headerLargeTitleEnabled: true }} />
         {/* The operator holds the phone up and sweeps: no header, and no swipe-back to leave by accident. */}
         <Stack.Screen name="operator" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />
         <Stack.Screen
