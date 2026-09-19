@@ -24,8 +24,10 @@ public enum SessionState: String, Sendable, Codable, CaseIterable {
     /// Whether a venue-frame pose exists to report at all.
     public var hasVenueFramePose: Bool {
         switch self {
-        case .idle, .permissions, .calibrating: false
-        case .tracking, .degraded, .lost, .recalibrating: true
+        // `recalibrating` belongs with `calibrating`: the origin is invalid, so
+        // whatever ARKit reports is in a frame nobody else shares.
+        case .idle, .permissions, .calibrating, .recalibrating: false
+        case .tracking, .degraded, .lost: true
         }
     }
 }
@@ -383,7 +385,11 @@ public actor SessionMachine {
             pendingSightings.append(sighting)
         case .interrupted:
             // ARKit pauses on backgrounding, a call, the camera being taken away.
+            // It also stops delivering frames, so the last quality it reported —
+            // usually `.normal` — would otherwise stand, and hold confidence at
+            // full, for as long as the interruption lasts.
             advance(to: now)
+            quality = .notAvailable
             transition(to: .lost)
         case .interruptionEnded:
             // The map is gone. Nothing is trustworthy until a marker is seen,
@@ -533,7 +539,13 @@ public actor SessionMachine {
                 degradedSince = nil
                 transition(to: .tracking)
             case .limited:
-                degradedSince = now
+                // Still inside the same unbroken stretch of limited tracking that
+                // timed out: going back to `degraded` would restart the timer and
+                // flap between the two every `degradedToLostAfter` seconds.
+                if let since = degradedSince, now - since >= configuration.degradedToLostAfter {
+                    break
+                }
+                degradedSince = degradedSince ?? now
                 transition(to: .degraded)
             case .notAvailable:
                 break
@@ -560,6 +572,7 @@ public actor SessionMachine {
         guard newState != state else { return }
         let old = state
         state = newState
+        if newState == .tracking { degradedSince = nil }
         if newState == .lost || newState == .recalibrating {
             // Whatever the phone did while it could not see is a yes/no signal
             // about movement, never a position estimate. Pedestrian dead
