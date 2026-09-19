@@ -206,6 +206,70 @@ public enum GuideThresholds {
     /// again. Without it a `go` guide lasting 90 s buzzes every time someone
     /// drifts a degree across the boundary and back.
     public static let onTargetReleaseDegrees: Double = 22
+
+    /// How far the phone may be pointed off the target's height before the
+    /// operator is told to raise or lower it.
+    ///
+    /// 20° is wide on purpose. Nobody holds a phone to better than a few degrees
+    /// while walking, and a cue that appears and vanishes as someone breathes is
+    /// noise the operator learns to ignore. Below it, a target 6 m away is still
+    /// comfortably inside a 55° lens.
+    public static let elevationDeadZoneDegrees: Double = 20
+
+    /// Once the cue is up it stays up until the error falls to here — a plain
+    /// 20° test would flicker at exactly the angle someone is trying to hold.
+    public static let elevationReleaseDegrees: Double = 12
+}
+
+/// Where a target sits vertically, given only how far away it is on the floor.
+///
+/// **Nothing in `swarm/` supplies an elevation.** The hub's whole world model is
+/// a 2D floor plan: `planner.py`, `target.py` and `mission.py` deal in `(x, y)`
+/// and a bearing, and the only pitch-aware string anywhere in the system is
+/// "Hold your phone up". So a "look up / look down" cue has to be derived here,
+/// and it is derived from the two constants `web/phone.js` `project()` uses to
+/// place its AR diamonds (`phone.js:809-810`) — the same assumed geometry, so
+/// the phone's cue and the browser's diamonds put a target in the same place.
+public enum TargetGeometry {
+    /// A phone held up at chest height.
+    public static let cameraHeightMetres: Double = 1.3
+    /// Roughly a seated person, or a tabletop.
+    public static let targetHeightMetres: Double = 1.0
+
+    /// Radians above the horizon, from the camera to a target `distance` metres
+    /// away across the floor. Negative, because the assumed target is below the
+    /// assumed camera — the closer you are, the further below.
+    ///
+    /// The 0.3 m floor on the distance is the web's, and it matters: without it
+    /// a target underfoot gives ±90° and the cue swings wildly as someone walks
+    /// the last stride.
+    public static func elevationRadians(horizontalDistance distance: Double) -> Double {
+        atan2(targetHeightMetres - cameraHeightMetres, max(distance, 0.3))
+    }
+}
+
+/// Raise or lower the phone. The vertical half of a directional cue, which
+/// neither the hub nor the web client has ever had.
+public struct ElevationCue: Sendable, Equatable {
+    /// Where the target sits, radians above the horizon. Also what goes in
+    /// `ArrowCue.elevationRadians`.
+    public var targetRadians: Float
+    /// How far the operator must tilt the phone, in degrees.
+    /// **Positive means raise it**: the target is above where the camera points.
+    public var neededDegrees: Double
+
+    public init(targetRadians: Float, neededDegrees: Double) {
+        self.targetRadians = targetRadians
+        self.neededDegrees = neededDegrees
+    }
+
+    public var isUp: Bool { neededDegrees > 0 }
+    private var whole: Int { Int(abs(neededDegrees).rounded()) }
+
+    /// "Look up 34°" — the leading form, where a turn instruction would go.
+    public var text: String { "Look \(isUp ? "up" : "down") \(whole)°" }
+    /// "look up 34°" — the trailing form, mid-sentence.
+    public var phrase: String { "look \(isUp ? "up" : "down") \(whole)°" }
 }
 
 public struct ArrowCue: Sendable, Equatable {
@@ -344,6 +408,11 @@ public struct OverlayState: Sendable, Equatable {
     public var flash: FlashCue?
     public var arrow: ArrowCue?
     public var banner: GuideBannerCue?
+    /// "Look up / look down", when the phone is pointed well off the target's
+    /// height and the operator is already turned the right way. nil the rest of
+    /// the time. Surfaced separately from `banner` so the view can draw a
+    /// vertical chevron without parsing a sentence.
+    public var elevation: ElevationCue?
     public var toast: ToastCue?
     public var detections: DetectionsCue?
     public var pings: [PingCue] = []
@@ -398,6 +467,9 @@ public struct OverlayModel: Sendable {
     private var guide: Guide?
     private var cueSerial: UInt64 = 0
     private var wasOnTarget = false
+    /// Latched so the elevation cue can be released at a gentler angle than it
+    /// appears at. See `GuideThresholds.elevationReleaseDegrees`.
+    private var showingElevation = false
 
     /// A `delta` guide is a snapshot of where the phone was facing; the hub
     /// refreshes it several times a second. Three seconds without one means the
@@ -444,7 +516,9 @@ public struct OverlayModel: Sendable {
             guide = nil
             state.arrow = nil
             state.banner = nil
+            state.elevation = nil
             wasOnTarget = false
+            showingElevation = false
         case .guideTurn(let sector, let delta, _, let text, let kind, let distance):
             // Same as phone.js: without a heading there is nothing to anchor to.
             guard let heading else { return false }
@@ -546,13 +620,17 @@ public struct OverlayModel: Sendable {
         case nil:
             state.arrow = nil
             state.banner = nil
+            state.elevation = nil
             wasOnTarget = false
+            showingElevation = false
         case .heading(let target, let kind, let label, let text, let distance, let until):
             guard now <= until else {
                 guide = nil
                 state.arrow = nil
                 state.banner = nil
+                state.elevation = nil
                 wasOnTarget = false
+                showingElevation = false
                 return
             }
             // We do not know where the camera is looking, so we cannot say which
@@ -569,19 +647,27 @@ public struct OverlayModel: Sendable {
                 let fallback = text.flatMap { $0.isEmpty ? nil : $0 }
                     ?? Self.directionlessText(kind: kind, label: label, distance: distance)
                 state.banner = fallback.map { GuideBannerCue(kind: kind, text: $0, onTarget: false) }
+                state.elevation = nil
                 wasOnTarget = false
+                showingElevation = false
                 return
             }
             let off = RoomMath.signedDiff(target, heading)
             let onTarget = abs(off) < GuideThresholds.onTargetDegrees
             let tilted = pitch.map { abs($0) > GuideThresholds.tiltedPitchDegrees } ?? false
+            let elevation = elevationCue(kind: kind, distance: distance, pitch: pitch,
+                                         onTarget: onTarget, tilted: tilted)
+            state.elevation = elevation
             state.banner = GuideBannerCue(
                 kind: kind,
                 text: Self.bannerText(kind: kind, offsetDegrees: off, label: label,
-                                      distance: distance, tilted: tilted),
+                                      distance: distance, tilted: tilted, elevation: elevation),
                 onTarget: onTarget, tilted: tilted)
-            state.arrow = ArrowCue(bearingRadians: Float(off * .pi / 180), label: label,
-                                   distance: distance.map(Float.init), until: until)
+            state.arrow = ArrowCue(bearingRadians: Float(off * .pi / 180),
+                                   elevationRadians: distance.map {
+                                       Float(TargetGeometry.elevationRadians(horizontalDistance: $0))
+                                   },
+                                   label: label, distance: distance.map(Float.init), until: until)
             // Edge-triggered, with a release band: a 90 s `go` would otherwise
             // buzz every time the operator drifted a degree over the boundary.
             if onTarget && !wasOnTarget {
@@ -594,10 +680,14 @@ public struct OverlayModel: Sendable {
             guard now <= until else {
                 guide = nil
                 state.banner = nil
+                state.elevation = nil
                 wasOnTarget = false
+                showingElevation = false
                 return
             }
             state.arrow = nil
+            // A compass directive has no distance, so no target geometry.
+            state.elevation = nil
             // ARKit runs `.gravity`; this phone has no true north and cannot
             // resolve a real-world bearing. It used to render
             // "Look the door · 137° NE", which reads like a direction the
@@ -607,6 +697,44 @@ public struct OverlayModel: Sendable {
                                           text: "Face \(label ?? "that way") (no compass on this phone)",
                                           onTarget: false)
         }
+    }
+
+    /// "Look up" / "look down", or nil.
+    ///
+    /// Four things have to be true before the operator is told to tilt:
+    ///
+    /// 1. **The target's distance is known.** Elevation is derived from it and
+    ///    `TargetGeometry`; a `search` sweep or a bare `look` at a sector carries
+    ///    no distance, so there is no geometry and no cue.
+    /// 2. **The phone's pitch is known.** No pitch, no error to correct.
+    /// 3. **The operator is already facing it.** Turning and tilting at once is
+    ///    two instructions; the horizontal one is the bigger error and wins. So
+    ///    the cue is suppressed off target — turn first, then tilt.
+    /// 4. **The error is outside the dead zone**, latched so it does not flicker.
+    private mutating func elevationCue(kind: String, distance: Double?, pitch: Double?,
+                                       onTarget: Bool, tilted: Bool) -> ElevationCue? {
+        // A `search` guide past 65° already owns the banner with "Hold your
+        // phone up", which is the hub's and the web's wording and is not being
+        // regressed. Two vertical instructions at once is one too many.
+        guard let distance, let pitch, onTarget, !(kind == "search" && tilted) else {
+            showingElevation = false
+            return nil
+        }
+        let target = TargetGeometry.elevationRadians(horizontalDistance: distance)
+        let targetDegrees = target * 180 / .pi
+        // Positive = the target is above where the camera points = raise the
+        // phone. `pitch` is positive tilted up, so this is a plain difference —
+        // getting it backwards tells the operator to look at the ceiling when
+        // the candidate is at their feet.
+        let needed = targetDegrees - pitch
+        let threshold = showingElevation ? GuideThresholds.elevationReleaseDegrees
+                                         : GuideThresholds.elevationDeadZoneDegrees
+        guard abs(needed) > threshold else {
+            showingElevation = false
+            return nil
+        }
+        showingElevation = true
+        return ElevationCue(targetRadians: Float(target), neededDegrees: needed)
     }
 
     private mutating func updatePings(pose: Pose?, roomPose: RoomPose?, alignment: RoomAlignment?,
@@ -658,8 +786,12 @@ public struct OverlayModel: Sendable {
     ///     is clockwise of where the operator is facing, so turn right.
     ///   - tilted: `|pitch| > 65`. Only `search` says anything about it, exactly
     ///     as the web does — a `look`, `go` or `respond` never shows it.
+    ///   - elevation: the new vertical cue, which nothing in `swarm/` or the web
+    ///     client has. It is only ever non-nil when the operator is already on
+    ///     target horizontally, so it takes the slot the turn instruction would
+    ///     have had: one correction at a time, in the same place on the line.
     static func bannerText(kind: String, offsetDegrees off: Double, label: String?,
-                           distance: Double?, tilted: Bool) -> String {
+                           distance: Double?, tilted: Bool, elevation: ElevationCue? = nil) -> String {
         let onTarget = abs(off) < GuideThresholds.onTargetDegrees
         let turn = off > 0 ? "Turn right \(degrees(off))° →" : "← Turn left \(degrees(-off))°"
 
@@ -669,13 +801,16 @@ public struct OverlayModel: Sendable {
             // (`swarm/target.py`); drop the clause rather than print "null m" if
             // a future one does not.
             let dist = distance.map { " · \(metres($0)) m" } ?? ""
+            if let elevation { return elevation.text + dist }
             return onTarget ? "↑ Candidate ahead\(dist)" : turn + dist
         case "go":
             let name = label ?? "the spot"
             let dist = distance.map { " · \(metres($0)) m" } ?? ""
+            if let elevation { return "\(elevation.text) · walk to \(name)\(dist)" }
             return onTarget ? "↑ Walk to \(name)\(dist)" : "\(turn) · walk to \(name)\(dist)"
         case "look":
             let name = label ?? "that way"
+            if let elevation { return "Face \(name) · \(elevation.phrase)" }
             if onTarget { return "Facing \(name) ✓ hold it" }
             return off > 0 ? "Face \(name) · turn right \(degrees(off))° →"
                            : "← Face \(name) · turn left \(degrees(-off))°"
@@ -683,6 +818,7 @@ public struct OverlayModel: Sendable {
             // `search` — the planner's sweep, and anything unrecognised, which
             // `phone.js` also funnels here via `msg.kind || 'search'`.
             if tilted { return "Hold your phone up" }
+            if let elevation { return elevation.text }
             return onTarget ? "Scanning \(label ?? "the area")…" : turn
         }
     }
