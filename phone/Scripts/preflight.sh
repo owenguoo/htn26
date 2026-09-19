@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks the two things about this machine that Scripts/verify.sh cannot fix.
+# Checks the things about this machine that Scripts/verify.sh cannot fix.
 set -uo pipefail
 
 status=0
@@ -53,6 +53,47 @@ if DEVELOPER_DIR=/Library/Developer/CommandLineTools swift --version >/dev/null 
   echo "  ok: Command Line Tools toolchain works; swift test needs nothing else"
 else
   echo "  MISSING: no usable Swift toolchain"
+  status=1
+fi
+
+echo "=== Xcode version for Expo SDK 57 ==="
+# SDK 57 (RN 0.86) needs Xcode >= 26.4. SwarmCore and the hub e2e do not.
+xcode_version=$(xcodebuild -version 2>/dev/null | awk '/^Xcode/ {print $2}')
+if [ -n "$xcode_version" ] && [ "$(printf '%s\n26.4\n' "$xcode_version" | sort -V | head -1)" = "26.4" ]; then
+  echo "  ok: Xcode $xcode_version"
+else
+  echo "  TOO OLD: Xcode ${xcode_version:-none}; the Expo app needs >= 26.4."
+  echo "  Update from the App Store or developer.apple.com/download."
+  # Only fatal once the Expo app exists; SwarmCore and the hub e2e do not need it.
+  if [ -d "$(dirname "$0")/../mobile" ]; then status=1; fi
+fi
+
+echo "=== node and pnpm ==="
+if node -v 2>/dev/null | grep -q '^v22\.'; then
+  echo "  ok: node $(node -v)"
+else
+  echo "  MISSING: Node 22 LTS (found: $(node -v 2>/dev/null || echo none)). Run: nvm install 22"
+  status=1
+fi
+if command -v pnpm >/dev/null 2>&1; then
+  echo "  ok: pnpm $(pnpm -v)"
+else
+  echo "  MISSING: pnpm. Run: corepack enable pnpm"
+  status=1
+fi
+
+echo "=== hub toolchain ==="
+# The hub lives at the repo root, one level above phone/.
+if command -v uv >/dev/null 2>&1; then
+  echo "  ok: $(uv --version)"
+  if (cd "$(dirname "$0")/../.." && uv run --frozen python -c 'import swarm.hub' >/dev/null 2>&1); then
+    echo "  ok: swarm.hub imports"
+  else
+    echo "  MISSING: hub dependencies. Run from the repo root: uv sync"
+    status=1
+  fi
+else
+  echo "  MISSING: uv. Run: brew install uv"
   status=1
 fi
 
