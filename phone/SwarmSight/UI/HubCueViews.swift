@@ -127,9 +127,7 @@ struct PhaseCardView: View {
     let lookingFor: String?
     let onPickSeat: () -> Void
 
-    static func covers(_ phase: String) -> Bool {
-        phase == "lobby" || phase == "calibrate" || phase == "end"
-    }
+    static func covers(_ phase: String) -> Bool { PhaseCardText.covers(phase) }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -162,21 +160,9 @@ struct PhaseCardView: View {
         }
     }
 
-    private var title: String {
-        switch phase {
-        case "lobby": "You're in"
-        case "calibrate": "Calibrate"
-        default: "Search complete"
-        }
-    }
-
-    private var detail: String {
-        switch phase {
-        case "lobby": "Hold tight. The search starts when the operator says go."
-        case "calibrate": "Point the camera at any printed marker until it locks."
-        default: "Thanks — you can lower your phone."
-        }
-    }
+    // The words live in SwarmCore so the console's mirror of this card matches.
+    private var title: String { PhaseCardText.title(for: phase) }
+    private var detail: String { PhaseCardText.detail(for: phase) }
 
     private var alignmentText: String {
         switch alignment {

@@ -135,6 +135,8 @@ struct SeatPickerView: View {
     let current: RoomPose?
     let onSeat: (HubSeat) -> Void
     let onConfirm: () async -> Bool
+    /// Non-nil only while a marker owns the alignment.
+    var onResetOrigin: (() -> Void)?
     let onClose: () -> Void
 
     @State private var seat: HubSeat?
@@ -180,6 +182,18 @@ struct SeatPickerView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(seat == nil)
+
+            if let onResetOrigin {
+                // The phone re-anchors by itself when markers keep disagreeing
+                // with it; this is for the operator who can see it is wrong now.
+                Button(role: .destructive) {
+                    onResetOrigin()
+                    onClose()
+                } label: {
+                    Label("Position looks wrong — forget the marker lock", systemImage: "arrow.counterclockwise")
+                        .font(.footnote)
+                }
+            }
         }
         .padding(20)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))

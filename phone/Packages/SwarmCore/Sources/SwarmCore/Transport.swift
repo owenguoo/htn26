@@ -211,7 +211,7 @@ public actor Transport {
     }
 
     /// The perishable lanes, in the order the cursor rotates through them.
-    private static let perishableOrder: [HubOutbound.Lane] = [.slam, .frame, .debug]
+    private static let perishableOrder: [HubOutbound.Lane] = [.slam, .frame, .debug, .hud]
 
     private func nextMessage() -> HubOutbound? {
         if !controlQueue.isEmpty { return controlQueue.removeFirst() }

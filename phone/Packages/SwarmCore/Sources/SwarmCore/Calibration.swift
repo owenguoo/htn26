@@ -123,12 +123,34 @@ public struct CalibrationEngine: Sendable {
         /// Sightings closer together than this are ignored, so `didUpdate`
         /// arriving at 60 Hz does not re-origin the world sixty times a second.
         public var minimumInterval: Double
+        /// Re-anchoring. Rejecting a sighting that disagrees by more than the
+        /// venue threshold is right for a one-off misdetection, and exactly
+        /// wrong after ARKit relocalizes with a jump: from then on *every*
+        /// correct sighting disagrees, every one is rejected, and the phone is
+        /// locked out of the only thing that could fix it.
+        ///
+        /// The difference between the two is consistency. A misdetection is a
+        /// one-off; a moved world says the same thing again and again. So when
+        /// this many rejected sightings in a row agree with *each other*, over at
+        /// least `relockMinimumSeconds`, with nothing accepted in between, the
+        /// origin is what is wrong and it is re-established from them.
+        public var relockAfterConsistentRejections: Int
+        public var relockMinimumSeconds: Double
+        /// How closely the rejected sightings must agree with one another.
+        public var relockAgreementMeters: Float
+        public var relockAgreementDegrees: Float
 
         public init(noChangePositionMeters: Float = 0.02, noChangeRotationDegrees: Float = 0.5,
-                    minimumInterval: Double = 0.5) {
+                    minimumInterval: Double = 0.5, relockAfterConsistentRejections: Int = 5,
+                    relockMinimumSeconds: Double = 1.5, relockAgreementMeters: Float = 0.3,
+                    relockAgreementDegrees: Float = 8) {
             self.noChangePositionMeters = noChangePositionMeters
             self.noChangeRotationDegrees = noChangeRotationDegrees
             self.minimumInterval = minimumInterval
+            self.relockAfterConsistentRejections = max(2, relockAfterConsistentRejections)
+            self.relockMinimumSeconds = relockMinimumSeconds
+            self.relockAgreementMeters = relockAgreementMeters
+            self.relockAgreementDegrees = relockAgreementDegrees
         }
     }
 
@@ -139,6 +161,12 @@ public struct CalibrationEngine: Sendable {
     public private(set) var lastCorrectionMarker: String?
     public private(set) var acceptedCount = 0
     public private(set) var rejectedCount = 0
+    /// Times the origin was re-established from consistent rejections.
+    public private(set) var relockCount = 0
+    /// Origins implied by recent sightings rejected for disagreeing, all in the
+    /// current world frame. Bounded; cleared by anything that proves the origin
+    /// is fine (an accepted or agreeing sighting) or that replaces it.
+    private var dissent: [(origin: Pose, timestamp: Double, markerID: String)] = []
 
     public init(venue: Venue, configuration: Configuration = Configuration()) {
         self.venue = venue
@@ -197,14 +225,18 @@ public struct CalibrationEngine: Sendable {
                 rejectedCount += 1
                 firstRejection = firstRejection
                     ?? .disagreesBeyondThreshold(positionMeters: position, rotationDegrees: degrees)
+                recordDissent(origin: origin, sighting: sighting)
                 continue
             }
             candidates.append((sighting, origin, position, degrees))
         }
 
         guard !candidates.isEmpty else {
+            if let relock = relockIfDissentIsConsistent() { return relock }
             return .rejected(firstRejection ?? .unknownMarker(representative.markerID))
         }
+        // Something agreed with the origin, so the origin is not what is wrong.
+        dissent.removeAll(keepingCapacity: true)
         guard let averaged = Calibration.average(candidates.map(\.origin)) else {
             return .rejected(firstRejection ?? .malformedMarker(representative.markerID))
         }
@@ -254,6 +286,52 @@ public struct CalibrationEngine: Sendable {
             wasClamped: wasClamped, deviceTimestamp: timestamp))
     }
 
+    // MARK: - Re-anchoring
+
+    private mutating func recordDissent(origin: Pose, sighting: MarkerSighting) {
+        // Only a run of sightings that agree with one another counts. One that
+        // disagrees with the run starts a new run rather than joining it.
+        if let reference = dissent.last, !agrees(origin, reference.origin) {
+            dissent.removeAll(keepingCapacity: true)
+        }
+        dissent.append((origin, sighting.deviceTimestamp, sighting.markerID))
+        let capacity = configuration.relockAfterConsistentRejections * 4
+        if dissent.count > capacity { dissent.removeFirst(dissent.count - capacity) }
+    }
+
+    private func agrees(_ a: Pose, _ b: Pose) -> Bool {
+        simd_distance(a.position, b.position) <= configuration.relockAgreementMeters
+            && Geometry.angle(between: a.orientation, and: b.orientation) * 180 / .pi
+                <= configuration.relockAgreementDegrees
+    }
+
+    private mutating func relockIfDissentIsConsistent() -> Calibration.Outcome? {
+        guard dissent.count >= configuration.relockAfterConsistentRejections,
+              let first = dissent.first, let last = dissent.last,
+              last.timestamp - first.timestamp >= configuration.relockMinimumSeconds,
+              // Every one against the newest, not just neighbour against
+              // neighbour: a slow slide must not pass for agreement.
+              dissent.allSatisfy({ agrees($0.origin, last.origin) }),
+              let averaged = Calibration.average(dissent.map(\.origin)) else { return nil }
+
+        let markers = Set(dissent.map(\.markerID)).sorted().joined(separator: "+")
+        let position = simd_length(averaged.position)
+        let degrees = Geometry.angle(between: averaged.orientation,
+                                     and: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)) * 180 / .pi
+        dissent.removeAll(keepingCapacity: true)
+        relockCount += 1
+        acceptedCount += 1
+        hasOrigin = true
+        lastCorrectionTime = last.timestamp
+        lastCorrectionMarker = markers
+        // Applied whole, not clamped: the world jumped, so the fix must too.
+        // `originEstablished` tells the session the frame changed wholesale.
+        return .originEstablished(Calibration.Correction(
+            markerID: markers, relativeTransform: averaged.matrix,
+            measuredPositionError: position, measuredRotationDegrees: degrees,
+            wasClamped: false, deviceTimestamp: last.timestamp))
+    }
+
     /// Clears the origin, e.g. after `sessionInterruptionEnded`, when ARKit has
     /// thrown away its map and the next marker must re-establish everything.
     public mutating func invalidateOrigin() {
@@ -264,5 +342,6 @@ public struct CalibrationEngine: Sendable {
         // than reporting nothing, because the server cannot tell the difference.
         lastCorrectionTime = nil
         lastCorrectionMarker = nil
+        dissent.removeAll(keepingCapacity: true)
     }
 }

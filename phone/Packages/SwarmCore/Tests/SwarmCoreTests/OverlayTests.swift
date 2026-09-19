@@ -390,6 +390,33 @@ struct OverlayTests {
         #expect(pill.needsAttention, "45 s without a marker should be flagged")
     }
 
+    /// Seat calibration has no marker corrections by definition. The pill used
+    /// to stay orange for the whole session on a phone with nothing wrong.
+    @Test func aSeatLocatedPhoneIsNotFlaggedForNeverSeeingAMarker() {
+        var pill = StatusPill(sessionState: .tracking, confidence: 1, isStale: false,
+                              connection: .online, secondsSinceCorrection: nil, alignment: .seat)
+        #expect(!pill.needsAttention)
+        pill.alignment = .none
+        #expect(pill.needsAttention, "located by nothing at all is worth flagging")
+        pill.alignment = .marker
+        #expect(pill.needsAttention, "claims a marker lock it has never had")
+        pill.secondsSinceCorrection = 45
+        #expect(pill.needsAttention)
+        pill.alignment = .seat
+        pill.isStale = true
+        #expect(pill.needsAttention, "seat alignment excuses the marker check, nothing else")
+    }
+
+    @Test func thePillLearnsTheAlignmentFromTheOverlayUpdate() {
+        var model = OverlayModel()
+        var value = diagnostics(correctionAge: nil)
+        value.state = .calibrating
+        model.update(pose: camera(at: .zero, yaw: 0), alignment: .identity, source: .seat, intrinsics: nil,
+                     diagnostics: value, transport: .init(), transportState: .connected, now: 1)
+        #expect(model.state.pill.alignment == .seat)
+        #expect(!model.state.pill.needsAttention)
+    }
+
     // MARK: - Driven from the replay
 
     /// An operator walks the room while the hub holds a "look at heading" order.

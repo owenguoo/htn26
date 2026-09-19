@@ -64,6 +64,8 @@ struct StatusPillView: View {
     /// nil means this phone has never been corrected, so nothing it reports can
     /// be fused with anyone else's. That is not the same as "0 s ago".
     private var correctionText: String {
+        // Located from a seat tap: there is no marker fix, and that is fine.
+        if pill.alignment == .seat, pill.secondsSinceCorrection == nil { return "seat" }
         guard let seconds = pill.secondsSinceCorrection else { return "never" }
         return String(format: "%.0fs", seconds)
     }

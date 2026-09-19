@@ -490,4 +490,96 @@ struct CalibrationTests {
                             largestAppliedStep: largestStep,
                             corrections: corrections)
     }
+
+    // MARK: - Re-anchoring after ARKit relocalizes with a jump
+
+    private func established() throws -> (CalibrationEngine, Pose) {
+        var engine = CalibrationEngine(venue: venue())
+        let markerVenue = try #require(venue().marker(id: "primary")?.pose)
+        _ = engine.evaluate(MarkerSighting(markerID: "primary", observedTransform: markerVenue.matrix,
+                                           deviceTimestamp: 0, isUpdate: false))
+        return (engine, markerVenue)
+    }
+
+    /// The lockout: ARKit's world jumps 4 m, so every *correct* sighting now
+    /// disagrees by 4 m. One-off rejection is right; rejecting them forever is
+    /// not. Consistent dissent re-establishes the origin.
+    @Test func consistentRejectionsReestablishTheOrigin() throws {
+        var (engine, markerVenue) = try established()
+        let jumped = rigid(x: 4, y: 0, z: 1, yaw: 0.6) * markerVenue
+        var outcomes: [Calibration.Outcome] = []
+        for step in 0..<5 {
+            outcomes.append(engine.evaluate(MarkerSighting(markerID: "primary", observedTransform: jumped.matrix,
+                                                           deviceTimestamp: 10 + Double(step) * 0.5, isUpdate: true)))
+        }
+        for outcome in outcomes.dropLast() {
+            guard case .rejected = outcome else {
+                Issue.record("re-anchored too eagerly: \(outcome)")
+                return
+            }
+        }
+        guard case .originEstablished(let correction) = try #require(outcomes.last) else {
+            Issue.record("five agreeing sightings over 2 s did not re-anchor: \(String(describing: outcomes.last))")
+            return
+        }
+        #expect(!correction.wasClamped, "the world jumped, so the fix must jump too")
+        let applied = Pose(matrix: correction.relativeTransform)
+        let expected = Calibration.worldOriginTransform(observed: jumped, markerVenue: markerVenue)
+        #expect(isClose(Geometry.distance(applied.position, expected.position), 0, within: 1e-3))
+        #expect(engine.relockCount == 1)
+        #expect(engine.correctionAge(at: 12) == 0)
+    }
+
+    @Test func aBurstOfRejectionsInOneInstantIsNotEnough() throws {
+        var (engine, markerVenue) = try established()
+        let jumped = rigid(x: 4, y: 0, z: 0, yaw: 0) * markerVenue
+        // didUpdate fires at 60 Hz: twenty rejections can arrive in a third of a
+        // second, all from one bad detection that has not had time to be wrong twice.
+        for step in 0..<20 {
+            let outcome = engine.evaluate(MarkerSighting(markerID: "primary", observedTransform: jumped.matrix,
+                                                         deviceTimestamp: 10 + Double(step) / 60, isUpdate: true))
+            guard case .rejected = outcome else {
+                Issue.record("re-anchored after \(Double(step) / 60) s")
+                return
+            }
+        }
+        #expect(engine.relockCount == 0)
+    }
+
+    @Test func rejectionsThatDisagreeWithEachOtherNeverReanchor() throws {
+        var (engine, markerVenue) = try established()
+        for step in 0..<12 {
+            // A different wrong answer every time: glare, not a moved world.
+            let bogus = rigid(x: 3 + Float(step), y: 0, z: 0, yaw: Float(step) * 0.4) * markerVenue
+            let outcome = engine.evaluate(MarkerSighting(markerID: "primary", observedTransform: bogus.matrix,
+                                                         deviceTimestamp: 10 + Double(step), isUpdate: true))
+            guard case .rejected = outcome else {
+                Issue.record("inconsistent misdetections re-anchored the origin at step \(step)")
+                return
+            }
+        }
+        #expect(engine.relockCount == 0)
+    }
+
+    /// A marker that agrees proves the origin is fine, so whatever was
+    /// disagreeing is the thing that is wrong — and its run starts over.
+    @Test func anAgreeingSightingClearsTheRun() throws {
+        var (engine, markerVenue) = try established()
+        let jumped = rigid(x: 4, y: 0, z: 0, yaw: 0) * markerVenue
+        for step in 0..<4 {
+            _ = engine.evaluate(MarkerSighting(markerID: "primary", observedTransform: jumped.matrix,
+                                               deviceTimestamp: 10 + Double(step), isUpdate: true))
+        }
+        _ = engine.evaluate(MarkerSighting(markerID: "primary", observedTransform: markerVenue.matrix,
+                                           deviceTimestamp: 14, isUpdate: true))
+        for step in 0..<4 {
+            let outcome = engine.evaluate(MarkerSighting(markerID: "primary", observedTransform: jumped.matrix,
+                                                         deviceTimestamp: 15 + Double(step), isUpdate: true))
+            guard case .rejected = outcome else {
+                Issue.record("the run survived an agreeing sighting")
+                return
+            }
+        }
+        #expect(engine.relockCount == 0)
+    }
 }

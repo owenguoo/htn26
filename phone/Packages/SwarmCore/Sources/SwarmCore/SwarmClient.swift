@@ -151,7 +151,12 @@ public actor SwarmClient {
     private var lastError: String?
     private var framesSent = 0
     private var frameSendTimes: [Double] = []
+    /// Set by the hub's `hud` command while a console has this phone expanded.
     private var hudRequested = false
+    /// Display width ÷ height, so the mirror can say which part of the frame
+    /// the operator actually sees. An iPhone's, until the view reports its own.
+    private var screenAspect = 393.0 / 852.0
+    private var latestFrame = OverlayFrame()
 
     private var frameContinuation: AsyncStream<OverlayFrame>.Continuation?
     private var cueContinuation: AsyncStream<OverlayCue>.Continuation?
@@ -189,6 +194,7 @@ public actor SwarmClient {
         tasks.append(Task { [weak self] in await self?.consume(inbound) })
         tasks.append(Task { [weak self] in await self?.runTicker() })
         tasks.append(Task { [weak self] in await self?.runDebug() })
+        tasks.append(Task { [weak self] in await self?.runHUDMirror() })
         tasks.append(Task { [weak self] in await self?.watchThermal() })
 
         do {
@@ -226,6 +232,20 @@ public actor SwarmClient {
         let seat = HubSeat(x: x, y: y)
         aligner.setSeat(seat)
         await transport.send(.seat(seat))
+    }
+
+    /// The operator's "this is wrong, start again" for a marker lock that has
+    /// gone bad: forgets the origin so the next marker re-establishes it.
+    public func resetOrigin() async {
+        aligner.invalidate()
+        await session.resetOrigin()
+    }
+
+    /// The operator view reports its size so the HUD mirror can tell the console
+    /// which part of the frame the screen shows.
+    public func setScreenSize(width: Double, height: Double) {
+        guard width > 0, height > 0 else { return }
+        screenAspect = width / height
     }
 
     /// "I am standing on my spot, facing the stage." Returns false if there is
@@ -425,6 +445,9 @@ public actor SwarmClient {
             case .ping(let ts):
                 await transport.send(.pong(ts: ts, tp: dependencies.epochMs()))
             case .welcome(let welcome):
+                // A fresh connection starts un-viewed, as in phone.js; the hub
+                // re-sends `hud on` after the welcome if a console is watching.
+                hudRequested = false
                 model.apply(welcome)
                 welcomeContinuation?.yield(welcome)
             case .phase(let phase):
@@ -478,10 +501,24 @@ public actor SwarmClient {
                 projections = Projection.visibleMarkers(in: configuration.venue, camera: pose,
                                                         intrinsics: intrinsics)
             }
-            frameContinuation?.yield(OverlayFrame(overlay: model.state, markerProjections: projections,
-                                                  captureWidth: latestIntrinsics?.imageWidth ?? 1_920,
-                                                  captureHeight: latestIntrinsics?.imageHeight ?? 1_440))
+            latestFrame = OverlayFrame(overlay: model.state, markerProjections: projections,
+                                       captureWidth: latestIntrinsics?.imageWidth ?? 1_920,
+                                       captureHeight: latestIntrinsics?.imageHeight ?? 1_440)
+            frameContinuation?.yield(latestFrame)
             try? await Task.sleep(nanoseconds: 33_000_000)
+        }
+    }
+
+    /// 5 Hz, only while a console is watching — the same cadence as phone.js.
+    private func runHUDMirror() async {
+        while !Task.isCancelled {
+            if hudRequested {
+                await transport.send(.hud(HUDMirror.make(from: latestFrame.overlay,
+                                                         captureWidth: latestFrame.captureWidth,
+                                                         captureHeight: latestFrame.captureHeight,
+                                                         screenAspect: screenAspect)))
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
         }
     }
 

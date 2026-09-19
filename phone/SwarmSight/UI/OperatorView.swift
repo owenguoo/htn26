@@ -67,6 +67,7 @@ public struct OperatorView: View {
                 SeatPickerView(room: room, world: overlay.world, current: overlay.roomPose,
                                onSeat: { model.setSeat(x: $0.x, y: $0.y) },
                                onConfirm: { await model.calibrateFacingStage() },
+                               onResetOrigin: overlay.alignment == .marker ? { model.resetOrigin() } : nil,
                                onClose: { isPickingSeat = false })
             }
 
@@ -81,6 +82,12 @@ public struct OperatorView: View {
         .animation(.easeOut(duration: 0.2), value: overlay.toast)
         .animation(.easeOut(duration: 0.2), value: overlay.phase)
         .preferredColorScheme(.dark)
+        .background(GeometryReader { geometry in
+            Color.clear
+                .onAppear { model.reportScreenSize(geometry.size) }
+                .onChange(of: geometry.size) { _, size in model.reportScreenSize(size) }
+                .onChange(of: model.isJoined) { _, _ in model.reportScreenSize(geometry.size) }
+        }.ignoresSafeArea())
         .onAppear { model.attach() }
         .onDisappear { model.detach() }
     }

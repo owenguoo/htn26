@@ -55,22 +55,16 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
     private var continuation: AsyncStream<PoseProviderEvent>.Continuation?
     private var delegate: SessionDelegate?
 
-    /// Copied out of the frame, never the frame itself.
-    private var latestDepth: (map: DepthMap, pose: Pose, deviceTimestamp: Double)?
-    private var lastPosition: SIMD3<Float>?
-    private var motionAccumulator: Float = 0
+    /// Everything the 60 Hz delegate touches. Lives outside the actor so the
+    /// delegate never has to hop onto it — see `FrameInbox`.
+    private let inbox = FrameInbox()
     public private(set) var isRunning = false
-    /// Where captured pixel buffers go. Set by the coordinator so the encoder
-    /// gets the buffer without this file knowing anything about JPEGs, and so
+
+    /// Where captured pixel buffers go. Set by the runtime so the encoder gets
+    /// a retained `CVPixelBuffer` to work on. Only the pixel buffer is retained;
     /// the `ARFrame` itself is never handed on.
-    private var pixelBufferSink: (@Sendable (PixelBufferHandoff) -> Void)?
-
     public func setPixelBufferSink(_ sink: @escaping @Sendable (PixelBufferHandoff) -> Void) {
-        pixelBufferSink = sink
-    }
-
-    fileprivate func stage(pixelBuffer: PixelBufferHandoff) {
-        pixelBufferSink?(pixelBuffer)
+        inbox.setSink(sink)
     }
 
     public init(configuration: Configuration) {
@@ -83,8 +77,9 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
         let (stream, continuation) = AsyncStream<PoseProviderEvent>
             .makeStream(bufferingPolicy: .bufferingNewest(8))
         self.continuation = continuation
+        inbox.open(continuation)
 
-        let delegate = SessionDelegate(provider: self)
+        let delegate = SessionDelegate(inbox: inbox)
         self.delegate = delegate
         session.delegate = delegate
         session.delegateQueue = DispatchQueue(label: "swarmsight.arsession", qos: .userInitiated)
@@ -98,6 +93,7 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
     public func stop() async {
         session.pause()
         isRunning = false
+        inbox.close()
         continuation?.finish()
         continuation = nil
         delegate = nil
@@ -115,8 +111,7 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
     /// reckoning heading error compounds: 20 degrees over 10 m is ~3.4 m lateral
     /// and never recovers.
     public func consumeMotionSinceLastQuery() async -> Float {
-        defer { motionAccumulator = 0 }
-        return motionAccumulator
+        inbox.consumeMotion()
     }
 
     // MARK: - MetricDepthFrameSource
@@ -126,7 +121,7 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
     }
 
     public func latestSceneDepth() async -> (map: DepthMap, pose: Pose, deviceTimestamp: Double)? {
-        latestDepth
+        inbox.latestDepth()
     }
 
     // MARK: - Session configuration
@@ -186,42 +181,6 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
         }
         guard !images.isEmpty else { throw ProviderError.noMarkerImages }
         return images
-    }
-
-    // MARK: - Delegate callbacks, hopped onto the actor
-
-    /// Takes an already-copied sample. The `ARFrame` it came from stays on the
-    /// delegate queue and is released the moment the callback returns; retaining
-    /// one stalls the session.
-    fileprivate func ingest(sample: PoseSample) {
-        if let last = lastPosition {
-            motionAccumulator += simd_distance(last, sample.pose.position)
-        }
-        lastPosition = sample.pose.position
-        continuation?.yield(.pose(sample))
-    }
-
-    fileprivate func ingest(depth: DepthMap, pose: Pose, timestamp: Double) {
-        latestDepth = (depth, pose, timestamp)
-    }
-
-    fileprivate func ingest(sighting: MarkerSighting) {
-        continuation?.yield(.marker(sighting))
-    }
-
-    fileprivate func sessionWasInterrupted() {
-        continuation?.yield(.interrupted)
-    }
-
-    fileprivate func sessionInterruptionEnded() {
-        // ARKit has thrown its map away. Everything is untrustworthy until a
-        // marker is seen again; SwarmCore's state machine decides what that means.
-        lastPosition = nil
-        continuation?.yield(.interruptionEnded)
-    }
-
-    fileprivate func sessionFailed(_ error: any Error) {
-        continuation?.yield(.failed(error.localizedDescription))
     }
 
     // MARK: - Translation
@@ -309,38 +268,114 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
     }
 }
 
-/// ARKit's delegate is not `Sendable` and fires on its own queue, so it is a
-/// separate object that does nothing but hop onto the actor.
-private final class SessionDelegate: NSObject, ARSessionDelegate {
-    private let provider: ARKitPoseProvider
+/// The hand-off point between ARKit's delegate queue and everything else.
+///
+/// The delegate used to hop onto the provider actor with one unstructured
+/// `Task` per callback — sixty a second. Unstructured tasks carry no ordering
+/// guarantee, so frame N+1 could be delivered before frame N, and a pose could
+/// slip in *between* two markers seen in the same instant. `SessionMachine`
+/// closes a sighting batch the moment a pose arrives, so that interleaving
+/// silently turned "average these co-visible markers" into "apply them one by
+/// one" — the opposite of why more than one marker goes up.
+///
+/// ARKit's delegate queue is serial and `AsyncStream.Continuation.yield` is
+/// thread-safe, so yielding straight from the callback gives total order for
+/// free: poses in capture order, and every sighting from one callback
+/// back-to-back with nothing between them. No tasks, no hops.
+///
+/// `@unchecked Sendable`: every stored property is guarded by `lock`.
+private final class FrameInbox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncStream<PoseProviderEvent>.Continuation?
+    private var sink: (@Sendable (PixelBufferHandoff) -> Void)?
+    private var depth: (map: DepthMap, pose: Pose, deviceTimestamp: Double)?
+    private var lastPosition: SIMD3<Float>?
+    private var motion: Float = 0
 
-    init(provider: ARKitPoseProvider) {
-        self.provider = provider
+    func open(_ continuation: AsyncStream<PoseProviderEvent>.Continuation) {
+        lock.withLock {
+            self.continuation = continuation
+            lastPosition = nil
+            motion = 0
+        }
+    }
+
+    func close() {
+        lock.withLock { continuation = nil }
+    }
+
+    func setSink(_ sink: @escaping @Sendable (PixelBufferHandoff) -> Void) {
+        lock.withLock { self.sink = sink }
+    }
+
+    /// One camera frame, already copied out of the `ARFrame`.
+    func frame(_ sample: PoseSample, pixelBuffer: PixelBufferHandoff,
+               depth newDepth: DepthMap?) {
+        let (continuation, sink) = lock.withLock { () -> (AsyncStream<PoseProviderEvent>.Continuation?,
+                                                          (@Sendable (PixelBufferHandoff) -> Void)?) in
+            if let last = lastPosition { motion += simd_distance(last, sample.pose.position) }
+            lastPosition = sample.pose.position
+            if let newDepth { depth = (newDepth, sample.pose, sample.deviceTimestamp) }
+            return (self.continuation, self.sink)
+        }
+        // Outside the lock: neither of these may block the other's readers.
+        sink?(pixelBuffer)
+        continuation?.yield(.pose(sample))
+    }
+
+    /// Every marker from one delegate callback, contiguous in the stream.
+    func markers(_ sightings: [MarkerSighting]) {
+        guard let continuation = lock.withLock({ self.continuation }) else { return }
+        for sighting in sightings { continuation.yield(.marker(sighting)) }
+    }
+
+    func event(_ event: PoseProviderEvent) {
+        let continuation = lock.withLock { () -> AsyncStream<PoseProviderEvent>.Continuation? in
+            // ARKit has thrown its map away: distance across the gap is not motion.
+            if case .interruptionEnded = event { lastPosition = nil }
+            return self.continuation
+        }
+        continuation?.yield(event)
+    }
+
+    func consumeMotion() -> Float {
+        lock.withLock {
+            defer { motion = 0 }
+            return motion
+        }
+    }
+
+    func latestDepth() -> (map: DepthMap, pose: Pose, deviceTimestamp: Double)? {
+        lock.withLock { depth }
+    }
+}
+
+/// ARKit's delegate is not `Sendable` and fires on its own serial queue. It
+/// copies what it needs out of ARKit's reference types and hands plain values to
+/// the inbox, synchronously — see `FrameInbox` for why not a `Task`.
+private final class SessionDelegate: NSObject, ARSessionDelegate {
+    private let inbox: FrameInbox
+
+    init(inbox: FrameInbox) {
+        self.inbox = inbox
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // Fires at 60 Hz. Everything is copied out synchronously here; the frame
-        // is never captured by the Task, because retaining it stalls the session.
+        // is never retained, because retaining it stalls the session.
         let timestamp = frame.timestamp
         let camera = frame.camera
         let pose = Pose(matrix: camera.transform)
-        let quality = ARKitPoseProvider.quality(of: camera.trackingState)
-        let intrinsics = ARKitPoseProvider.intrinsics(of: camera)
         let depth = frame.sceneDepth.flatMap {
             ARKitPoseProvider.depthMap(from: $0.depthMap, confidence: $0.confidenceMap)
         }
         // The pixel buffer is retained; the frame is not. CoreVideo buffers are
         // reference-counted independently of the ARFrame that vended them.
-        let pixelBuffer = PixelBufferHandoff(frame.capturedImage, deviceTimestamp: timestamp)
-
-        Task { [provider] in
-            await provider.stage(pixelBuffer: pixelBuffer)
-            await provider.ingest(sample: PoseSample(pose: pose, deviceTimestamp: timestamp,
-                                                     quality: quality, intrinsics: intrinsics))
-            if let depth {
-                await provider.ingest(depth: depth, pose: pose, timestamp: timestamp)
-            }
-        }
+        inbox.frame(PoseSample(pose: pose, deviceTimestamp: timestamp,
+                               quality: ARKitPoseProvider.quality(of: camera.trackingState),
+                               intrinsics: ARKitPoseProvider.intrinsics(of: camera)),
+                    pixelBuffer: PixelBufferHandoff(frame.capturedImage, deviceTimestamp: timestamp),
+                    depth: depth)
     }
 
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
@@ -355,7 +390,9 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
 
     private func forward(_ anchors: [ARAnchor], isUpdate: Bool) {
         // ARImageAnchor is a reference type and is not Sendable, so everything
-        // needed is copied into plain values before crossing to the actor.
+        // needed is copied into plain values first. One timestamp for the whole
+        // callback: sharing it is what tells `SessionMachine` these were seen
+        // together and should be averaged into a single correction.
         let timestamp = CACurrentMediaTime()
         let sightings: [MarkerSighting] = anchors.compactMap { anchor in
             guard let image = anchor as? ARImageAnchor,
@@ -367,22 +404,20 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
                                   estimatedPhysicalWidth: Float(image.referenceImage.physicalSize.width))
         }
         guard !sightings.isEmpty else { return }
-        Task { [provider] in
-            for sighting in sightings {
-                await provider.ingest(sighting: sighting)
-            }
-        }
+        inbox.markers(sightings)
     }
 
     func sessionWasInterrupted(_ session: ARSession) {
-        Task { [provider] in await provider.sessionWasInterrupted() }
+        inbox.event(.interrupted)
     }
 
     func sessionInterruptionEnded(_ session: ARSession) {
-        Task { [provider] in await provider.sessionInterruptionEnded() }
+        // ARKit has thrown its map away. Everything is untrustworthy until a
+        // marker is seen again; SwarmCore's state machine decides what that means.
+        inbox.event(.interruptionEnded)
     }
 
     func session(_ session: ARSession, didFailWithError error: any Error) {
-        Task { [provider] in await provider.sessionFailed(error) }
+        inbox.event(.failed(error.localizedDescription))
     }
 }

@@ -136,6 +136,9 @@ public struct SessionDiagnostics: Sendable, Equatable {
     /// Corrections built from more than one marker seen at once. Averaging
     /// several is the whole argument for putting up more than one marker.
     public var averagedSightings: Int = 0
+    /// Times the origin was re-established because sightings kept agreeing with
+    /// each other and not with it — ARKit relocalized with a jump.
+    public var relocks: Int = 0
     public var thermalState: ThermalState = .nominal
     public var isBlockedOnClockSync: Bool = true
     /// Metres of device motion accumulated while tracking was unusable. A
@@ -338,6 +341,18 @@ public actor SessionMachine {
         diagnostics.isBlockedOnClockSync = configuration.requireClockSync && !clock.isSynchronized
     }
 
+    /// The operator's "this is wrong, start again": throws the origin away so
+    /// the next marker re-establishes it from scratch, exactly as after an
+    /// interruption. The manual counterpart of the calibration engine's
+    /// automatic re-anchor.
+    public func resetOrigin() {
+        guard state != .idle, state != .permissions else { return }
+        pendingSightings.removeAll()
+        calibration.invalidateOrigin()
+        recentFrames.removeAll(keepingCapacity: true)
+        transition(to: .recalibrating)
+    }
+
     public func setThermalState(_ newValue: ThermalState) {
         thermalState = newValue
         diagnostics.thermalState = newValue
@@ -397,6 +412,7 @@ public actor SessionMachine {
         snapshot.confidence = confidence
         snapshot.lastCorrectionAge = calibration.correctionAge(at: now)
         snapshot.lastCorrectionMarker = calibration.lastCorrectionMarker
+        snapshot.relocks = calibration.relockCount
         snapshot.poseAge = lastPoseTime.map { max(0, now - $0) } ?? 0
         snapshot.isStale = isStale
         snapshot.motionWhileLost = motionWhileLost

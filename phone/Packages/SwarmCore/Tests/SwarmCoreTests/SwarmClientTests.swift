@@ -104,4 +104,30 @@ struct SwarmClientTests {
         #expect(await client.snapshot().alignment == .seat)
         await client.stop()
     }
+
+    /// The console only gets a HUD while it asks for one, and a reconnect
+    /// starts un-viewed — exactly as the web phone behaves.
+    @Test func theHudMirrorFlowsOnlyWhileAConsoleAsksForIt() async throws {
+        let channel = GatedChannel()
+        await channel.grant(100_000)
+        let client = try makeClient(markers: true, channel: channel)
+        try await client.start()
+
+        await waitUntil("frames flowing") { await channel.deliveredMessages().contains { $0.type == "frame" } }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(!(await channel.deliveredMessages().contains { $0.type == "hud" }), "nobody asked")
+
+        await channel.deliverInbound(#"{"type":"command","cmd":"hud","on":true}"#)
+        await waitUntil("hud messages") { await channel.deliveredMessages().filter { $0.type == "hud" }.count >= 2 }
+        let hud = try #require(await channel.deliveredMessages().last { $0.type == "hud" })
+        #expect((hud.json["screen"] as? [Double])?.count == 4)
+        #expect(hud.json["ar"] is [Any])
+
+        await channel.deliverInbound(#"{"type":"command","cmd":"hud","on":false}"#)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let settled = await channel.deliveredMessages().filter { $0.type == "hud" }.count
+        try await Task.sleep(nanoseconds: 600_000_000)
+        #expect(await channel.deliveredMessages().filter { $0.type == "hud" }.count == settled)
+        await client.stop()
+    }
 }

@@ -77,6 +77,18 @@ public final class OperatorViewModel {
         Task { await client.setSeat(x: x, y: y) }
     }
 
+    /// For a marker lock that has gone wrong and is not fixing itself.
+    public func resetOrigin() {
+        guard let client else { return }
+        Task { await client.resetOrigin() }
+    }
+
+    /// So the console's HUD mirror knows which part of the frame this screen shows.
+    public func reportScreenSize(_ size: CGSize) {
+        guard let client, size.width > 0, size.height > 0 else { return }
+        Task { await client.setScreenSize(width: size.width, height: size.height) }
+    }
+
     public func calibrateFacingStage() async -> Bool {
         guard let client else { return false }
         return await client.calibrateFacingStage()

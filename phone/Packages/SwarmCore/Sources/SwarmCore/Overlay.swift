@@ -15,6 +15,10 @@ public struct StatusPill: Sendable, Equatable {
     /// Seconds since the last accepted marker correction. nil means never, which
     /// means nothing this phone reports can be fused.
     public var secondsSinceCorrection: Double?
+    /// How this phone knows where it is in the room. Decides what "never
+    /// corrected" means: alarming for a marker-locked phone, normal for one
+    /// located from a seat tap, which has no marker corrections by definition.
+    public var alignment: RoomAligner.Source
 
     public enum ConnectionState: String, Sendable, Equatable {
         case offline
@@ -35,7 +39,9 @@ public struct StatusPill: Sendable, Equatable {
     public init(sessionState: SessionState = .idle, trackingState: String = "notAvailable",
                 confidence: Double = 0, isStale: Bool = true,
                 connection: ConnectionState = .offline, inFlight: Int = 0, dropped: Int = 0,
-                thermalState: ThermalState = .nominal, secondsSinceCorrection: Double? = nil) {
+                thermalState: ThermalState = .nominal, secondsSinceCorrection: Double? = nil,
+                alignment: RoomAligner.Source = .marker) {
+        self.alignment = alignment
         self.sessionState = sessionState
         self.trackingState = trackingState
         self.confidence = confidence
@@ -54,9 +60,22 @@ public struct StatusPill: Sendable, Equatable {
             || connection != .online
             || sessionState == .lost
             || sessionState == .recalibrating
-            || secondsSinceCorrection == nil
-            || (secondsSinceCorrection ?? 0) > 30
+            || correctionNeedsAttention
             || thermalState >= .serious
+    }
+}
+
+extension StatusPill {
+    /// A seat-located phone is tracking correctly with no marker correction at
+    /// all, so holding it to "corrected in the last 30 s" kept the pill orange
+    /// for a phone with nothing wrong. Only a phone with no alignment of any
+    /// kind, or a marker lock that has gone old, is worth the operator's eye.
+    var correctionNeedsAttention: Bool {
+        switch alignment {
+        case .none: true
+        case .seat: false
+        case .marker: secondsSinceCorrection.map { $0 > 30 } ?? true
+        }
     }
 }
 
@@ -357,7 +376,8 @@ public struct OverlayModel: Sendable {
                                 inFlight: transport.inFlight,
                                 dropped: transport.dropped,
                                 thermalState: diagnostics.thermalState,
-                                secondsSinceCorrection: diagnostics.lastCorrectionAge)
+                                secondsSinceCorrection: diagnostics.lastCorrectionAge,
+                                alignment: source)
         state.alignment = source
 
         if let flash = state.flash, now > flash.until { state.flash = nil }

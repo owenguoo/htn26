@@ -205,13 +205,15 @@ public enum HubOutbound: Sendable, Equatable {
     /// `ts` echoed exactly as received; `tp` is this phone's epoch ms.
     case pong(ts: Double, tp: Double)
     case frame(HubFrameHeader, jpeg: Data)
+    /// What is on screen, for a console that has this phone expanded.
+    case hud(HubHUDMirror)
 
     /// Which transport lane this rides in.
     public enum Lane: Sendable, Equatable, Hashable, CaseIterable {
         /// Never dropped, FIFO.
         case control
         /// Latest-wins. A stale one is worse than none.
-        case slam, frame, debug
+        case slam, frame, debug, hud
     }
 
     public var lane: Lane {
@@ -220,6 +222,7 @@ public enum HubOutbound: Sendable, Equatable {
         case .slam, .orient: .slam
         case .frame: .frame
         case .debug: .debug
+        case .hud: .hud
         }
     }
 
@@ -233,6 +236,7 @@ public enum HubOutbound: Sendable, Equatable {
         case .debug: "debug"
         case .pong: "pong"
         case .frame: "frame"
+        case .hud: "hud"
         }
     }
 
@@ -256,6 +260,8 @@ public enum HubOutbound: Sendable, Equatable {
             return .text(try Self.string(encoder.encode(Tagged(type: "debug", body: debug))))
         case .pong(let ts, let tp):
             return .text(try Self.string(encoder.encode(PongMessage(ts: ts, tp: tp))))
+        case .hud(let mirror):
+            return .text(try Self.string(encoder.encode(Tagged(type: "hud", body: mirror))))
         case .frame(let header, let jpeg):
             return .binary(try HubFrame.pack(header: header, jpeg: jpeg))
         }
