@@ -16,6 +16,7 @@ const tiles = new Map();    // id → { el, img, url, ... }
 const drawn = new Map();    // id → smoothed heading for the map
 let hoverId = null;
 let coverage = null;        // look-count grid from the hub
+let planner = null;         // sector assignments + log from the hub
 let frameCount = 0;         // thumbnails received, for a sanity check in the console
 
 // ---------------------------------------------------------------- socket
@@ -42,6 +43,8 @@ function onJson(msg) {
     resizeMap();
   } else if (msg.type === 'state') {
     coverage = msg.coverage || null;
+    planner = msg.planner || null;
+    renderPlanner();
     const seen = new Set();
     for (const p of msg.phones) {
       phones.set(p.id, p);
@@ -118,6 +121,8 @@ function renderTiles() {
     if (!p.connected) tags.push(['OFFLINE', 'bad']);
     else if (p.stale) tags.push(['STALE', 'warn']);
     if (p.pitch != null && Math.abs(p.pitch) > 65) tags.push([p.pitch < 0 ? 'FLOOR' : 'CEILING', 'warn']); // not counted as coverage
+    const job = planner?.assignments?.[p.id];
+    if (job) tags.push([`→ ${job.sector}`, job.onTarget ? 'ok' : 'warn']);
     if (!p.pose) tags.push(['NO SEAT', 'warn']);
     else if (!p.sim && !p.calibrated && p.pose.source === 'seat') tags.push(['UNCAL', 'warn']);
     t.tags.innerHTML = tags.map(([s, c]) => `<span class="tag ${c}">${s}</span>`).join('');
@@ -182,8 +187,7 @@ function renderStats() {
   const unplaced = live.filter((p) => !p.pose).length;
   $('#legend').innerHTML = [
     `<span><i class="sw" style="background:${COV_COLORS[0]}"></i>Not looked</span>`,
-    `<span><i class="sw" style="background:${COV_COLORS[1]}"></i>Looked once</span>`,
-    `<span><i class="sw" style="background:${COV_COLORS[2]}"></i>Looked twice+</span>`,
+    `<span><i class="sw" style="background:${COV_COLORS[1]}"></i>Looked at</span>`,
     '<span>Cone = camera view (55° FOV)</span>',
     unplaced ? `<span style="color:var(--warn)">${unplaced} phone${unplaced > 1 ? 's' : ''} not placed yet</span>` : '',
   ].join('');
@@ -225,8 +229,8 @@ function lerpAngle(a, b, k) {
   return (a + d * k + 360) % 360;
 }
 
-// look counts: 0 = black, 1 = light red, 2+ = dark red
-const COV_COLORS = ['#000000', '#ff8f8f', '#9e1b1b'];
+// 0 = not looked (black), 1 = looked (red)
+const COV_COLORS = ['#000000', '#c93a3a'];
 
 function drawCoverage() {
   if (!coverage) return;
@@ -234,8 +238,7 @@ function drawCoverage() {
   const s = cell * view.scale;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const n = cells.charCodeAt(r * cols + c) - 48;
-      ctx.fillStyle = COV_COLORS[Math.min(n, 2)];
+      ctx.fillStyle = COV_COLORS[cells.charCodeAt(r * cols + c) - 48];
       const [px, py] = view.toPx(x0 + c * cell, r * cell);
       ctx.fillRect(px, py, s + 0.5, s + 0.5); // +0.5 hides hairline seams between cells
     }
@@ -249,6 +252,7 @@ function drawMap() {
   ctx.clearRect(0, 0, w, h);
   drawCoverage();
   drawRoom(ctx, room, view, { colors: { floor: 'rgba(0,0,0,0)' } });
+  drawPlanner();
 
   const list = [...phones.values()].filter((p) => p.pose).sort((a, b) => a.index - b.index);
   // cones first so dots and labels sit on top
@@ -293,6 +297,58 @@ function escapeHtml(s) {
 }
 
 $('#resetCov').addEventListener('click', () => send({ type: 'reset_coverage' }));
+$('#plannerBtn').addEventListener('click', () => send({ type: 'planner', enabled: !planner?.enabled }));
+
+function renderPlanner() {
+  const on = !!planner?.enabled;
+  $('#plannerBtn').textContent = `Planner: ${on ? 'on' : 'off'}`;
+  $('#plannerBtn').classList.toggle('on', on);
+  const logEl = $('#plog');
+  logEl.classList.toggle('on', on || !!planner?.log?.length);
+  logEl.innerHTML = (planner?.log || []).slice(-5).reverse().map((e) => {
+    const p = e.phoneId && phones.get(e.phoneId);
+    const who = p ? `<b style="color:${p.color}">#${p.index}</b> ` : '';
+    const t = new Date(e.t).toLocaleTimeString([], { hour12: false });
+    return `<div><time>${t}</time>${who}${escapeHtml(e.text)}</div>`;
+  }).join('') || '<div>Planner idle: waiting for placed, calibrated phones</div>';
+}
+
+// sector grid, assigned sectors, and phone → target lines
+function drawPlanner() {
+  if (!planner?.enabled) return;
+  const { sectorSize: s, cols, rows } = planner;
+  const x0 = -room.width / 2;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = 'rgba(255,255,255,0.28)';
+  ctx.font = '600 10px ui-monospace, monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r++) {
+      const [px, py] = view.toPx(x0 + c * s, r * s);
+      const [qx, qy] = view.toPx(Math.min(x0 + (c + 1) * s, room.width / 2), Math.min((r + 1) * s, room.depth));
+      ctx.strokeRect(px, py, qx - px, qy - py);
+      ctx.fillText(`${String.fromCharCode(65 + c)}${r + 1}`, px + 3, py + 3);
+    }
+  }
+  for (const [pid, job] of Object.entries(planner.assignments)) {
+    const p = phones.get(pid);
+    if (!p?.pose) continue;
+    const c = job.sector.charCodeAt(0) - 65, r = Number(job.sector.slice(1)) - 1;
+    const [px, py] = view.toPx(x0 + c * s, r * s);
+    const [qx, qy] = view.toPx(x0 + (c + 1) * s, (r + 1) * s);
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 1, py + 1, qx - px - 2, qy - py - 2);
+    const [ax, ay] = view.toPx(p.pose.x, p.pose.y);
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo((px + qx) / 2, (py + qy) / 2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
 
 // ---------------------------------------------------------------- gps map
 // Real-world map of each phone's browser GPS fix. Indoors, expect tens of meters of error.

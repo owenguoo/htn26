@@ -30,6 +30,7 @@
     .stat span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
     .btn { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 14px; font-weight: 600; }
     .btn:hover { border-color: var(--accent); }
+    .btn.on { background: var(--ok); color: #04210a; border-color: var(--ok); }
     .join { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--line);
       border-radius: 12px; padding: 6px 10px 6px 6px; max-width: 360px; }
     .join img { width: 64px; height: 64px; border-radius: 6px; background: #fff; display: block; }
@@ -56,7 +57,7 @@
     .tile .nums { font: 11px var(--mono); color: #c9d0ee; white-space: nowrap; }
     .tile .tags { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; }
     .tag { font: 700 10px var(--mono); padding: 2px 6px; border-radius: 6px; background: rgba(0,0,0,0.6); color: var(--muted); }
-    .tag.warn { color: var(--warn); } .tag.bad { color: var(--bad); }
+    .tag.warn { color: var(--warn); } .tag.ok { color: var(--ok); } .tag.bad { color: var(--bad); }
     .tile.offline { opacity: 0.35; }
     .tile.flashing { animation: tflash 0.4s 3; }
     @keyframes tflash { 50% { box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--c) 45%, transparent); } }
@@ -82,6 +83,11 @@
     .osm-dark { filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.9) saturate(0.6); }
     .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px;
       border: 1px solid rgba(255,255,255,0.2); }
+    #plog { border-top: 1px solid var(--line); padding: 8px 14px; font: 12px var(--mono); color: var(--muted);
+      display: none; gap: 2px; max-height: 120px; overflow: hidden; }
+    #plog.on { display: grid; }
+    #plog b { font-weight: 700; }
+    #plog time { opacity: 0.5; margin-right: 8px; }
     .legend { padding: 10px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; }
 
     @media (max-width: 900px) {
@@ -103,6 +109,7 @@
       <div class="stat"><b id="sLat">–</b><span>Median latency</span></div>
       <div class="stat"><b id="sSearched">0%</b><span>Area searched</span></div>
     </div>
+    <button class="btn" id="plannerBtn" title="Assign sectors to phones and steer them there">Planner: off</button>
     <button class="btn" id="flashAll" title="Flash every phone's screen">Flash all</button>
     <div class="join">
       <img id="qr" alt="Join QR code">
@@ -117,9 +124,10 @@
     <section class="panel">
       <h2>
         <span class="tabs"><button class="tab on" data-view="floor">Floor plan</button><button class="tab" data-view="gps">GPS</button></span>
-        <span class="tools"><span id="roomName"></span><button class="mini" id="resetCov" title="Clear the look counts">Reset coverage</button></span>
+        <span class="tools"><span id="roomName"></span><button class="mini" id="resetCov" title="Mark the whole room unsearched again">Reset coverage</button></span>
       </h2>
       <div id="mapWrap"><canvas id="map"></canvas><div id="gpsMap"></div></div>
+      <div id="plog"></div>
       <div class="legend" id="legend"></div>
     </section>
   </main>

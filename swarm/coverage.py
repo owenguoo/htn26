@@ -1,15 +1,8 @@
-"""Look-count coverage grid over the floor plan.
-
-Each cell counts how many separate times a camera has looked at it. A look is counted
-when a cell enters a phone's view cone; the same phone only counts it again after the
-cell has been out of its view for REARM_MS. Staring doesn't increase the count, and
-gyro jitter at the cone's edge doesn't either.
-"""
+"""Coverage grid over the floor plan: which cells has any camera looked at?"""
 from __future__ import annotations
 
 import math
 
-REARM_MS = 1500
 MAX_PITCH = 65  # ignore cameras pointed at the floor or ceiling
 
 
@@ -21,12 +14,10 @@ class Coverage:
         self.rows = round(room["depth"] / cell)
         self.fov = room["cameraFovDeg"]
         self.range = room["coneLength"]
-        self.counts = [0] * (self.cols * self.rows)
-        self.last_in_view: dict[str, dict[int, float]] = {}  # phone id → cell → last time in view
+        self.looked = [False] * (self.cols * self.rows)
 
     def reset(self) -> None:
-        self.counts = [0] * len(self.counts)
-        self.last_in_view.clear()
+        self.looked = [False] * len(self.looked)
 
     def cells_in_cone(self, x: float, y: float, heading: float) -> list[int]:
         h = math.radians(heading)
@@ -49,25 +40,17 @@ class Coverage:
                     out.append(row * self.cols + col)
         return out
 
-    def update(self, viewers: dict[str, tuple[float, float, float, float | None]], now: float) -> None:
+    def update(self, viewers: dict[str, tuple[float, float, float, float | None]]) -> None:
         """viewers: phone id → (x, y, heading, pitch) for every phone with a live camera."""
-        for pid in list(self.last_in_view):
-            if pid not in viewers:
-                del self.last_in_view[pid]
-        for pid, (x, y, heading, pitch) in viewers.items():
-            seen = self.last_in_view.setdefault(pid, {})
+        for x, y, heading, pitch in viewers.values():
             if pitch is not None and abs(pitch) > MAX_PITCH:
                 continue
             for c in self.cells_in_cone(x, y, heading):
-                last = seen.get(c)
-                if last is None or now - last > REARM_MS:
-                    self.counts[c] += 1
-                seen[c] = now
+                self.looked[c] = True
 
     def snapshot(self) -> dict:
-        looked = sum(1 for c in self.counts if c)
         return {
             "cols": self.cols, "rows": self.rows, "cell": self.cell, "x0": self.x0,
-            "cells": "".join(str(min(c, 9)) for c in self.counts),
-            "searched": looked / len(self.counts),
+            "cells": "".join("1" if seen else "0" for seen in self.looked),
+            "searched": sum(self.looked) / len(self.looked),
         }

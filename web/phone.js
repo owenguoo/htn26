@@ -19,7 +19,8 @@ const state = {
   calYaw: store.get('swarm.calYaw') === null ? null : Number(store.get('swarm.calYaw')),
   index: null, color: '#4cc9f0',
   ws: null, connected: false, retry: 0,
-  ori: null, yaw: null, pitch: null,
+  ori: null, yaw: null, pitch: null, absYaw: null,
+  guide: null,  // current search assignment from the planner
   gps: null, gpsError: null,
   seq: 0, sent: 0, skipped: 0,
   room: null, stream: null,
@@ -78,6 +79,7 @@ async function startLive() {
   }
 
   window.addEventListener('deviceorientation', onOrientation);
+  window.addEventListener('deviceorientationabsolute', onAbsoluteOrientation); // Android: north-referenced
   keepAwake();
   state.room = await loadRoom();
   setupSeatMap();
@@ -232,6 +234,18 @@ function onOrientation(e) {
   state.pitch = pitch;
 }
 
+function onAbsoluteOrientation(e) {
+  if (e.alpha === null || e.beta === null || e.gamma === null) return;
+  state.absYaw = cameraYawPitch(e.alpha, e.beta, e.gamma).yaw;
+}
+
+// Compass bearing the camera faces (0 = north), or null when the device has no compass.
+function absoluteBearing() {
+  if (state.absYaw !== null) return state.absYaw;
+  const c = state.ori?.compass;
+  return typeof c === 'number' ? c : null;
+}
+
 function currentHeading() {
   if (state.yaw === null) return null;
   return (state.yaw - (state.calYaw ?? 0) + 360) % 360;
@@ -341,6 +355,14 @@ function hexA(hex, a) {
 // ---------------------------------------------------------------- commands
 let flashTimer = null;
 function onCommand(msg) {
+  if (msg.cmd === 'guide') {
+    if (msg.clear) { state.guide = null; return; }
+    const h = currentHeading();
+    if (h === null) return;
+    // store the target as a heading so the marker tracks turns between updates
+    state.guide = { sector: msg.sector, target: (h + msg.delta + 360) % 360, t: Date.now() };
+    return;
+  }
   if (msg.cmd === 'flash') {
     const el = $('#flash');
     el.style.background = msg.color || state.color;
@@ -351,9 +373,114 @@ function onCommand(msg) {
   }
 }
 
+// ---------------------------------------------------------------- compass tape
+const CARDINALS = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
+const SPAN = 120; // degrees visible across the tape
+
+function signedDiff(a, b) { return ((a - b + 540) % 360) - 180; }
+
+function guideOffset() {
+  const g = state.guide;
+  const h = currentHeading();
+  if (!g || h === null || Date.now() - g.t > 3000) return null;
+  return signedDiff(g.target, h);
+}
+
+function drawCompass() {
+  const c = $('#compass');
+  const w = c.clientWidth, h = c.clientHeight;
+  if (!w) return;
+  const dpr = window.devicePixelRatio || 1;
+  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const rel = currentHeading();
+  const abs = absoluteBearing();
+  const center = abs ?? rel;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if (center === null) {
+    ctx.fillStyle = '#8b93b0';
+    ctx.font = '600 13px system-ui';
+    ctx.fillText('No compass data', w / 2, h / 2);
+    return;
+  }
+  const ppd = w / SPAN;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip();
+
+  // ticks and labels
+  for (let d = Math.ceil((center - SPAN / 2) / 5) * 5; d <= center + SPAN / 2; d += 5) {
+    const x = w / 2 + (d - center) * ppd;
+    const dd = ((d % 360) + 360) % 360;
+    const major = dd % 15 === 0;
+    ctx.strokeStyle = major ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = major ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(x, h - (major ? 14 : 8)); ctx.lineTo(x, h - 2); ctx.stroke();
+    if (major) {
+      const card = abs !== null ? CARDINALS[dd] : null;
+      ctx.fillStyle = card ? '#ffffff' : 'rgba(255,255,255,0.55)';
+      ctx.font = card ? '800 14px system-ui' : '600 11px system-ui';
+      ctx.fillText(card ?? String(dd), x, h - 24);
+    }
+  }
+
+  // markers are placed by heading offset, so they work with or without a compass
+  const markers = [];
+  if (rel !== null && state.calYaw !== null) markers.push({ off: signedDiff(0, rel), label: 'STAGE', color: '#4cc9f0' });
+  const g = guideOffset();
+  if (g !== null) markers.push({ off: g, label: state.guide.sector, color: Math.abs(g) < 16 ? '#7ae582' : '#ffb703', big: true });
+  for (const m of markers) {
+    const edge = Math.abs(m.off) > SPAN / 2 - 8;
+    const x = edge ? (m.off > 0 ? w - 22 : 22) : w / 2 + m.off * ppd;
+    const label = edge ? (m.off > 0 ? `${m.label} ▶` : `◀ ${m.label}`) : m.label;
+    ctx.font = `800 ${m.big ? 13 : 11}px system-ui`;
+    const tw = ctx.measureText(label).width + 12;
+    const bx = Math.max(2, Math.min(w - tw - 2, x - tw / 2));
+    ctx.fillStyle = m.color;
+    ctx.beginPath(); ctx.roundRect(bx, 3, tw, 18, 9); ctx.fill();
+    ctx.fillStyle = '#05070f';
+    ctx.fillText(label, bx + tw / 2, 12.5);
+    if (!edge) { ctx.fillStyle = m.color; ctx.fillRect(x - 1, 21, 2, h - 21); }
+  }
+  ctx.restore();
+
+  // center caret and readout
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.moveTo(w / 2 - 6, h); ctx.lineTo(w / 2 + 6, h); ctx.lineTo(w / 2, h - 8); ctx.fill();
+  if (!markers.some((m) => Math.abs(m.off) * ppd < 40)) {
+    const text = abs !== null
+      ? `${Math.round(abs) % 360}° ${CARDINALS[Math.round(abs / 45) * 45 % 360]}`
+      : `${Math.round(rel)}°`;
+    ctx.font = '800 13px ui-monospace, monospace';
+    const tw = ctx.measureText(text).width + 14;
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.beginPath(); ctx.roundRect(w / 2 - tw / 2, 3, tw, 18, 9); ctx.fill();
+    ctx.fillStyle = '#05070f';
+    ctx.fillText(text, w / 2, 12.5);
+  }
+}
+
+function updateGuideBanner() {
+  const el = $('#guide');
+  const off = guideOffset();
+  if (off === null) { el.classList.remove('on'); return; }
+  const tilted = state.pitch !== null && Math.abs(state.pitch) > 65;
+  const onTarget = Math.abs(off) < 16;
+  el.classList.add('on');
+  el.classList.toggle('ok', onTarget && !tilted);
+  el.textContent = tilted ? 'Hold your phone up'
+    : onTarget ? `Scanning ${state.guide.sector}…`
+    : off > 0 ? `Turn right ${Math.round(off)}° →` : `← Turn left ${Math.round(-off)}°`;
+}
+
 // ---------------------------------------------------------------- ui loop
 let lastUi = 0;
 function tickUi(t) {
+  drawCompass();
+  updateGuideBanner();
   if (t - lastUi > 150) {
     lastUi = t;
     $('#connDot').classList.toggle('ok', state.connected);

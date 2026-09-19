@@ -1,7 +1,8 @@
 """Fake phones for load-testing the hub and rehearsing without an audience.
 
 Run:  uv run python -m swarm.sim --n 30
-Each fake phone sits at a random seat, sweeps its heading back and forth, streams
+Each fake phone sits at a random seat, sweeps its heading back and forth (or turns
+toward the sector the planner assigned it), streams
 generated JPEG frames, answers clock-sync pings, and turns its frames the flash
 color when the dashboard flashes it.
 """
@@ -52,8 +53,23 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
     amp, period, phase = rng.uniform(15, 55), rng.uniform(6, 14), rng.uniform(0, math.tau)
     bg = rng.choice(BG)
 
+    # When the planner assigns a sector, turn toward it and scan around it;
+    # otherwise sweep back and forth on our own.
+    aim = {"heading": base % 360, "target": None, "until": 0.0}
+
     def heading() -> float:
-        return (base + amp * math.sin(time.time() * math.tau / period + phase)) % 360
+        return aim["heading"]
+
+    def step_heading() -> None:
+        t = time.time()
+        if aim["target"] is not None and t < aim["until"]:
+            goal = aim["target"] + 12 * math.sin(t * 2.5 + phase)
+            diff = (goal - aim["heading"] + 540) % 360 - 180
+            aim["heading"] = (aim["heading"] + max(-9.0, min(9.0, diff))) % 360
+        else:
+            goal = base + amp * math.sin(t * math.tau / period + phase)
+            diff = (goal - aim["heading"] + 540) % 360 - 180
+            aim["heading"] = (aim["heading"] + max(-6.0, min(6.0, diff))) % 360
 
     while True:
         try:
@@ -69,12 +85,19 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
                         msg = json.loads(raw)
                         if msg.get("type") == "ping":
                             await ws.send(json.dumps({"type": "pong", "ts": msg["ts"], "tp": now_ms()}))
+                        elif msg.get("type") == "command" and msg.get("cmd") == "guide":
+                            if msg.get("clear"):
+                                aim["target"] = None
+                            else:
+                                aim["target"] = (aim["heading"] + msg["delta"]) % 360
+                                aim["until"] = time.time() + 3
                         elif msg.get("type") == "command" and msg.get("cmd") == "flash":
                             flash["color"] = msg.get("color") or welcome.get("color")
                             flash["until"] = time.time() + msg.get("ttlMs", 1500) / 1000
 
                 async def orient() -> None:
                     while True:
+                        step_heading()
                         await ws.send(json.dumps({"type": "orient", "tCapture": now_ms(),
                                                   "heading": heading(), "pitch": 0, "calibrated": True}))
                         await asyncio.sleep(0.1)

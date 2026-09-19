@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .coverage import Coverage
+from .planner import Planner
 from .protocol import now_ms, pack, unpack
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -114,6 +115,7 @@ class Hub:
         self.next_index = 1
         self.join_url = ""
         self.coverage = Coverage(ROOM)
+        self.planner = Planner(ROOM, self.coverage)
 
     # ---- phone lifecycle -------------------------------------------------
     async def register(self, hello: dict, ws: WebSocket) -> Phone:
@@ -240,7 +242,11 @@ class Hub:
                 live = p.connected and p.frame is not None and now - p.frame_at <= STALE_MS
                 if live and pose and pose["heading"] is not None:
                     viewers[p.id] = (pose["x"], pose["y"], pose["heading"], p.pitch)
-            self.coverage.update(viewers, now)
+            self.coverage.update(viewers)
+            cmds = self.planner.tick(viewers, now)
+            if cmds:
+                await asyncio.gather(*(self.phones[pid].send({"type": "command", **cmd})
+                                       for pid, cmd in cmds if pid in self.phones))
             await asyncio.sleep(1 / hz)
 
     # ---- outbound ----------------------------------------------------------
@@ -248,7 +254,7 @@ class Hub:
         now = now_ms()
         phones = sorted(self.phones.values(), key=lambda p: p.index)
         return {"type": "state", "t": now, "phones": [p.summary(now) for p in phones],
-                "coverage": self.coverage.snapshot()}
+                "coverage": self.coverage.snapshot(), "planner": self.planner.snapshot()}
 
     async def command(self, target: str, cmd: dict) -> None:
         phones = self.phones.values() if target == "all" else [self.phones.get(target)]
@@ -364,6 +370,9 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                 await hub.command(str(msg.get("target", "all")), msg.get("cmd") or {})
             elif msg.get("type") == "reset_coverage":
                 hub.coverage.reset()
+                hub.planner.reset()
+            elif msg.get("type") == "planner":
+                hub.planner.enabled = bool(msg.get("enabled"))
     except (WebSocketDisconnect, RuntimeError, ValueError):
         pass
     finally:
