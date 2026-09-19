@@ -212,7 +212,7 @@ def trim_archive(frames, protected):
     return [k | {'links': {i: v for i, v in k.get('links', {}).items() if i in keep}} for k in frames]
 
 
-def working_batch(frames, previous=(), pending=(), limit=MAX_BATCH):
+def working_batch(frames, previous=(), pending=(), limit=MAX_BATCH, stable=False):
     """Connected batch: shared references, fair new views, then older coverage.
 
 Adding shortest overlap paths keeps cross-phone bridge views in the batch.
@@ -241,14 +241,16 @@ Adding shortest overlap paths keeps cross-phone bridge views in the batch.
 
     refs = [i for i in previous if i in by_id]
     # Spread reference choices across the preceding batch rather than only its start.
-    for i in np.linspace(0, len(refs) - 1, min(6, len(refs)), dtype=int):
-        add_path(refs[i], min(12, limit))
+    reference_budget = max(6, limit - 4) if stable else min(12, limit)
+    reference_count = reference_budget if stable else 6
+    for i in np.linspace(0, len(refs) - 1, min(reference_count, len(refs)), dtype=int):
+        add_path(refs[i], reference_budget)
     pending = set(pending)
     new = [k for k in reversed(frames) if k['id'] in pending]
     while new:
         counts = Counter(by_id[i]['pid'] for i in chosen)
         k = min(new, key=lambda k: counts[k['pid']])
-        add_path(k['id'], max(len(chosen), limit - 8))
+        add_path(k['id'], limit if stable and len(refs) >= limit else max(len(chosen), limit - 8))
         new.remove(k)
     # Alternate phone coverage; prefer candidates weakly connected to selected
     # views, which are more likely to reveal a different part of the scene.

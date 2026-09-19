@@ -22,6 +22,16 @@ class JointMapTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ids & {f'k{i}' for i in range(32,40)})
         self.assertEqual(reachable(graph(batch), batch[0]['id']), ids)
 
+    def test_joint_updates_keep_twenty_shared_views(self):
+        frames = [{'id':f'k{i}', 'pid':'p', 't':i, 'quality':100,
+                   'links':{f'k{j}':.5 for j in range(i)}} for i in range(32)]
+        old = [f'k{i}' for i in range(24)]
+        batch = working_batch(frames, old, {f'k{i}' for i in range(24,32)}, 24, stable=True)
+        ids = {k['id'] for k in batch}
+        self.assertEqual(len(ids), 24)
+        self.assertGreaterEqual(len(ids & set(old)), 20)
+        self.assertTrue(ids - set(old))
+
     async def test_replaces_map_preserves_files_and_holds_failed_update(self):
         with tempfile.TemporaryDirectory() as directory:
             hub = Hub(); hub.phase = 'search'

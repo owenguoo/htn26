@@ -3,8 +3,11 @@
 The hub defaults to `MAP_MODE=joint`, with `MAP_JOINT_FRAMES=24` (bounded to 12–32).
 `MAP_MODE=sections` preserves the previous incremental section experiment.
 
-The existing connected-view selector keeps shared references, new views from
-participating phones, and older coverage within the batch budget. Every accepted
+The connected-view selector keeps shared references, new views from
+participating phones, and older coverage within the batch budget. Once the bank
+is full, it targets 20 retained views and up to four new views per 24-view update;
+shortest overlap paths may consume some of those slots. This avoids replacing
+most of the visual evidence at once. Every accepted
 update replaces the displayed surface with one jointly reconstructed mesh.
 Shared camera positions from the preceding batch align the replacement into the
 existing map frame; inconsistent updates leave the previous result visible.

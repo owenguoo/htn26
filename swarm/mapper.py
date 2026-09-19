@@ -306,7 +306,7 @@ class Mapper:
             self.running = False
 
     async def _rebuild(self) -> None:
-        frames = (working_batch(self.keyframes, self.previous_batch, self.pending, self.joint_frames)
+        frames = (working_batch(self.keyframes, self.previous_batch, self.pending, self.joint_frames, stable=True)
                   if self.mode == "joint" else section_batch(self.keyframes, self.placed, self.pending))
         if self.mode != "joint" and len(self.sections) >= MAX_SECTIONS:
             self.error = "Section limit reached; current coverage preserved. Start a new scan for another area."
