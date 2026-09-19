@@ -10,4 +10,11 @@ dependencies = [
     "pillow>=10.1",
     "segno>=1.6",
     "openai>=3.16.2",
+    "pydantic>=2",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
 ]

@@ -212,7 +212,7 @@ function sendCapture() {
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const header = {
-    type: 'frame', seq: state.seq++, tCapture: Date.now(),
+    type: 'frame', seq: state.seq++, tCapture: Date.now(), width: cap.width, height: cap.height,
     heading: currentHeading(), pitch: state.pitch, calibrated: state.calYaw !== null,
     orientation: state.ori,
   };

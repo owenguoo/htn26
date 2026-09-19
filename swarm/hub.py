@@ -17,12 +17,15 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from PIL import Image, UnidentifiedImageError
+
 import segno
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .detection import FrameSnapshot, SearchState
 from .coverage import Coverage
 from .planner import Planner
 from .target import Target
@@ -75,6 +78,10 @@ class Phone:
     searched_cells: int = 0          # coverage cells this phone was first to look at
     tilted_since: float | None = None  # when it started pointing at the floor/ceiling
     # latest frame (latest wins, never queued)
+    stream_id: str = ""
+    frame_pose: dict | None = None
+    frame_width: int = 0
+    frame_height: int = 0
     frame: bytes | None = None
     frame_seq: int = -1
     frame_t: float = 0              # capture time, server clock
@@ -130,6 +137,7 @@ class Phone:
 
 class Hub:
     def __init__(self) -> None:
+        self.search = SearchState()
         self.phones: dict[str, Phone] = {}
         self.next_index = 1
         self.join_url = ""
@@ -166,6 +174,17 @@ class Hub:
                 await old.close()
             except Exception:
                 pass
+        phone.stream_id = str(uuid.uuid4())
+        phone.frame = None
+        phone.frame_seq = -1
+        phone.frame_t = phone.frame_at = 0
+        phone.frame_pose = None
+        phone.frame_width = phone.frame_height = 0
+        phone.clock_offset = None
+        phone.best_rtt = math.inf
+        phone.latency_ms = None
+        phone.arrivals.clear()
+        self.search.connect(phone.id, phone.stream_id)
         phone.ws = ws
         phone.connected = True
         phone.last_seen = now_ms()
@@ -180,6 +199,7 @@ class Hub:
         if phone.ws is ws:
             phone.ws = None
             phone.connected = False
+            self.search.disconnect(phone.id, phone.stream_id)
             phone.last_seen = now_ms()
 
     async def reaper(self) -> None:
@@ -196,6 +216,28 @@ class Hub:
             header, jpeg = unpack(buf)
         except Exception:
             return
+        try:
+            seq = header.get("seq", phone.frame_seq + 1)
+            if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq <= 2**53 - 1 or seq <= phone.frame_seq:
+                return
+            for key in ("tCapture", "heading", "pitch"):
+                if header.get(key) is not None and (isinstance(header[key], bool) or not isinstance(header[key], (int, float))
+                                                    or not math.isfinite(header[key])):
+                    return
+            # Reading image headers avoids pixel decoding on the hub event loop.
+            with Image.open(io.BytesIO(jpeg)) as image:
+                if image.format != "JPEG":
+                    return
+                width, height = image.size
+                if image.getexif().get(274) in (5, 6, 7, 8):
+                    width, height = height, width
+            if not 0 < width <= 16384 or not 0 < height <= 16384:
+                return
+            if any(key in header and (type(header[key]) is not int or header[key] != value)
+                   for key, value in (("width", width), ("height", height))):
+                return
+        except (ValueError, TypeError, OSError, UnidentifiedImageError, Image.DecompressionBombError):
+            return
         now = now_ms()
         phone.arrivals.append(now)
         t_phone = header.get("tCapture")
@@ -206,10 +248,17 @@ class Hub:
         else:
             phone.frame_t = now
         self._apply_orientation(phone, header)
+        phone.frame_pose = phone.pose(now)
+        if phone.frame_pose is not None and header.get("heading") is not None:
+            phone.frame_pose["heading"] = phone.heading
+        phone.frame_width, phone.frame_height = width, height
         phone.frame = jpeg
-        phone.frame_seq = int(header.get("seq", phone.frame_seq + 1))
+        phone.frame_seq = seq
         phone.frame_at = now
         phone.frames_total += 1
+        self.search.expire(now)
+        self.search.record_frame(FrameSnapshot(phone.id, phone.stream_id, seq, phone.frame_t,
+                                               width, height, phone.frame_pose))
 
     def on_message(self, phone: Phone, msg: dict) -> None:
         kind = msg.get("type")
@@ -502,6 +551,7 @@ class Hub:
     # ---- outbound ----------------------------------------------------------
     def state(self) -> dict:
         now = now_ms()
+        self.search.expire(now)
         phones = sorted(self.phones.values(), key=lambda p: p.index)
         cell_m2 = self.coverage.cell ** 2
         return {"type": "state", "t": now,
@@ -549,7 +599,7 @@ class FrameSubscriber:
         self.focus: str | None = None   # phone shown large in the console: gets frames faster
         self.min_interval = 1000 / max(fps, 0.1)
         self.with_state = with_state
-        self.sent_seq: dict[str, int] = {}
+        self.sent_seq: dict[str, tuple[str, int]] = {}
         self.sent_at: dict[str, float] = {}
         self.lock = asyncio.Lock()
 
@@ -565,16 +615,19 @@ class FrameSubscriber:
                 last_state = now
                 await self.send_json(hub.state())
             for p in list(hub.phones.values()):
-                if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq or (self.skip_hidden and p.hidden):
+                if p.frame is None or self.sent_seq.get(p.id) == (p.stream_id, p.frame_seq) or (self.skip_hidden and p.hidden):
                     continue
                 interval = FOCUS_INTERVAL_MS if p.id == self.focus else self.min_interval
                 if now - self.sent_at.get(p.id, 0) < interval:
                     continue
-                self.sent_seq[p.id] = p.frame_seq
+                self.sent_seq[p.id] = (p.stream_id, p.frame_seq)
                 self.sent_at[p.id] = now
-                header = {"phoneId": p.id, "seq": p.frame_seq, "t": p.frame_t, "pose": p.pose(now)}
+                header = {"phoneId": p.id, "seq": p.frame_seq, "t": p.frame_t, "pose": p.frame_pose,
+                          "streamId": p.stream_id, "width": p.frame_width, "height": p.frame_height,
+                          "searchRevision": hub.search.revision}
+                packet = pack(header, p.frame)
                 async with self.lock:
-                    await self.ws.send_bytes(pack(header, p.frame))
+                    await self.ws.send_bytes(packet)
             await asyncio.sleep(0.03)
 
 
@@ -587,13 +640,15 @@ async def ws_phone(ws: WebSocket) -> None:
         hello = await ws.receive_json()
         phone = await hub.register(hello, ws)
         await phone.send({
-            "type": "welcome", "phoneId": phone.id, "index": phone.index,
+            "type": "welcome", "phoneId": phone.id, "index": phone.index, "streamId": phone.stream_id,
             "color": phone.color, "room": ROOM, "phase": hub.phase,
         })
         pinger = asyncio.create_task(_ping_loop(phone, ws))
         while True:
             msg = await ws.receive()
             if msg["type"] == "websocket.disconnect":
+                break
+            if phone.ws is not ws:
                 break
             phone.last_seen = now_ms()
             if msg.get("bytes") is not None:

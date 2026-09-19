@@ -19,5 +19,12 @@ def pack(header: dict, payload: bytes) -> bytes:
 
 
 def unpack(buf: bytes) -> tuple[dict, bytes]:
+    if len(buf) < 4:
+        raise ValueError("truncated frame prefix")
     (n,) = struct.unpack_from(">I", buf, 0)
-    return json.loads(buf[4 : 4 + n]), buf[4 + n :]
+    if n > 65536 or n > len(buf) - 4:
+        raise ValueError("invalid frame header length")
+    header = json.loads(buf[4 : 4 + n])
+    if not isinstance(header, dict):
+        raise ValueError("frame header must be an object")
+    return header, buf[4 + n :]
