@@ -84,24 +84,58 @@ public struct Venue: Sendable, Codable, Equatable {
     public var id: String
     public var name: String
     public var note: String?
-    /// Where the orchestrator is, e.g. `ws://192.168.1.23:8765/device`.
+    /// Where the hub is, e.g. `http://192.168.1.23:8000/`. Anything `HubURL.derive`
+    /// accepts. Files written before the hub protocol call it `orchestratorURL`.
     ///
     /// It lives here rather than in a build setting for the same reason the
     /// marker positions do: on the day, the address is whatever the laptop's
     /// LAN address turns out to be, and finding that out must not mean a
     /// rebuild. Absent falls back to the app's stored preference.
-    public var orchestratorURL: String?
+    public var hubURL: String?
+    /// Where the venue frame sits in the hub's room frame. Absent means the
+    /// primary marker is on the stage wall at the stage centre line, which is
+    /// how CLAUDE.md defines the venue frame — see `RoomAlignment.identity`.
+    public var room: RoomAlignment?
     public var markers: [VenueMarker]
     public var thresholds: Thresholds
 
-    public init(id: String, name: String, note: String? = nil, orchestratorURL: String? = nil,
+    public init(id: String, name: String, note: String? = nil, hubURL: String? = nil,
+                room: RoomAlignment? = nil,
                 markers: [VenueMarker], thresholds: Thresholds = Thresholds()) {
         self.id = id
         self.name = name
         self.note = note
-        self.orchestratorURL = orchestratorURL
+        self.hubURL = hubURL
+        self.room = room
         self.markers = markers
         self.thresholds = thresholds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, note, hubURL, orchestratorURL, room, markers, thresholds
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        note = try c.decodeIfPresent(String.self, forKey: .note)
+        hubURL = try c.decodeIfPresent(String.self, forKey: .hubURL)
+            ?? c.decodeIfPresent(String.self, forKey: .orchestratorURL)
+        room = try c.decodeIfPresent(RoomAlignment.self, forKey: .room)
+        markers = try c.decode([VenueMarker].self, forKey: .markers)
+        thresholds = try c.decodeIfPresent(Thresholds.self, forKey: .thresholds) ?? Thresholds()
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encodeIfPresent(note, forKey: .note)
+        try c.encodeIfPresent(hubURL, forKey: .hubURL)
+        try c.encodeIfPresent(room, forKey: .room)
+        try c.encode(markers, forKey: .markers)
+        try c.encode(thresholds, forKey: .thresholds)
     }
 
     public func marker(id: String) -> VenueMarker? {

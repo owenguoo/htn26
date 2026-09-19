@@ -37,7 +37,7 @@ final class LaunchState {
             // The venue file wins: on the day the orchestrator's address is
             // whatever the laptop's turns out to be, and that must not mean a
             // rebuild.
-            let orchestrator = venue.orchestratorURL
+            let orchestrator = venue.hubURL
                 .flatMap { URL(string: $0) }
                 .flatMap { $0.scheme != nil ? $0 : nil }
                 ?? fallbackOrchestrator

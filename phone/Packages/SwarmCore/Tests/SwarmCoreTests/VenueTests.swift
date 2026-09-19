@@ -137,4 +137,18 @@ struct VenueTests {
                 "a correction can never be applied: the step limit exceeds the rejection threshold")
         #expect(venue.thresholds.maxStepDegrees < venue.thresholds.rejectRotationDegrees)
     }
+
+    @Test func hubURLAcceptsTheLegacyKeyAndRoomIsOptional() throws {
+        let legacy = Data("""
+        {"id":"v","name":"V","orchestratorURL":"http://10.0.0.5:8000/",
+         "markers":[{"id":"p","physicalWidth":0.2,"position":[0,1,0],"quaternion":[0,0,0,1],"isPrimary":true}]}
+        """.utf8)
+        let venue = try Venue.load(from: legacy)
+        #expect(venue.hubURL == "http://10.0.0.5:8000/")
+        #expect(venue.room == nil)
+
+        let shipped = try Venue.load(from: Fixtures.url("venue.json"))
+        #expect(shipped.room == RoomAlignment.identity)
+        #expect(HubURL.derive(try #require(shipped.hubURL))?.path == "/ws/phone")
+    }
 }

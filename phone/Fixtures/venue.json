@@ -2,7 +2,12 @@
   "id": "hth-main-hall",
   "name": "Hack the North \u2014 main hall (placeholder)",
   "note": "Loaded at runtime, never compiled in. Replace every number here with tape-measured values on the day; changing venue must need no rebuild.",
-  "orchestratorURL": "ws://10.120.4.246:8765/device",
+  "hubURL": "http://10.120.4.246:8000/",
+  "room": {
+    "originX": 0.0,
+    "originY": 0.0,
+    "yawDegrees": 0.0
+  },
   "markers": [
     {
       "id": "marker-primary",
