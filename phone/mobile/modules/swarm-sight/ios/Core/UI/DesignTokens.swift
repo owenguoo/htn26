@@ -29,23 +29,23 @@ import SwiftUI
 
 // MARK: - Colour
 
+/// There are deliberately **no** `ssLabel` / `ssBackground` / `ssSeparator`
+/// tokens here, though the obvious design system has them.
+///
+/// Adaptive *text* in SwiftUI is `.primary` / `.secondary` — that is already the
+/// native spelling of `label` / `secondaryLabel`, and the phase card and seat
+/// picker use it. Adaptive *surfaces* here are materials, not flat fills,
+/// because everything in this layer floats over a camera. And the grouped-form
+/// colours (`systemGroupedBackground`, `separator`, row fills) belong to the
+/// join and settings screens, which are `@expo/ui` and take them from
+/// `mobile/src/theme/tokens.ts`. A Swift token with no Swift caller is worse
+/// than no token: it reads as permission to put `Color(.label)` on the HUD.
 extension ShapeStyle where Self == Color {
-    // Surfaces.
-    static var ssBackground: Color { Color(.systemBackground) }
-    static var ssGroupedBackground: Color { Color(.systemGroupedBackground) }
-    static var ssRow: Color { Color(.secondarySystemGroupedBackground) }
-    static var ssFill: Color { Color(.secondarySystemFill) }
-
-    // Text.
-    static var ssLabel: Color { Color(.label) }
-    static var ssLabelSecondary: Color { Color(.secondaryLabel) }
-    static var ssLabelTertiary: Color { Color(.tertiaryLabel) }
-
-    // Lines.
-    static var ssSeparator: Color { Color(.separator) }
-
     /// Meaning. These carry the `OperatorStatus.level` mapping, so a level and a
     /// colour cannot drift apart: `.ok` is `ssOK` wherever it is drawn.
+    ///
+    /// They are system colours, so inside `.cameraChrome()` they resolve to the
+    /// brighter dark-mode variants — which is what you want over video.
     static var ssAccent: Color { Color(.tintColor) }
     static var ssOK: Color { Color(.systemGreen) }
     static var ssAttention: Color { Color(.systemOrange) }
@@ -60,8 +60,8 @@ extension ShapeStyle where Self == Color {
     /// Affordances that should be present but not loud: the disclosure chevron.
     static var hudInkTertiary: Color { .white.opacity(0.7) }
     /// Behind the camera before its first frame, and behind the whole hosted
-    /// view. Not `ssBackground`: a camera that has not started is black, and a
-    /// white flash on launch reads as a crash.
+    /// view. Black in both themes rather than a system background: a camera
+    /// that has not started is black, and a white flash reads as a crash.
     static var hudVoid: Color { .black }
 }
 
@@ -101,10 +101,8 @@ enum Space {
 }
 
 enum Radius {
-    /// The mini-map plate.
+    /// The mini-map plate and the seat plan.
     static let plate: CGFloat = 8
-    /// Small pressable chips.
-    static let control: CGFloat = 10
     /// The status pill when it has a hint and is no longer a capsule.
     static let card: CGFloat = 14
     /// Cards that cover the camera: the phase card, the seat picker.
