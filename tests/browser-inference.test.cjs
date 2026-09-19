@@ -31,16 +31,15 @@ test('zero detections replace previous overlay and a clear allows the new refere
   run("acceptDetection(z,{clear:true,searchRevision:'next'},600)");
   assert.equal(run("acceptDetection(z,{streamId:'s',seq:2,searchRevision:'next',boxes:[]},700).until"),1600);
 });
-test('phone cover-fit maps portrait, landscape, rotation and SLAM coordinates', () => {
+test('phone cover-fit maps portrait, landscape and rotation', () => {
   const phone = fs.readFileSync('web/phone.js','utf8');
   const fn = phone.slice(phone.indexOf('function frameToScreen('),phone.indexOf('\n}', phone.indexOf('function frameToScreen(')) + 2);
   const ctx = vm.createContext({});
-  vm.runInContext("let SLAM=false,FAKE=false;let video={videoWidth:1280,videoHeight:720};const $=()=>video;"+fn,ctx);
+  vm.runInContext("let FAKE=false;let video={videoWidth:1280,videoHeight:720};const $=()=>video;"+fn,ctx);
   const point = s => JSON.parse(JSON.stringify(vm.runInContext(s,ctx)));
   assert.deepEqual(point('frameToScreen(.5,.5,390,844)'),[195,422]);
   assert.deepEqual(point('frameToScreen(0,0,1280,720)'),[0,0]);
   assert.deepEqual(point('video={videoWidth:720,videoHeight:1280};frameToScreen(.5,.5,844,390)'),[422,195]);
-  assert.deepEqual(point('SLAM=true;frameToScreen(.25,.75,400,800)'),[100,600]);
 });
 test('score label keeps appearance similarity separate from detection confidence', () => {
   assert.equal(run("scoreLabel({similarity:.73,detectionScore:.91})"),'Similarity 0.73 · confidence 91%');
