@@ -10,23 +10,22 @@ import SwarmCore
 /// Everything is scaled by `k = width / 390`, exactly as the console does, so
 /// the proportions match whatever size either side happens to be.
 ///
-/// **These colours are protocol, not theme.** They are `web/console.js`'s
-/// literals, and the design tokens in `DesignTokens.swift` deliberately do not
-/// reach them: "fixing" one to a system colour would make the phone draw
-/// something the console cannot. They live here, beside the drawing code, so
-/// the two files can be read side by side.
+/// Detection / banner / AR chip colours stay the console's literals so both
+/// renderers name the same alert the same way. The compass *tape* on the phone
+/// is light frosted instead: the Simulator room is light, and a dark slab on
+/// top of it was just hardcoded night mode.
 enum HUDStyle {
-    /// console.js `rgba(12,17,32,0.82)`.
-    static let tapeBackground = Color(.sRGB, red: 12 / 255, green: 17 / 255, blue: 32 / 255, opacity: 0.82)
+    /// Light frosted bar — readable over the rehearsal room and a bright feed.
+    static let tapeBackground = Color.white.opacity(0.88)
     static let detection = Color(hex: "#ff5d73") ?? .red
     /// The ink on a compass marker chip and on the toast.
     static let deepInk = Color(hex: "#05070f") ?? .black
-    /// console.js `#eef2ff` — the "looking for" row.
-    static let lookingForInk = Color(hex: "#eef2ff") ?? .white
+    /// "Looking for" text on the light tape plate.
+    static let lookingForInk = Color.black.opacity(0.72)
     /// console.js `rgba(255,255,255,0.95)`.
     static let toastBackground = Color.white.opacity(0.95)
-    /// Ticks, degree labels and the centre caret, all `rgba(255,255,255,…)`.
-    static let tapeInk = Color.white
+    /// Ticks, degree labels, STAGE, and the centre caret.
+    static let tapeInk = Color.black.opacity(0.78)
     static let tapeSpanDegrees = 120.0
 
     /// `TONES` in console.js: background, foreground.
@@ -60,38 +59,72 @@ enum HUDStyle {
     }
 }
 
-/// A glance-speed indication for a local loud sound. The cue itself lives in
-/// `HubHUDMirror`, beside the compass marker and banner, so this is only a
-/// renderer of the same HUD contract sent to the console.
+/// A glance-speed indication for a local loud sound or an off-screen find.
+/// The cue itself lives in `HubHUDMirror`, beside the compass marker and banner,
+/// so this is only a renderer of the same HUD contract sent to the console.
 struct HUDSoundEdgeView: View {
-    let edge: HubHUDMirror.SoundEdge
+    let edge: HubHUDMirror.SoundEdge?
+
+    /// Fades the band in when the target leaves the frame, rather than popping.
+    @State private var visible = false
+    /// Soft pulse while the band is up.
+    @State private var pulseDim = false
 
     var body: some View {
         GeometryReader { geometry in
-            let color = Color(hex: edge.color) ?? .red
+            let color = Color(hex: edge?.color) ?? .red
+            // Narrower than the old 24% band — a hint at the bezel, not a wash.
+            let width = min(52, geometry.size.width * 0.14)
+            let height = min(48, geometry.size.height * 0.08)
             ZStack {
-                switch edge.side {
-                case "left":
-                    LinearGradient(colors: [color.opacity(0.95), color.opacity(0)],
-                                   startPoint: .leading, endPoint: .trailing)
-                        .frame(width: min(86, geometry.size.width * 0.24))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                case "right":
-                    LinearGradient(colors: [color.opacity(0), color.opacity(0.95)],
-                                   startPoint: .leading, endPoint: .trailing)
-                        .frame(width: min(86, geometry.size.width * 0.24))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                default:
-                    LinearGradient(colors: [color.opacity(0.9), color.opacity(0)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: min(72, geometry.size.height * 0.12))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                if let edge {
+                    switch edge.side {
+                    case "left":
+                        LinearGradient(
+                            colors: [color.opacity(0.9), color.opacity(0.28), color.opacity(0)],
+                            startPoint: .leading, endPoint: .trailing)
+                            .frame(width: width)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    case "right":
+                        LinearGradient(
+                            colors: [color.opacity(0), color.opacity(0.28), color.opacity(0.9)],
+                            startPoint: .leading, endPoint: .trailing)
+                            .frame(width: width)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                    default:
+                        LinearGradient(
+                            colors: [color.opacity(0.85), color.opacity(0.25), color.opacity(0)],
+                            startPoint: .top, endPoint: .bottom)
+                            .frame(height: height)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    }
                 }
             }
         }
+        .opacity(bandOpacity)
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onAppear { sync(to: edge) }
+        .onChange(of: edge?.side) { _, _ in sync(to: edge) }
+        .onChange(of: edge?.color) { _, _ in sync(to: edge) }
+    }
+
+    private var bandOpacity: Double {
+        guard visible, edge != nil else { return 0 }
+        return pulseDim ? 0.48 : 0.95
+    }
+
+    private func sync(to edge: HubHUDMirror.SoundEdge?) {
+        if edge != nil {
+            withAnimation(.easeInOut(duration: 0.5)) { visible = true }
+            pulseDim = false
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                pulseDim = true
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.35)) { visible = false }
+        }
     }
 }
 
@@ -100,13 +133,11 @@ struct HUDSoundEdgeView: View {
 struct HUDStackView: View {
     let hud: HubHUDMirror
 
-    /// Same increments the drawing uses (48/40/30/36 × k), at the phone's k ≈ 1.
-    /// They were 48/44/30/38, which is neither what this comment said nor what
-    /// `web/console.js:383-390` advances by — so the phone reserved 6pt the
-    /// console did not, and the two renderers disagreed about where the stack
-    /// ended.
+    /// Same increments the drawing uses (60/40/30/36 × k), at the phone's k ≈ 1.
+    /// Tape is taller than the console's 40 so the marker chip and degree
+    /// labels are not stacked on top of each other.
     private var contentHeight: CGFloat {
-        let rows: [(Bool, CGFloat)] = [(hud.compass != nil, 48), (hud.banner != nil, 40),
+        let rows: [(Bool, CGFloat)] = [(hud.compass != nil, 60), (hud.banner != nil, 40),
                                        (hud.lookingFor != nil, 30), (hud.toast != nil, 36)]
         return max(1, rows.reduce(0) { $0 + ($1.0 ? $1.1 : 0) })
     }
@@ -117,8 +148,8 @@ struct HUDStackView: View {
             Canvas { context, size in
                 var top: CGFloat = 0
                 if let compass = hud.compass {
-                    drawTape(&context, x0: 0, y0: top, width: size.width, height: 40 * k, compass: compass, k: k)
-                    top += 48 * k
+                    drawTape(&context, x0: 0, y0: top, width: size.width, height: 52 * k, compass: compass, k: k)
+                    top += 60 * k
                 }
                 if let banner = hud.banner {
                     let (background, foreground) = HUDStyle.tone(banner.tone)
@@ -167,8 +198,9 @@ struct HUDStackView: View {
                              lineWidth: major ? 1.5 : 1)
                 if major {
                     // Room degrees, never N/E/S/W: `.gravity` alignment has no true north.
+                    // Sit just above the ticks — leaves a clear gap under the marker chips.
                     layer.draw(Text(String(wrapped)).font(.system(size: 9 * k, weight: .semibold))
-                        .foregroundStyle(HUDStyle.tapeInk.opacity(0.55)), at: CGPoint(x: x, y: y0 + height - 18 * k))
+                        .foregroundStyle(HUDStyle.tapeInk.opacity(0.55)), at: CGPoint(x: x, y: y0 + height - 16 * k))
                 }
                 degree += 5
             }
@@ -186,8 +218,9 @@ struct HUDStackView: View {
                     .foregroundStyle(HUDStyle.deepInk))
                 let textWidth = text.measure(in: CGSize(width: CGFloat.infinity, height: .infinity)).width + 10 * k
                 let boxX = max(x0 + 2, min(x0 + width - textWidth - 2, x - textWidth / 2))
-                let box = CGRect(x: boxX, y: y0 + 2 * k, width: textWidth, height: 14 * k)
-                layer.fill(Path(roundedRect: box, cornerRadius: 7 * k), with: .color(Color(hex: marker.color) ?? .white))
+                // Top of the tape, clear of the degree row which sits near the ticks.
+                let box = CGRect(x: boxX, y: y0 + 4 * k, width: textWidth, height: 15 * k)
+                layer.fill(Path(roundedRect: box, cornerRadius: 7.5 * k), with: .color(Color(hex: marker.color) ?? .white))
                 layer.draw(text, at: CGPoint(x: box.midX, y: box.midY))
             }
         }
@@ -220,6 +253,9 @@ struct HUDStackView: View {
 struct HUDFrameLayerView: View {
     let hud: HubHUDMirror
     let captureSize: CGSize
+    /// Drive mode draws candidates in the backdrop with `RoomCamera`; camera-
+    /// frame AR diamonds would disagree with that picture.
+    var showAR: Bool = true
 
     var body: some View {
         GeometryReader { geometry in
@@ -241,6 +277,7 @@ struct HUDFrameLayerView: View {
                     context.fill(Path(tag), with: .color(HUDStyle.detection))
                     context.draw(text, at: CGPoint(x: tag.midX, y: tag.midY))
                 }
+                guard showAR else { return }
                 for marker in hud.ar {
                     let at = transform.rect(uprightFractionX: marker.x, y: marker.y, width: 0, height: 0).origin
                     let r = max(6, marker.r * size.height)

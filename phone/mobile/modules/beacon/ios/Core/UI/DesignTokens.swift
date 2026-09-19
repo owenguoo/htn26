@@ -88,6 +88,21 @@ enum MapInk {
     static let meFallback = Color.yellow
 }
 
+/// Ink for the Simulator's drive room. Light on purpose: this is a rehearsal
+/// wireframe, not a stand-in for a dark camera feed. The HUD chrome over it
+/// still opts into dark via `cameraChrome()`.
+enum DriveInk {
+    static let skyTop = Color(red: 0.88, green: 0.91, blue: 0.96)
+    static let skyBottom = Color(red: 0.78, green: 0.82, blue: 0.88)
+    static let floor = Color(red: 0.72, green: 0.75, blue: 0.80)
+    static let grid = Color.black.opacity(0.12)
+    static let outline = Color.black.opacity(0.45)
+    static let stage = Color.black.opacity(0.12)
+    static let stageLabel = Color.black.opacity(0.55)
+    static let prop = Color.black.opacity(0.28)
+    static let person = Color.black.opacity(0.38)
+}
+
 // MARK: - Metrics
 
 /// A 4pt grid. Used with `spacing:` and `padding:`, never as a magic literal.

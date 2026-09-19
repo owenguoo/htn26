@@ -710,10 +710,17 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'p' || e.key === 'P') send({ type: 'planner', enabled: !st?.planner?.enabled });
 });
 
-// ---------------------------------------------------------------- map (monochrome)
+// ---------------------------------------------------------------- map
 const canvas = $('#map');
 const ctx = canvas.getContext('2d');
 let view = null;
+const coverageLayer = document.createElement('canvas');
+let coverageKey = '';
+const mapLabelRects = [];
+const MAP_MARKER_RADIUS = 10;
+const MAP_MARKER_STROKE = 2;
+const MAP_LABEL_HEIGHT = 18;
+const MAP_LABEL_GAP = 4;
 
 function resizeMap() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -723,31 +730,54 @@ function resizeMap() {
   canvas.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   view = makeView(room, w, h, 28);
+  $('.map-scale i').style.width = `${Math.round(5 * view.scale)}px`;
+  coverageKey = '';
 }
 new ResizeObserver(resizeMap).observe($('#mapWrap'));
+
+function drawCoverage(cov) {
+  if (!cov?.heat) return;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const key = `${w}x${h}:${cov.heat}`;
+  if (key !== coverageKey) {
+    coverageKey = key;
+    coverageLayer.width = w;
+    coverageLayer.height = h;
+    const layer = coverageLayer.getContext('2d');
+    layer.clearRect(0, 0, w, h);
+    const values = [...cov.heat].map(value => parseInt(value, 36) / 35);
+    const low = Math.min(...values), high = Math.max(...values);
+    if (high - low > 0.04) {
+      const radius = Math.max(10, cov.cell * view.scale * 1.8);
+      layer.filter = `blur(${Math.max(5, radius * .45)}px)`;
+      for (let row = 0; row < cov.rows; row++) {
+        for (let col = 0; col < cov.cols; col++) {
+          const level = (values[row * cov.cols + col] - low) / (high - low);
+          if (level < 0.16) continue;
+          const [x, y] = view.toPx(cov.x0 + (col + .5) * cov.cell, (row + .5) * cov.cell);
+          layer.fillStyle = `rgba(24,131,75,${(.025 + .16 * level * level).toFixed(3)})`;
+          layer.beginPath();
+          layer.arc(x, y, radius, 0, Math.PI * 2);
+          layer.fill();
+        }
+      }
+      layer.filter = 'none';
+    }
+  }
+  ctx.drawImage(coverageLayer, 0, 0);
+}
 
 function draw() {
   requestAnimationFrame(draw);
   if (!view || !st) return;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
 
-  // probability heatmap: brighter = the candidate is more likely here (relative to the hottest cell)
-  const cov = st.coverage;
-  if (cov?.heat) {
-    const s = cov.cell * view.scale;
-    for (let r = 0; r < cov.rows; r++) {
-      for (let c = 0; c < cov.cols; c++) {
-        const level = parseInt(cov.heat[r * cov.cols + c], 36) / 35;
-        if (level < 0.02) continue;
-        ctx.fillStyle = `rgba(87,216,121,${(0.04 + 0.4 * level * level).toFixed(3)})`;
-        const [px, py] = view.toPx(cov.x0 + c * cov.cell, r * cov.cell);
-        ctx.fillRect(px, py, s + 0.5, s + 0.5);
-      }
-    }
-  }
+  // A soft probability field keeps attention on meaningful hotspots without exposing the cell grid.
   drawRoom(ctx, room, view, {
-    colors: { floor: 'rgba(0,0,0,0)', wall: '#789b85', grid: 'rgba(23,55,38,0.08)', stage: '#deeee3', text: '#466653' },
+    grid: false,
+    colors: { floor: 'rgba(255,255,255,.5)', wall: '#789b85', stage: '#deeee3', text: '#466653' },
   });
+  drawCoverage(st.coverage);
 
   // planner assignments: thin dashed lines to the sector
   const x0 = -room.width / 2;
@@ -758,9 +788,18 @@ function draw() {
     const c = job.sector.charCodeAt(0) - 65, r = Number(job.sector.slice(1)) - 1;
     const [ax, ay] = view.toPx(x0 + c * size, r * size);
     const [bx, by] = view.toPx(x0 + (c + 1) * size, (r + 1) * size);
-    ctx.strokeStyle = 'rgba(24,131,75,0.35)';
-    ctx.lineWidth = 1;
+    ctx.fillStyle = 'rgba(24,131,75,.07)';
+    ctx.fillRect(ax, ay, bx - ax, by - ay);
+    ctx.strokeStyle = 'rgba(24,131,75,.42)';
+    ctx.lineWidth = 1.25;
+    ctx.setLineDash([5, 4]);
     ctx.strokeRect(ax + 0.5, ay + 0.5, bx - ax - 1, by - ay - 1);
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#126b3c';
+    ctx.font = '600 10px "Geist Mono", ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(job.sector, (ax + bx) / 2, (ay + by) / 2);
     const [px, py] = view.toPx(p.pose.x, p.pose.y);
     ctx.setLineDash([3, 4]);
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo((ax + bx) / 2, (ay + by) / 2); ctx.stroke();
@@ -771,24 +810,97 @@ function draw() {
   for (const p of list) {
     if (p.pose.heading == null || st.phase === 'lobby') continue; // lobby: locations only
     drawCone(ctx, view, p.pose.x, p.pose.y, p.pose.heading, room.cameraFovDeg, room.coneLength,
-      p.connected ? 'rgba(24,131,75,0.16)' : 'rgba(24,131,75,0.04)');
+      p.connected ? 'rgba(24,131,75,0.12)' : 'rgba(24,131,75,0.025)');
   }
+  mapLabelRects.length = 0;
   drawSightings();
   drawCandidate();
   drawPings();
   drawExplain();
   for (const p of list) {
-    const [px, py] = view.toPx(p.pose.x, p.pose.y);
-    ctx.globalAlpha = p.connected ? 1 : 0.35;
-    ctx.fillStyle = '#173726';
-    ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#466653';
-    ctx.font = '500 11px "Geist Mono", ui-monospace, monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(p.index), px + 8, py);
-    ctx.globalAlpha = 1;
+    drawPhone(p);
   }
+}
+
+function drawPhone(phone) {
+  const [x, y] = view.toPx(phone.pose.x, phone.pose.y);
+  const responding = st.target?.responders && phone.id in st.target.responders && !st.target.responders[phone.id];
+  const color = responding ? '#d97706' : '#18834b';
+  ctx.save();
+  ctx.globalAlpha = phone.connected ? 1 : .38;
+  ctx.translate(x, y);
+  ctx.shadowColor = 'rgba(23,55,38,.16)';
+  ctx.shadowBlur = 7;
+  ctx.shadowOffsetY = 2;
+  if (phone.pose.heading != null) {
+    ctx.rotate(phone.pose.heading * Math.PI / 180);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, -16); ctx.lineTo(5, -8); ctx.lineTo(-5, -8); ctx.closePath();
+    ctx.fill();
+    ctx.rotate(-phone.pose.heading * Math.PI / 180);
+  }
+  ctx.fillStyle = color;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = MAP_MARKER_STROKE;
+  ctx.beginPath(); ctx.arc(0, 0, MAP_MARKER_RADIUS, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.shadowColor = 'transparent';
+  ctx.fillStyle = '#fff';
+  ctx.font = '600 10px "Geist Mono", ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(phone.index), 0, .5);
+  ctx.restore();
+}
+
+function drawPersonGlyph(x, y, color, background = '#fff') {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = background;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = MAP_MARKER_STROKE;
+  ctx.beginPath(); ctx.arc(0, 0, MAP_MARKER_RADIUS, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(0, -3.5, 2.7, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.roundRect(-4.5, .5, 9, 5.5, 3); ctx.fill();
+  ctx.restore();
+}
+
+function reserveMapLabel(x, preferredY, width, height = 18) {
+  const gap = 3;
+  const halfWidth = width / 2;
+  const safeX = Math.max(halfWidth + 4, Math.min(canvas.clientWidth - halfWidth - 4, x));
+  const offsets = [0, -22, -44, 22, 44, -66, 66];
+  for (const offset of offsets) {
+    const y = Math.max(height / 2 + 4, Math.min(canvas.clientHeight - height / 2 - 4, preferredY + offset));
+    const rect = {left: safeX - halfWidth, right: safeX + halfWidth, top: y - height / 2, bottom: y + height / 2};
+    const overlaps = mapLabelRects.some(other => rect.left < other.right + gap && rect.right > other.left - gap
+      && rect.top < other.bottom + gap && rect.bottom > other.top - gap);
+    if (!overlaps) {
+      mapLabelRects.push(rect);
+      return {x: safeX, y};
+    }
+  }
+  const y = Math.max(height / 2 + 4, Math.min(canvas.clientHeight - height / 2 - 4, preferredY));
+  return {x: safeX, y};
+}
+
+function drawMapLabel(text, x, y, background, foreground = '#fff') {
+  ctx.save();
+  ctx.font = '600 10px "Geist", ui-sans-serif, system-ui';
+  const width = ctx.measureText(text).width + 12;
+  ({x, y} = reserveMapLabel(x, y, width));
+  ctx.fillStyle = background;
+  ctx.beginPath(); ctx.roundRect(x - width / 2, y - 9, width, 18, 5); ctx.fill();
+  ctx.fillStyle = foreground;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y + .5);
+  ctx.restore();
+}
+
+function personLabelY(y) {
+  return y - MAP_MARKER_RADIUS - MAP_MARKER_STROKE / 2 - MAP_LABEL_GAP - MAP_LABEL_HEIGHT / 2;
 }
 
 function drawPings() {
@@ -816,20 +928,14 @@ function drawSightings() {
   for (const sg of st.sightings || []) {
     if (sg.confidence < 0.4) continue;
     const [x, y] = view.toPx(sg.x, sg.y);
-    const k = (performance.now() / 700) % 1;
+    const k = (performance.now() / 1000) % 1;
     ctx.save();
-    ctx.strokeStyle = '#ff4d4d';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 4]);
-    ctx.lineDashOffset = -k * 8;
-    ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = '#ff4d4d';
-    ctx.font = '500 11px "Geist Mono", ui-monospace, monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${Math.round(sg.confidence * 100)}% ?`, x, y - 22);
+    ctx.strokeStyle = `rgba(217,119,6,${.55 * (1 - k)})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, MAP_MARKER_RADIUS + MAP_MARKER_STROKE + 1 + k * 15, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
+    drawPersonGlyph(x, y, '#d97706');
+    drawMapLabel(`POSSIBLE · ${Math.round(sg.confidence * 100)}%`, x, personLabelY(y), '#d97706');
   }
 }
 
@@ -839,10 +945,12 @@ function drawCandidate() {
   // the mock candidate (rehearsals): where it really is, draggable
   if (t.x != null || dragPos) {
     const [mx, my] = view.toPx((dragPos || t).x, (dragPos || t).y);
-    ctx.strokeStyle = t.foundBy ? 'rgba(23,55,38,0.4)' : '#173726';
+    ctx.strokeStyle = t.foundBy ? 'rgba(23,55,38,0.24)' : '#597562';
     ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(mx, my, 7, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(mx - 3, my); ctx.lineTo(mx + 3, my); ctx.moveTo(mx, my - 3); ctx.lineTo(mx, my + 3); ctx.stroke();
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.arc(mx, my, 8, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    if (!t.foundBy) drawMapLabel('TEST TARGET', mx, my - 19, '#597562');
   }
   if (!t.foundBy || !t.fix) return;
   const [cx, cy] = view.toPx(t.fix[0], t.fix[1]); // where the confirmed sighting is
@@ -856,12 +964,13 @@ function drawCandidate() {
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(cx, cy); ctx.stroke();
     ctx.setLineDash([]);
   }
+  const rescued = Object.keys(t.responders || {}).length > 0 && Object.values(t.responders).every(Boolean);
   const k = (performance.now() / 1100) % 1;
-  ctx.strokeStyle = `rgba(24,131,75,${1 - k})`;
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.arc(cx, cy, 7 + k * 26, 0, Math.PI * 2); ctx.stroke();
-  ctx.fillStyle = '#18834b';
-  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = `rgba(183,47,54,${.7 * (1 - k)})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, MAP_MARKER_RADIUS + MAP_MARKER_STROKE + 1 + k * 24, 0, Math.PI * 2); ctx.stroke();
+  drawPersonGlyph(cx, cy, '#b72f36');
+  drawMapLabel(rescued ? 'RESCUED' : 'FOUND PERSON', cx, personLabelY(cy), '#b72f36');
 }
 
 // drag the candidate

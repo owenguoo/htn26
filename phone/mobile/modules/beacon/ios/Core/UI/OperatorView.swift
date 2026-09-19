@@ -66,12 +66,15 @@ public struct OperatorView: View {
             }
 
             // Boxes and floating diamonds, in frame coordinates — the same ones
-            // the console draws over the feed.
-            HUDFrameLayerView(hud: model.frame.hud, captureSize: captureSize)
+            // the console draws over the feed. Skip AR diamonds in drive mode:
+            // they are projected with fixture camera intrinsics, while the
+            // backdrop places people with `RoomCamera`, so the diamond lands
+            // metres away from the person. Distance rides on the person label.
+            HUDFrameLayerView(hud: model.frame.hud, captureSize: captureSize,
+                              showAR: !model.isDrive)
 
-            if let soundEdge = model.frame.hud.soundEdge {
-                HUDSoundEdgeView(edge: soundEdge)
-            }
+            // Always mounted so appear/disappear can ease rather than pop.
+            HUDSoundEdgeView(edge: model.frame.hud.soundEdge)
 
             chrome
 

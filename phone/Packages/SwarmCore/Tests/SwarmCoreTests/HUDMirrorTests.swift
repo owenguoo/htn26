@@ -96,7 +96,7 @@ struct HUDMirrorTests {
         #expect(mirror(alert).banner?.tone == "alert")
         let candidate = mirror(alert).compass?.markers.first { $0.big }
         #expect(candidate?.color == HUDMirror.alertColor)
-        #expect(candidate?.label == "CANDIDATE 4.0m")
+        #expect(candidate?.label == "FIND 4m")
         // Within 16° of the target the marker goes green, as on the web phone.
         #expect(mirror(ok).compass?.markers.first { $0.big }?.color == HUDMirror.onTargetColor)
         let look = overlay { $0.apply(.guideHeading(kind: "look", sector: "door", heading: 200, distance: nil,
@@ -186,16 +186,25 @@ struct HUDMirrorTests {
         world.pings = []
         world.candidate = .init(x: 3, y: 5)
         let idle = mirror(overlay { $0.apply(world, now: 0) })
-        #expect(idle.compass?.markers.contains { $0.label == "CANDIDATE 3m" && $0.color == HUDMirror.alertColor } == true)
-        #expect(idle.ar.contains { $0.label == "CANDIDATE · 3.0 m" })
+        #expect(idle.compass?.markers.contains { $0.label == "FIND 3m" && $0.color == HUDMirror.alertColor } == true)
+        #expect(idle.ar.contains { $0.label == "FIND · 3.0 m" })
 
         let responding = mirror(overlay { model in
             model.apply(world, now: 0)
             model.apply(.guideTurn(sector: "CANDIDATE", delta: 0, onTarget: false, text: nil, kind: "respond",
                                    distance: 3), heading: 90, now: 0)
         })
-        #expect(responding.compass?.markers.filter { $0.label.hasPrefix("CANDIDATE") }.count == 1)
-        #expect(responding.ar.contains { $0.label.hasPrefix("CANDIDATE") }, "still floats in the view")
+        #expect(responding.compass?.markers.filter { $0.label.hasPrefix("FIND") }.count == 1)
+        #expect(responding.ar.contains { $0.label.hasPrefix("FIND") }, "still floats in the view")
+        #expect(responding.soundEdge == nil, "on-target respond: no side bleed")
+
+        let offLeft = mirror(overlay { model in
+            model.apply(world, now: 0)
+            model.apply(.guideTurn(sector: "CANDIDATE", delta: -45, onTarget: false, text: nil, kind: "respond",
+                                   distance: 4), heading: 90, now: 0)
+        })
+        #expect(offLeft.soundEdge?.side == "left")
+        #expect(offLeft.soundEdge?.color == HUDMirror.alertColor)
     }
 
     /// The phone draws its own HUD from the same value it sends the console.

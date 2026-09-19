@@ -119,7 +119,7 @@ public enum HUDMirror {
             let off = Double(arrow.bearingRadians) * 180 / .pi
             let kind = overlay.banner?.kind ?? "search"
             let label = responding
-                ? "CANDIDATE" + (arrow.distance.map { String(format: " %.1fm", $0) } ?? "")
+                ? "FIND" + (arrow.distance.map { String(format: " %.0fm", $0) } ?? "")
                 : (arrow.label ?? "TARGET")
             let color = responding ? alertColor
                 : abs(off) < GuideThresholds.onTargetDegrees ? onTargetColor
@@ -127,7 +127,7 @@ public enum HUDMirror {
             markers.append(.init(off: off, label: label, color: color, big: true))
         }
         let targets = overlay.pings.map { ($0, "◆ " + $0.label, pingColor) }
-            + (responding ? [] : (overlay.candidate.map { [($0, "CANDIDATE", alertColor)] } ?? []))
+            + (responding ? [] : (overlay.candidate.map { [($0, "FIND", alertColor)] } ?? []))
         for (cue, label, color) in targets {
             guard let bearing = cue.bearingRadians else { continue }
             let metres = cue.distance.map { String(format: " %.0fm", $0) } ?? ""
@@ -160,7 +160,7 @@ public enum HUDMirror {
         }
 
         let floating = overlay.pings.map { ($0, $0.label, pingColor) }
-            + (overlay.candidate.map { [($0, "CANDIDATE", alertColor)] } ?? [])
+            + (overlay.candidate.map { [($0, "FIND", alertColor)] } ?? [])
         let ar: [HubHUDMirror.ARMarker] = floating.compactMap { cue, label, color in
             guard let point = cue.imagePoint,
                   let fraction = uprightFraction(ofCapturePoint: point, captureWidth: captureWidth,
@@ -173,12 +173,25 @@ public enum HUDMirror {
                          label: String(format: "%@ · %.1f m", label, distance), color: color)
         }
 
+        // Side bleed: loud sound wins when present; otherwise the found /
+        // guided person paints the edge they sit on — including after find,
+        // so "they're still left of you" stays glanceable while walking in.
+        let guideOffset = overlay.arrow.map { Double($0.bearingRadians) * 180 / .pi }
+            ?? overlay.candidate.flatMap { cue in cue.bearingRadians.map { Double($0) * 180 / .pi } }
+        let guideSide: String? = guideOffset.flatMap { offset in
+            if offset < -20 { return "left" }
+            if offset > 20 { return "right" }
+            return nil
+        }
+        let edge = soundSide.map { HubHUDMirror.SoundEdge(side: $0, color: soundColor) }
+            ?? guideSide.map { HubHUDMirror.SoundEdge(side: $0, color: alertColor) }
+
         return HubHUDMirror(compass: compass, banner: banner, lookingFor: lookingFor,
                             toast: overlay.toast.map { "📣 " + $0.text }, card: card, ar: ar,
                             screen: visibleFrame(captureWidth: captureWidth, captureHeight: captureHeight,
                                                  screenAspect: screenAspect),
                             dets: overlay.detections?.boxes,
-                            soundEdge: soundSide.map { .init(side: $0, color: soundColor) })
+                            soundEdge: edge)
     }
     /// A pixel in the landscape capture → 0…1 in the upright frame the hub has.
     /// The encoder rotates 90° clockwise: (x, y) in W×H lands at (H − y, x) in H×W.
