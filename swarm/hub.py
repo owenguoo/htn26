@@ -143,7 +143,7 @@ class Hub:
         self.join_url = ""
         self.coverage = Coverage(ROOM)
         self.planner = Planner(ROOM, self.coverage)
-        self.target = Target(ROOM, self.planner.note)
+        self.target = Target(ROOM, self.planner.note, lambda: self.search.mode == "rehearsal")
         # "search" by default so the hub works without an operator; the show starts at "lobby"
         self.phase = "search"
         self.phase_started = now_ms()
@@ -360,6 +360,14 @@ class Hub:
             self.mission_complete = done
             await asyncio.sleep(1 / hz)
 
+    async def enter_real_search(self) -> None:
+        self.search.mode = "real"
+        self.target.remove()
+        self.mission_complete = False
+        for pid, cmd in self.target.tick({}, now_ms()):
+            if pid in self.phones:
+                await self.phones[pid].send({"type": "command", **cmd})
+
     async def clear_detection_overlays(self) -> None:
         revision = self.search.revision
         async def clear(phone: Phone) -> None:
@@ -372,12 +380,13 @@ class Hub:
                         pass
         await asyncio.gather(*(clear(phone) for phone in self.phones.values()))
 
-    async def set_phase(self, phase: str) -> None:
+    async def set_phase(self, phase: str, *, confirmed_visual: bool = False) -> None:
         """Re-selecting the current phase re-applies its effects (e.g. turns the planner back on)."""
         if phase not in PHASES:
             return
         if phase != self.phase:
-            self.search.reset()
+            # The audit keeps its original revision while live callbacks are invalidated.
+            self.search.reset(preserve_confirmation=confirmed_visual and phase == "found")
             self.phase, self.phase_started = phase, now_ms()
             self.planner.note(f"Phase → {phase}")
             await self.clear_detection_overlays()
@@ -542,7 +551,7 @@ class Hub:
             cov = self.coverage.snapshot()
             cell_m2 = self.coverage.cell ** 2
             ranked = sorted(live, key=lambda p: -p.searched_cells)
-            found = self.target.pos if self.target.found_by else None
+            found = self.target.pos if self.search.mode == "rehearsal" and self.target.found_by else None
             pings = self.active_pings(now)
             base = {
                 "type": "world", "phase": self.phase, "phones": others,
@@ -716,6 +725,9 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
             elif msg.get("type") == "planner":
                 hub.planner.enabled = bool(msg.get("enabled"))
             elif msg.get("type") == "target":
+                if hub.search.mode != "rehearsal":
+                    await sub.send_json({"error": "mock target requires explicit rehearsal mode"})
+                    continue
                 if msg.get("remove"):
                     hub.target.remove()
                 else:

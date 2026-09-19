@@ -126,7 +126,9 @@ function renderControls() {
   const t = st.target;
   const s = $('#candStatus');
   s.classList.toggle('found', !!t?.foundBy);
-  if (!t) {
+  if (st.search?.mode === 'real') {
+    s.textContent = st.search.confirmation ? `Visual sighting confirmed · Phone ${st.search.confirmation.phoneId} · target location unknown` : 'Real visual search · target location unknown';
+  } else if (!t) {
     s.textContent = 'No candidate placed';
   } else if (t.foundBy) {
     const f = phones.get(t.foundBy);
@@ -141,6 +143,7 @@ function renderControls() {
   const m = st.mission || {};
   $('#mcModel').textContent = m.ready ? m.model : (m.why || '');
   renderAutonomy(m);
+  $('#candBtn').disabled = st.search?.mode === 'real';
   $('#candBtn').textContent = t ? 'Remove candidate' : 'Place candidate';
   $('#candBtn').classList.toggle('primary', !t);
 }
@@ -575,7 +578,7 @@ function renderSearch() {
   $('#searchTools').hidden = !authenticated;
   $('#searchTools').disabled = searchBusy;
   const search = st?.search;
-  $('#searchStatus').textContent = search ? `Worker: ${search.status.replaceAll('_', ' ')} · ${search.referenceAvailable ? 'Reference registered' : 'No reference'} · ${search.active ? 'Searching' : 'Paused'}` : 'Waiting for hub connection';
+  $('#searchStatus').textContent = search ? `${search.mode === 'real' ? 'Real search' : 'Rehearsal'} · Worker: ${search.status.replaceAll('_', ' ')} · ${search.referenceAvailable ? 'Reference registered' : 'No reference'} · ${search.active ? 'Searching' : 'Paused'}` : 'Waiting for hub connection';
   if (search && document.activeElement !== $('#threshold')) $('#threshold').value = search.threshold.toFixed(2);
 }
 
@@ -612,6 +615,13 @@ function clearReferencePreview() {
   $('#personChoices').replaceChildren();
   $('#referenceFile').value = '';
 }
+$('#rehearsalMode').addEventListener('click', () => searchAction(async () => {
+  const result = await searchApi('/api/search/rehearsal', {method: 'POST'});
+  if (st) st.search = result;
+  clearReferencePreview();
+  $('#searchMessage').textContent = 'Rehearsal mode active. Place a mock candidate to rehearse.';
+}));
+
 $('#clearReference').addEventListener('click', () => searchAction(async () => {
   await searchApi('/api/search/reference', {method: 'DELETE'});
   clearReferencePreview();
@@ -724,16 +734,30 @@ function clearSourceFrames() {
 }
 function renderAnalysis() {
   const canvas = $('#analyzedFrame');
+  const confirm = $('#confirmSighting');
+  confirm.hidden = true;
+  confirm.onclick = null;
   const result = st?.search?.sightings?.find(s => s.phoneId === viewing && freshSighting(s, st.search, st.t, snapshotAt, performance.now()));
   if (!result) {
     analysisKey = null; canvas.hidden = true;
     $('#analysisMeta').textContent = 'No current result';
     return;
   }
+  if (authenticated && result.matched) {
+    const identity = {phoneId: result.phoneId, streamId: result.streamId, seq: result.seq, searchRevision: result.searchRevision};
+    confirm.hidden = false;
+    confirm.disabled = searchBusy;
+    confirm.onclick = () => searchAction(async () => {
+      const updated = await searchApi('/api/search/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(identity)});
+      if (st) st.search = updated;
+      $('#searchMessage').textContent = 'Visual sighting confirmed. Target location remains unknown.';
+      renderAnalysis();
+    });
+  }
   const age = Math.max(0, Math.round(st.t - result.t + performance.now() - snapshotAt));
   const scores = result.boxes.map(scoreLabel).join(' / ') || 'No people detected';
   const frame = sourceFrames.get(frameKey(result));
-  $('#analysisMeta').textContent = `${result.matched ? 'Likely sighting' : 'No likely match'} · Frame ${result.seq} · ${age} ms old · ${scores}${frame ? '' : ' · Exact preview unavailable'}`;
+  $('#analysisMeta').textContent = `${result.matched ? 'Likely sighting' : 'No likely match'} · Phone ${result.phoneId} · Frame ${result.seq} · ${age} ms old · ${scores}${frame ? '' : ' · Exact preview unavailable'}`;
   if (!frame) { analysisKey = null; canvas.hidden = true; return; }
   const key = frameKey(result);
   if (analysisKey === key) return;

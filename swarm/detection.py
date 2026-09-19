@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import uuid
+import time
 from collections import OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass
@@ -90,6 +91,8 @@ def normalize_box(bounds: tuple[float, float, float, float], width: int, height:
 
 class SearchState:
     def __init__(self) -> None:
+        self.mode: Literal["real", "rehearsal"] = "rehearsal"
+        self.confirmation: dict | None = None
         self.revision = str(uuid.uuid4())
         self.target_version: str | None = None
         self.threshold = .70
@@ -98,9 +101,11 @@ class SearchState:
         self.latest: dict[str, AcceptedResult] = {}
         self._accepted_seq: dict[str, int] = {}
 
-    def reset(self) -> None:
+    def reset(self, *, preserve_confirmation: bool = False) -> None:
         """Invalidate callbacks and visible results while preserving the active reference."""
         self.revision = str(uuid.uuid4())
+        if not preserve_confirmation:
+            self.confirmation = None
         self.latest.clear()
         self._accepted_seq.clear()
 
@@ -108,6 +113,8 @@ class SearchState:
         if threshold is not None:
             self._validate_threshold(threshold)
             self.threshold = threshold
+        if target_version is not None:
+            self.mode = "real"
         self.target_version = target_version
         self.reset()
 
@@ -123,6 +130,8 @@ class SearchState:
             self.reset()
 
     def connect(self, phone_id: str, stream_id: str) -> None:
+        if self.confirmation and self.confirmation["phoneId"] == phone_id:
+            self.confirmation = None
         self.streams[phone_id] = stream_id
         self.frames[phone_id] = OrderedDict()
         self.latest.pop(phone_id, None)
@@ -130,6 +139,8 @@ class SearchState:
 
     def disconnect(self, phone_id: str, stream_id: str) -> None:
         if self.streams.get(phone_id) == stream_id:
+            if self.confirmation and self.confirmation["phoneId"] == phone_id:
+                self.confirmation = None
             self.streams.pop(phone_id, None)
             self.frames.pop(phone_id, None)
             self.latest.pop(phone_id, None)
@@ -171,3 +182,27 @@ class SearchState:
         self.latest[result.phoneId] = AcceptedResult(result.model_copy(deep=True), deepcopy(frame.pose), bool(matches), matches)
         self._accepted_seq[result.phoneId] = result.seq
         return True
+
+    def confirm(self, phone_id: str, stream_id: str, seq: int, search_revision: str,
+                *, now_ms: float | None = None) -> bool:
+        now_ms = time.time() * 1000 if now_ms is None else now_ms
+        self.expire(now_ms)
+        entry = self.latest.get(phone_id)
+        if (self.mode != 'real' or not self.target_version or entry is None or not entry.matched
+                or self.streams.get(phone_id) != stream_id or search_revision != self.revision
+                or entry.result.streamId != stream_id or entry.result.seq != seq
+                or entry.result.targetVersion != self.target_version
+                or not 0 <= now_ms - entry.result.t <= MAX_RESULT_AGE_MS):
+            return False
+        self.confirmation = entry.result.model_dump() | {
+            'status': 'operator_confirmed_visual', 'confirmedAt': now_ms, 'threshold': self.threshold,
+            'observerPose': deepcopy(entry.pose), 'targetPosition': None, 'locationStatus': 'unknown'}
+        return True
+
+    def visual_context(self, now_ms: float) -> dict:
+        self.expire(now_ms)
+        return {'mode': self.mode, 'confirmation': deepcopy(self.confirmation),
+                'sightings': [entry.result.model_dump() | {
+                    'status': 'likely' if entry.matched else 'no_match', 'matched': entry.matched,
+                    'observerPose': deepcopy(entry.pose), 'targetPosition': None, 'locationStatus': 'unknown'}
+                    for entry in self.latest.values()]}

@@ -437,7 +437,7 @@ class MissionControl:
         if left and max(left.values()) <= 0.15:
             out.append("- the whole room has been searched: don't recommend more coverage moves")
         t = hub.target
-        if t.found_by and t.found_at:
+        if hub.search.mode == "rehearsal" and t.found_by and t.found_at:
             late = [f"#{hub.phones[pid].index}" for pid, r in t.responders.items()
                     if not r["arrived"] and pid in hub.phones]
             since = round((now - t.found_at) / 1000)
@@ -462,6 +462,8 @@ class MissionControl:
     # ---- tools → hub -----------------------------------------------------------------
     async def execute(self, name: str, a: dict) -> str:
         hub = self.hub
+        if hub.search.mode == 'real' and name in ('place_candidate', 'remove_candidate', 'set_responders'):
+            raise ValueError('mock candidate controls require explicit rehearsal mode')
         if name == "set_phase":
             await hub.set_phase(a["phase"])
             return f"phase is now {hub.phase}"
@@ -522,6 +524,9 @@ class MissionControl:
         cols = string.ascii_uppercase[:pl.cols]
         lines = [
             "CURRENT STATE",
+            "VISUAL SEARCH " + json.dumps(hub.search.visual_context(now)),
+            "Visual evidence does not establish map position. Observer pose is not target position. "
+            "Never dispatch responders to visual sightings without a separate known target position.",
             f"phase: {hub.phase} | planner: {'on' if pl.enabled else 'off'} | "
             f"area searched: {round(hub.coverage.snapshot()['searched'] * 100)}%"
             + (f" | looking for: {hub.looking_for}" if hub.looking_for else ""),
@@ -560,14 +565,16 @@ class MissionControl:
             job = pl.assignments.get(p.id)
             if job:
                 tags.append(f"searching {job['sector']}")
-            if t.found_by == p.id:
+            if hub.search.mode == "rehearsal" and t.found_by == p.id:
                 tags.append("found the candidate")
-            if p.id in t.responders:
+            if hub.search.mode == "rehearsal" and p.id in t.responders:
                 tags.append("arrived" if t.responders[p.id]["arrived"] else "responding")
             name = f" {p.name}" if p.name else ""
             lines.append(f"  #{p.index}{name} {where}" + (f" [{', '.join(tags)}]" if tags else ""))
 
-        if t.pos is None:
+        if hub.search.mode == "real":
+            lines.append("candidate: visual evidence only; target location unknown; no responder team")
+        elif t.pos is None:
             lines.append("candidate: none")
         elif not reveal_candidate and not t.found_by:
             lines.append("candidate: somewhere in the room, location unknown (not found yet)")

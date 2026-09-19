@@ -50,9 +50,9 @@ test('console never substitutes a live thumbnail for missing exact source and ig
   const render = code.slice(code.indexOf('function renderAnalysis()'),code.indexOf('\nsetInterval(() => { if (viewing)'));
   const sandbox = vm.createContext({});
   vm.runInContext(source + `
-    let analysisKey=null, viewing='p', snapshotAt=0;
+    let analysisKey=null, viewing='p', snapshotAt=0, authenticated=false, searchBusy=false;
     const performance={now:()=>100};
-    const nodes={'#analyzedFrame':{hidden:false,getContext:()=>({drawImage(){},strokeRect(){}})},'#analysisMeta':{textContent:''}};
+    const nodes={'#confirmSighting':{},'#analyzedFrame':{hidden:false,getContext:()=>({drawImage(){},strokeRect(){}})},'#analysisMeta':{textContent:''}};
     const $=s=>nodes[s];
     const sourceFrames=new Map();
     let pending;
@@ -109,4 +109,27 @@ test('viewer has one overflow rule enabling vertical scrolling', () => {
   assert.equal(rules.length,1);
   assert.match(rules[0],/overflow-y:\s*auto/);
   assert.doesNotMatch(rules[0],/overflow:\s*hidden/);
+});
+test('confirmation button captures exact sighting identity and hides on expiry', async () => {
+  const code=fs.readFileSync('web/console.js','utf8');
+  const render=code.slice(code.indexOf('function renderAnalysis()'),code.indexOf('\nsetInterval(() => { if (viewing)'));
+  const sandbox=vm.createContext({});
+  vm.runInContext(source+`
+    let analysisKey=null,viewing='p',snapshotAt=0,authenticated=true,searchBusy=false;
+    let clock=100, submitted;
+    const performance={now:()=>clock};
+    const nodes={'#confirmSighting':{},'#analyzedFrame':{hidden:true},'#analysisMeta':{},'#searchMessage':{}};
+    const $=s=>nodes[s],sourceFrames=new Map();
+    const searchAction=fn=>fn();
+    const searchApi=async (path,options)=>{submitted=JSON.parse(options.body);return {sightings:[]};};
+    const result={phoneId:'p',streamId:'s',seq:1,searchRevision:'r',t:0,boxes:[],matched:true};
+    const st={t:0,search:{active:true,searchRevision:'r',sightings:[result]}};
+  `+render,sandbox);
+  vm.runInContext('renderAnalysis(); const click=nodes["#confirmSighting"].onclick; result.seq=2;',sandbox);
+  await vm.runInContext('click()',sandbox);
+  assert.equal(vm.runInContext('submitted.seq',sandbox),1);
+  assert.equal(vm.runInContext('submitted.streamId',sandbox),'s');
+  vm.runInContext('st.search={active:true,searchRevision:"r",sightings:[result]};clock=1600;renderAnalysis()',sandbox);
+  assert.equal(vm.runInContext('nodes["#confirmSighting"].hidden',sandbox),true);
+  assert.equal(vm.runInContext('nodes["#confirmSighting"].onclick',sandbox),null);
 });

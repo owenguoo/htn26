@@ -8,6 +8,7 @@ they're within ARRIVE_M. The whole team then stays with the candidate: nothing e
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 from .protocol import now_ms
 
@@ -18,7 +19,8 @@ MAX_PITCH = 65
 
 
 class Target:
-    def __init__(self, room: dict, note) -> None:
+    def __init__(self, room: dict, note, enabled: Callable[[], bool] = lambda: True) -> None:
+        self.enabled = enabled
         self.range = room["coneLength"]
         self.half_fov = room["cameraFovDeg"] / 2
         self.note = note  # log callback: note(text, phone_id)
@@ -36,6 +38,9 @@ class Target:
         self.last_guide = 0.0
 
     def place(self, x: float, y: float) -> None:
+        if not self.enabled():
+            self.remove()
+            return
         fresh = self.pos is None or self.found_by is not None
         self.pos = (x, y)
         if fresh:  # a new candidate, or moving a found one, starts a new search
@@ -49,11 +54,11 @@ class Target:
 
     def busy(self) -> set[str]:
         """The find team (finder + responders, arrived or not): nothing else may steer them."""
-        return set(self.responders)
+        return set(self.responders) if self.enabled() else set()
 
     def complete(self) -> bool:
         """Found, and the whole find team is with the candidate: the search is over."""
-        return bool(self.found_by and self.responders and all(r["arrived"] for r in self.responders.values()))
+        return bool(self.enabled() and self.found_by and self.responders and all(r["arrived"] for r in self.responders.values()))
 
     def sees(self, x: float, y: float, heading: float, pitch: float | None) -> bool:
         tx, ty = self.pos
@@ -66,6 +71,8 @@ class Target:
         return abs((bearing - heading + 540) % 360 - 180) <= self.half_fov
 
     def tick(self, viewers: dict[str, tuple[float, float, float, float | None]], now: float) -> list[tuple[str, dict]]:
+        if not self.enabled():
+            self.remove()
         out: list[tuple[str, dict]] = [(pid, {"cmd": "guide", "clear": True}) for pid in self.pending_clear]
         self.pending_clear = []
         if self.pos is None:
@@ -105,6 +112,8 @@ class Target:
         return out
 
     def on_found(self, finder: str, viewers: dict, now: float) -> list[tuple[str, dict]]:
+        if not self.enabled():
+            return []
         self.found_by, self.found_at = finder, now
         secs = (now - self.search_started) / 1000
         self.note(f"FOUND the candidate after {secs:.1f}s", finder)
@@ -122,7 +131,7 @@ class Target:
         return out
 
     def snapshot(self, now: float) -> dict | None:
-        if self.pos is None:
+        if not self.enabled() or self.pos is None:
             return None
         return {
             "x": self.pos[0], "y": self.pos[1], "respondersWanted": self.responders_wanted,

@@ -117,8 +117,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
                 'active': auth.settings.enabled and hub.phase == 'search' and bool(hub.search.target_version),
                 'status': available, 'enabled': auth.settings.enabled,
                 'referenceAvailable': bool(hub.search.target_version),
-                'sightings': [entry.result.model_dump() | {'pose': entry.pose, 'matched': entry.matched}
-                              for entry in hub.search.latest.values()]}
+                **hub.search.visual_context(time.time() * 1000)}
 
     hub.search_state = state
 
@@ -203,6 +202,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
         async with gate:
             hub.search.set_reference(None)
             revision = hub.search.revision
+            await hub.enter_real_search()
             status_value = 'unavailable'
             await hub.clear_detection_overlays()
             data = await upload(request)
@@ -246,6 +246,40 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
             raise HTTPException(422, 'invalid threshold')
         hub.search.set_threshold(body.threshold)
         await hub.clear_detection_overlays()
+        return state()
+
+    @app.post('/api/search/confirm')
+    async def confirm(request: Request):
+        auth.require_operator(request)
+        from pydantic import ValidationError
+
+        class Confirmation(BaseModel):
+            model_config = ConfigDict(strict=True, extra='forbid')
+            phoneId: str = Field(min_length=1)
+            streamId: str = Field(min_length=1, max_length=128)
+            seq: int = Field(ge=0)
+            searchRevision: str = Field(min_length=1, max_length=128)
+
+        try:
+            body = Confirmation.model_validate(await request.json())
+        except (ValidationError, ValueError):
+            raise HTTPException(422, 'invalid sighting identity')
+        if hub.phase != 'search' or not hub.search.confirm(body.phoneId, body.streamId, body.seq, body.searchRevision):
+            raise HTTPException(409, 'sighting expired or search changed')
+        hub.target.remove()
+        hub.mission_complete = False
+        await hub.set_phase('found', confirmed_visual=True)
+        hub.planner.note('Operator confirmed visual sighting; target location unknown', body.phoneId)
+        return state()
+
+    @app.post('/api/search/rehearsal')
+    async def rehearsal(request: Request):
+        auth.require_operator(request)
+        await clear(request)
+        hub.target.remove()
+        hub.search.mode = 'rehearsal'
+        hub.mission_complete = False
+        await hub.set_phase('search')
         return state()
 
     @app.post('/api/search/status')
