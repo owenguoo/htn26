@@ -68,6 +68,10 @@ public struct FrameTicket: Sendable, Equatable {
     public var deviceTimestamp: Double
     public var serverTimestamp: Double
     public var pose: PoseUpdate
+    /// Already stamped at `.capture`, on the server clock. Every later stage is
+    /// added to this same trace, so a regression past budget is attributable to
+    /// a stage rather than to "the network".
+    public var trace: LatencyTrace
 }
 
 /// A request to send one depth chunk. Four to eight frames is VGGT-Ω's
@@ -560,10 +564,13 @@ public actor SessionMachine {
         nextFrameDue = (nextFrameDue == -.infinity ? now : max(now, nextFrameDue)) + interval
 
         frameID += 1
+        var trace = LatencyTrace(frameID: frameID)
+        trace.stamp(.capture, at: pose.serverTimestamp)
         let ticket = FrameTicket(frameID: frameID,
                                  deviceTimestamp: lastPoseTime ?? now,
                                  serverTimestamp: pose.serverTimestamp,
-                                 pose: pose)
+                                 pose: pose,
+                                 trace: trace)
         diagnostics.framesRequested += 1
         recordFrameReference(ticket)
         continuation?.yield(.captureFrame(ticket))
