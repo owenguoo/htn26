@@ -14,11 +14,16 @@ struct FlashView: View {
                 .ignoresSafeArea()
             if let text = flash.text {
                 Text(text)
+                    // Fixed, not a text style. The flash is read across a room
+                    // at a glance; Dynamic Type shrinking it would defeat the
+                    // point, and `minimumScaleFactor` already handles long text.
                     .font(.system(size: 40, weight: .heavy, design: .rounded))
                     .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.5)
-                    .foregroundStyle(luminance > 0.6 ? .black : .white)
-                    .padding(24)
+                    // The one correct rule for contrast on an arbitrary colour:
+                    // measure it. The theme has no opinion worth having here.
+                    .foregroundStyle(luminance > 0.6 ? .hudVoid : .hudInk)
+                    .padding(Space.xxl)
             }
         }
         .transition(.opacity)

@@ -104,11 +104,14 @@ struct CameraPreviewView: View {
                 // this is, because "no camera yet" and "camera showing a dark
                 // room" look identical and mean very different things.
                 ZStack {
-                    Color.black
+                    // Black in both themes: a camera that has not started is
+                    // black, and a white screen here reads as a crash.
+                    Color.hudVoid
                     Text("waiting for the camera…")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(TypeScale.footnote)
+                        .foregroundStyle(.hudInkSecondary)
                 }
+                .cameraChrome()
             }
         }
         .ignoresSafeArea()

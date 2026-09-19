@@ -14,6 +14,10 @@ import SwiftUI
 // and returning leaves the preview running and the session in `recalibrating`.
 final class OperatorExpoView: ExpoView {
   let onRequestLeave = EventDispatcher()
+  /// The gear lives next to the leave button inside SwiftUI, so both pieces of
+  /// camera chrome share one style and one layout. A React button floating over
+  /// this view has to guess at a SwiftUI layout it cannot see.
+  let onRequestSettings = EventDispatcher()
 
   var showDebug = false { didSet { render() } }
   var showMiniMap = true { didSet { render() } }
@@ -24,13 +28,17 @@ final class OperatorExpoView: ExpoView {
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     clipsToBounds = true
+    // Behind the camera preview, so it stays black in light mode too: a white
+    // frame flashing between mount and the first captured frame reads as a
+    // crash. `ThemeController` deliberately does not reach this.
     backgroundColor = .black
     render()
   }
 
   private func makeRoot() -> OperatorView {
     OperatorView(model: model, showDebug: showDebug, showMiniMap: showMiniMap,
-                 onRequestLeave: { [weak self] in self?.onRequestLeave([:]) })
+                 onRequestLeave: { [weak self] in self?.onRequestLeave([:]) },
+                 onRequestSettings: { [weak self] in self?.onRequestSettings([:]) })
   }
 
   private func render() {

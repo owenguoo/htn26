@@ -44,16 +44,20 @@ struct MarkerOverlayView: View {
 
                     if let centre = centre(of: points) {
                         Text(label(for: projection))
-                            .font(.caption2.monospacedDigit().weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
+                            .font(TypeScale.readout)
+                            .padding(.horizontal, Space.s)
+                            .padding(.vertical, Space.xs)
+                            // Dark on the outline's own colour, both of which are
+                            // fixed: this is drawn on the camera image, so the
+                            // theme has no say in what is legible.
                             .background(colour(for: projection).opacity(0.85), in: Capsule())
-                            .foregroundStyle(.black)
+                            .foregroundStyle(.hudVoid)
                             .position(centre)
                     }
                 }
             }
         }
+        .cameraChrome()
         .allowsHitTesting(false)
     }
 
@@ -72,8 +76,8 @@ struct MarkerOverlayView: View {
     /// distance makes detection unlikely — so "why is it not locking" has an
     /// answer on screen rather than being guesswork.
     private func colour(for projection: Projection.MarkerProjection) -> Color {
-        if projection.obliquityDegrees > 60 || projection.distance > 4.5 { return .orange }
-        return .green
+        if projection.obliquityDegrees > 60 || projection.distance > 4.5 { return .ssAttention }
+        return .ssOK
     }
 }
 

@@ -16,15 +16,17 @@ public struct OperatorView: View {
     var showDebug: Bool
     var showMiniMap: Bool
     var onRequestLeave: (() -> Void)?
+    var onRequestSettings: (() -> Void)?
 
     @State private var isPickingSeat = false
 
     public init(model: OperatorViewModel, showDebug: Bool = false, showMiniMap: Bool = true,
-                onRequestLeave: (() -> Void)? = nil) {
+                onRequestLeave: (() -> Void)? = nil, onRequestSettings: (() -> Void)? = nil) {
         self.model = model
         self.showDebug = showDebug
         self.showMiniMap = showMiniMap
         self.onRequestLeave = onRequestLeave
+        self.onRequestSettings = onRequestSettings
     }
 
     private var overlay: OverlayState { model.frame.overlay }
@@ -41,6 +43,7 @@ public struct OperatorView: View {
             } else {
                 ReplayBackdrop(isJoined: model.isJoined)
             }
+            // Everything from here to `chrome` is drawn over a live video frame.
 
             if showDebug {
                 // Off unless asked for in Settings: a calibration check, not
@@ -79,7 +82,11 @@ public struct OperatorView: View {
         }
         .animation(.easeOut(duration: 0.12), value: overlay.flash)
         .animation(.easeOut(duration: 0.2), value: overlay.phase)
-        .preferredColorScheme(.dark)
+        // No `.preferredColorScheme(.dark)` here. It used to pin the whole tree,
+        // including the phase card and the seat picker — modal cards that have
+        // no reason to ignore a light-mode operator. What actually has to stay
+        // dark is the chrome over the camera, and that says so itself with
+        // `.cameraChrome()`.
         .background(GeometryReader { geometry in
             Color.clear
                 .onAppear { model.reportScreenSize(geometry.size) }
@@ -91,23 +98,20 @@ public struct OperatorView: View {
     }
 
     private var chrome: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Space.s) {
             // Compass first, full width, where the console draws it. Then what
             // the hub is telling this operator, then how the phone itself is doing.
             HUDStackView(hud: model.frame.hud)
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: Space.s) {
                 IdentityBadge(index: overlay.index, colorHex: overlay.colorHex)
                 OperatorStatusView(status: overlay.status,
                                    onTap: overlay.status.offersSeatPicker ? { isPickingSeat = true } : nil)
                 if overlay.status.hint == nil { Spacer(minLength: 0) }
+                if let onRequestSettings {
+                    ChromeButton(symbol: "gearshape.fill", label: "Settings", action: onRequestSettings)
+                }
                 if let onRequestLeave {
-                    Button(action: onRequestLeave) {
-                        Image(systemName: "xmark")
-                            .font(.footnote.weight(.bold))
-                            .padding(9)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    .accessibilityLabel("Leave")
+                    ChromeButton(symbol: "xmark", label: "Leave", action: onRequestLeave)
                 }
             }
             Spacer()
@@ -119,13 +123,39 @@ public struct OperatorView: View {
                         // own aspect: the dot stays centred however far they walk.
                         .frame(width: 132, height: 150)
                         .onTapGesture { isPickingSeat = true }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityLabel("Where everyone is")
                 }
                 Spacer(minLength: 0)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 14)
+        .padding(.horizontal, Space.m)
+        .padding(.top, Space.s)
+        .padding(.bottom, Space.l)
+        .cameraChrome()
+    }
+}
+
+/// A round glyph on blur: the shared shape for everything that floats over the
+/// feed. Drawn at 30pt so it covers as little of the camera as possible, tapped
+/// at 44 — the visual size and the hit target are not the same number, and a
+/// 30pt tap target on a phone held at arm's length is a miss.
+struct ChromeButton: View {
+    let symbol: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(TypeScale.chromeGlyph)
+                .foregroundStyle(.hudInk)
+                .frame(width: 30, height: 30)
+                .background(Surface.hudChrome, in: Circle())
+                .hitTarget()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 
@@ -137,11 +167,16 @@ struct IdentityBadge: View {
 
     var body: some View {
         Text(index.map { "#\($0)" } ?? "#–")
-            .font(.headline.monospacedDigit().weight(.heavy))
-            .foregroundStyle(Color(hex: colorHex) ?? .white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(.ultraThinMaterial, in: Capsule())
+            .font(TypeScale.identity)
+            // The hub's colour for this phone, so the operator and the person
+            // at the console can agree which phone they mean. Wire, not theme.
+            .foregroundStyle(Color(hex: colorHex) ?? .hudInk)
+            // Same insets as the status pill beside it, so the two capsules are
+            // the same height however long the sentence in the pill gets.
+            .padding(.horizontal, Space.m)
+            .padding(.vertical, Space.s)
+            .background(Surface.hudChrome, in: Capsule())
+            .accessibilityLabel(index.map { "Phone \($0)" } ?? "Phone, no number yet")
     }
 }
 
@@ -150,18 +185,25 @@ struct IdentityBadge: View {
 struct ReplayBackdrop: View {
     let isJoined: Bool
 
+    /// Scales with the operator's text size, unlike the fixed 40pt it replaces.
+    @ScaledMetric(relativeTo: .largeTitle) private var symbolSize: CGFloat = 40
+
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(red: 0.05, green: 0.07, blue: 0.16), .black],
+            // It stands *in place of* the camera, so it has to be as dark as
+            // the feed it replaces — otherwise the HUD's contrast is one thing
+            // in the Simulator and another on a device.
+            LinearGradient(colors: [Color(red: 0.05, green: 0.07, blue: 0.16), .hudVoid],
                            startPoint: .top, endPoint: .bottom)
-            VStack(spacing: 6) {
+            VStack(spacing: Space.s) {
                 Image(systemName: isJoined ? "figure.walk.motion" : "camera")
-                    .font(.system(size: 40))
+                    .font(.system(size: symbolSize))
                 Text(isJoined ? "Replaying a recorded walk" : "Not joined")
-                    .font(.footnote)
+                    .font(TypeScale.footnote)
             }
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.hudInkSecondary)
         }
+        .cameraChrome()
         .ignoresSafeArea()
     }
 }

@@ -38,6 +38,14 @@ public class SwarmSightModule: Module {
       let binder = SessionBinder(events: self.events)
       self.binder = binder
       self.observer = SwarmRuntime.shared.observe { session in binder.bind(session) }
+
+      // Before the first frame, so an app whose stored preference is dark never
+      // shows a light one. The module is created before the React root window
+      // exists, hence the observer as well as the immediate apply.
+      Task { @MainActor in
+        ThemeController.applyStored()
+        ThemeController.followNewWindows()
+      }
     }
 
     OnDestroy {
@@ -67,10 +75,20 @@ public class SwarmSightModule: Module {
         "lastHubURL": PhoneIdentity.lastHubURL,
         "venueHubURL": (try? ModuleResources.loadVenue())?.hubURL ?? "",
         "poseSource": SwarmRuntime.shared.currentOptions.poseSource.rawValue,
+        // "system" | "light" | "dark", defaulting to dark. See ThemeController.
+        "theme": ThemeController.stored,
         // `simctl launch … -SwarmSightJoin <link>`: iOS puts a confirmation in
         // front of `simctl openurl` that nothing headless can tap.
         "launchJoin": UserDefaults.standard.string(forKey: "SwarmSightJoin") ?? "",
       ]
+    }
+
+    /// "system" | "light" | "dark". Synchronous, and writes the default *and*
+    /// applies it: a preference that only took effect on the next launch would
+    /// read as a broken switch.
+    Function("setTheme") { (theme: String) in
+      ThemeController.store(theme)
+      Task { @MainActor in ThemeController.applyStored() }
     }
 
     /// QR / typed text / deep link → the hub's phone socket, or null.
@@ -115,7 +133,7 @@ public class SwarmSightModule: Module {
     }
 
     View(OperatorExpoView.self) {
-      Events("onRequestLeave")
+      Events("onRequestLeave", "onRequestSettings")
 
       Prop("showDebug") { (view: OperatorExpoView, value: Bool) in
         view.showDebug = value

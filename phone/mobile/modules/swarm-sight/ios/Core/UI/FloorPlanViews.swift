@@ -64,11 +64,9 @@ struct FloorPlanCanvas: View {
             let plan = FloorPlanGeometry(room: room, size: size,
                                          focus: followsMe ? me.map { ($0.x, $0.y) } : nil)
             if followsMe {
-                // Outside the room is still somewhere: a visibly different floor,
-                // so walking past a wall reads as that and not as a broken map.
-                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black.opacity(0.35)))
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(MapInk.outside))
             }
-            context.fill(Path(roundedRect: plan.bounds, cornerRadius: 4), with: .color(.black.opacity(0.55)))
+            context.fill(Path(roundedRect: plan.bounds, cornerRadius: 4), with: .color(MapInk.floor))
 
             if let coverage = world?.coverage {
                 let cells = Array(coverage.cells.utf8)
@@ -78,7 +76,7 @@ struct FloorPlanCanvas: View {
                                              y: Double(row) * coverage.cell)
                     let side = plan.length(coverage.cell)
                     context.fill(Path(CGRect(x: topLeft.x, y: topLeft.y, width: side + 0.5, height: side + 0.5)),
-                                 with: .color(.green.opacity(0.28)))
+                                 with: .color(MapInk.searched))
                 }
             }
 
@@ -86,13 +84,13 @@ struct FloorPlanCanvas: View {
                 let topLeft = plan.point(x: -stage.width / 2, y: 0)
                 context.fill(Path(CGRect(x: topLeft.x, y: topLeft.y, width: plan.length(stage.width),
                                          height: plan.length(stage.depth))),
-                             with: .color(.white.opacity(0.35)))
+                             with: .color(MapInk.stage))
             }
-            context.stroke(Path(roundedRect: plan.bounds, cornerRadius: 4), with: .color(.white.opacity(0.6)),
+            context.stroke(Path(roundedRect: plan.bounds, cornerRadius: 4), with: .color(MapInk.outline),
                            lineWidth: 1)
 
             for peer in world?.phones ?? [] where peer.id != world?.me {
-                dot(&context, at: plan.point(x: peer.x, y: peer.y), heading: peer.h, color: .white.opacity(0.8),
+                dot(&context, at: plan.point(x: peer.x, y: peer.y), heading: peer.h, color: MapInk.peer,
                     radius: 3)
             }
             for ping in pings {
@@ -104,16 +102,16 @@ struct FloorPlanCanvas: View {
             if let candidate = world?.candidate {
                 let p = plan.point(x: candidate.x, y: candidate.y)
                 context.stroke(Path(ellipseIn: CGRect(x: p.x - 6, y: p.y - 6, width: 12, height: 12)),
-                               with: .color(.red), lineWidth: 2)
+                               with: .color(MapInk.candidateRing), lineWidth: 2)
             }
             if let seat {
                 let p = plan.point(x: seat.x, y: seat.y)
                 context.stroke(Path(ellipseIn: CGRect(x: p.x - 9, y: p.y - 9, width: 18, height: 18)),
-                               with: .color(.orange), lineWidth: 2)
+                               with: .color(MapInk.seatRing), lineWidth: 2)
             }
             if let me {
                 dot(&context, at: plan.point(x: me.x, y: me.y), heading: me.heading,
-                    color: Color(hex: colorHex) ?? .yellow, radius: 5)
+                    color: Color(hex: colorHex) ?? MapInk.meFallback, radius: 5)
             }
         }
     }
@@ -142,18 +140,21 @@ struct MiniMapView: View {
     let pings: [PingCue]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: Space.xs) {
             FloorPlanCanvas(room: room, world: world, me: me, colorHex: colorHex, pings: pings, followsMe: true)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.35), lineWidth: 1))
+                .clipShape(Radius.rect(Radius.plate))
+                .overlay(Radius.rect(Radius.plate).stroke(MapInk.plateBorder, lineWidth: 1))
             if let searched = world?.searched {
                 Text("\(Int((searched * 100).rounded()))% searched"
                      + (world?.stats?.rank.map { " · rank \($0)" } ?? ""))
-                    .font(.caption2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.white)
-                    .shadow(color: .black, radius: 2)
+                    .font(TypeScale.readout)
+                    .foregroundStyle(.hudInk)
+                    // The caption sits on the camera, not on the plate, so it
+                    // needs its own backdrop or it disappears over a bright wall.
+                    .shadow(color: .hudVoid, radius: 2)
             }
         }
+        .cameraChrome()
     }
 }
 
@@ -173,13 +174,17 @@ struct SeatPickerView: View {
     @State private var message: String?
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: Space.m) {
             HStack {
-                Text("Where are you standing?").font(.title3.bold())
+                Text("Where are you standing?").font(TypeScale.sheetTitle)
                 Spacer()
                 Button("Close", action: onClose)
+                    .buttonStyle(.borderless)
             }
-            Text("STAGE").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+            Text("STAGE")
+                .font(TypeScale.readout)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("The stage is at the top of this map")
             GeometryReader { geometry in
                 FloorPlanCanvas(room: room, world: world, me: current, colorHex: nil, pings: [], seat: seat)
                     .contentShape(Rectangle())
@@ -191,9 +196,18 @@ struct SeatPickerView: View {
                     })
             }
             .aspectRatio(room.width / max(1, room.depth), contentMode: .fit)
+            // The plan is the same drawn artefact as the mini-map — white
+            // strokes on a dark floor — so it keeps its own ink whichever way
+            // the card around it resolves.
+            .clipShape(Radius.rect(Radius.plate))
+            .cameraChrome()
+            .accessibilityLabel("Room plan. Tap where you are standing.")
 
             if let message {
-                Text(message).font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center)
+                Text(message)
+                    .font(TypeScale.footnote)
+                    .foregroundStyle(.ssAttention)
+                    .multilineTextAlignment(.center)
             }
             Button {
                 Task {
@@ -206,11 +220,11 @@ struct SeatPickerView: View {
                 }
             } label: {
                 Text("I'm on my spot, facing the stage")
-                    .font(.headline)
+                    .font(TypeScale.action)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .disabled(seat == nil)
 
             if let onResetOrigin {
@@ -221,12 +235,14 @@ struct SeatPickerView: View {
                     onClose()
                 } label: {
                     Label("Position looks wrong — forget the marker lock", systemImage: "arrow.counterclockwise")
-                        .font(.footnote)
+                        .font(TypeScale.footnote)
                 }
             }
         }
-        .padding(20)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-        .padding(16)
+        .padding(Space.xl)
+        // Not a presented sheet, on purpose: this card sits over a live camera
+        // the operator is still aiming, and a sheet would cover the preview.
+        .background(Surface.card, in: Radius.rect(Radius.sheet))
+        .padding(Space.l)
     }
 }

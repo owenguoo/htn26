@@ -15,47 +15,59 @@ struct OperatorStatusView: View {
         Button {
             onTap?()
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: Space.s) {
                 Image(systemName: symbol)
-                    .font(.body.weight(.bold))
+                    .font(TypeScale.inlineSymbol)
                     .foregroundStyle(tint)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(status.title)
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
+                        .font(TypeScale.statusTitle)
+                        // Fixed light-on-dark: the backdrop is a camera frame,
+                        // so the colour scheme says nothing about contrast here.
+                        .foregroundStyle(.hudInk)
                     if let hint = status.hint {
                         Text(hint)
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.8))
+                            .font(TypeScale.hint)
+                            .foregroundStyle(.hudInkSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 if status.offersSeatPicker {
-                    Spacer(minLength: 4)
-                    Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.white.opacity(0.7))
+                    Spacer(minLength: Space.xs)
+                    Image(systemName: "chevron.right")
+                        .font(TypeScale.affordance)
+                        .foregroundStyle(.hudInkTertiary)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, status.hint == nil ? 7 : 9)
+            .padding(.horizontal, Space.m)
+            .padding(.vertical, Space.s)
             .frame(maxWidth: status.hint == nil ? nil : .infinity, alignment: .leading)
-            .background(background, in: RoundedRectangle(cornerRadius: status.hint == nil ? 18 : 14))
-            .overlay(RoundedRectangle(cornerRadius: status.hint == nil ? 18 : 14).stroke(tint.opacity(0.7), lineWidth: 1))
+            .background(background, in: shape)
+            .overlay(shape.stroke(tint.opacity(0.7), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .disabled(!status.offersSeatPicker)
         .accessibilityLabel([status.title, status.hint].compactMap { $0 }.joined(separator: ". "))
+        .accessibilityHint(status.offersSeatPicker ? "Opens the map so you can tap where you are standing" : "")
+    }
+
+    /// One line is a capsule; two lines is a card. A hand-picked 18 was only
+    /// ever approximating the capsule, and never quite reached it as the text
+    /// size grew.
+    private var shape: AnyShape {
+        status.hint == nil ? AnyShape(Capsule()) : AnyShape(Radius.rect(Radius.card))
     }
 
     private var tint: Color {
         switch status.level {
-        case .ok: .green
-        case .attention: .orange
-        case .problem: .red
+        case .ok: .ssOK
+        case .attention: .ssAttention
+        case .problem: .ssProblem
         }
     }
 
     private var background: some ShapeStyle {
-        status.level == .ok ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(tint.opacity(0.28))
+        status.level == .ok ? AnyShapeStyle(Surface.hudChrome) : AnyShapeStyle(tint.opacity(0.28))
     }
 
     private var symbol: String {
