@@ -34,9 +34,11 @@ code you cannot test, and never claim positioning "works."
 Your only valid evidence is:
 
 ```
-cd Packages/SwarmCore && swift test
-xcodebuild -scheme SwarmSight -destination 'platform=iOS Simulator,name=iPhone 16' build
+cd phone/Packages/SwarmCore && swift test
+xcodebuild -project phone/SwarmSight.xcodeproj -scheme SwarmSight -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
+
+(Paths are from the htn26 repo root; this client lives under `phone/`.)
 
 Tests run against `MockPoseProvider` replaying `Fixtures/trajectory-*.json`,
 which contains real recorded ARKit output. Anything ARKit-dependent goes in a
