@@ -118,6 +118,12 @@ public actor Transport {
     private var runTask: Task<Void, Never>?
     private var receiveTask: Task<Void, Never>?
     private var pumpTasks: Set<UUID> = []
+    /// Resumed when the current socket should be considered dead, from either
+    /// end: a failed send or a failed receive.
+    private var disconnectWaiter: CheckedContinuation<Void, Never>?
+    /// Set when a disconnect is signalled before anyone is waiting, so a socket
+    /// that fails on its very first send is not lost.
+    private var disconnectPending = false
 
     public init(configuration: Configuration,
                 factory: any WebSocketChannelFactory,
@@ -153,6 +159,7 @@ public actor Transport {
     public func stop() async {
         runTask?.cancel()
         runTask = nil
+        signalDisconnect()
         await teardownChannel(countBufferedAsDropped: true)
         state = .closed
         inboundContinuation?.finish()
@@ -238,10 +245,13 @@ public actor Transport {
         inFlight = max(0, inFlight - 1)
         stats.inFlight = inFlight
         if failed {
+            // A send that throws means the socket is gone. Carrying on would
+            // silently burn every subsequent pose against a dead connection.
             stats.sendFailures += 1
-        } else {
-            stats.sent += 1
+            signalDisconnect()
+            return
         }
+        stats.sent += 1
         pump()
     }
 
@@ -263,8 +273,9 @@ public actor Transport {
                 }
                 adopt(newChannel)
                 attempt = 0
-                // Blocks until the socket fails or is closed.
-                await receiveLoop()
+                startReceiving()
+                // Blocks until either end of the socket reports it is gone.
+                await waitForDisconnect()
                 guard !Task.isCancelled else { return }
             } catch {
                 guard !Task.isCancelled else { return }
@@ -283,6 +294,7 @@ public actor Transport {
 
     private func adopt(_ newChannel: any WebSocketChannel) {
         generation &+= 1
+        disconnectPending = false
         inFlight = 0
         stats.inFlight = 0
         channel = newChannel
@@ -297,24 +309,66 @@ public actor Transport {
         pump()
     }
 
-    private func receiveLoop() async {
+    private func startReceiving() {
+        receiveTask?.cancel()
         let currentGeneration = generation
         guard let channel else { return }
-        while !Task.isCancelled {
-            do {
-                let data = try await channel.receive()
-                guard currentGeneration == generation else { return }
-                stats.received += 1
-                if let envelope = try? WireCoder.decode(data) {
-                    inboundContinuation?.yield(envelope.message)
+        receiveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    let data = try await channel.receive()
+                    guard let self else { return }
+                    let stillCurrent = await self.receive(data, generation: currentGeneration)
+                    if !stillCurrent { return }
+                } catch {
+                    // Stamped with the generation, because a receive task whose
+                    // socket has already been replaced must retire quietly — not
+                    // tear down the connection that superseded it.
+                    await self?.signalDisconnect(generation: currentGeneration)
+                    return
                 }
-            } catch {
-                return
             }
         }
     }
 
+    /// Returns false when this socket has been superseded, so the receive task
+    /// for the old generation retires instead of feeding the new one.
+    private func receive(_ data: Data, generation receiveGeneration: UInt64) -> Bool {
+        guard receiveGeneration == generation else { return false }
+        stats.received += 1
+        if let envelope = try? WireCoder.decode(data) {
+            inboundContinuation?.yield(envelope.message)
+        }
+        return true
+    }
+
+    private func waitForDisconnect() async {
+        if disconnectPending {
+            disconnectPending = false
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            disconnectWaiter = continuation
+        }
+    }
+
+    private func signalDisconnect(generation signalGeneration: UInt64) {
+        guard signalGeneration == generation else { return }
+        signalDisconnect()
+    }
+
+    private func signalDisconnect() {
+        if let waiter = disconnectWaiter {
+            disconnectWaiter = nil
+            waiter.resume()
+        } else {
+            disconnectPending = true
+        }
+    }
+
     private func teardownChannel(countBufferedAsDropped: Bool) async {
+        receiveTask?.cancel()
+        receiveTask = nil
         let old = channel
         channel = nil
         generation &+= 1
