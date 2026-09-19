@@ -19,6 +19,8 @@ import {
   font,
   foregroundStyle,
   keyboardType,
+  listRowBackground,
+  listRowInsets,
   onAppear,
   onSubmit,
   submitLabel,
@@ -219,7 +221,17 @@ export default function Join() {
           <Button
             onPress={submit}
             testID="join"
-            modifiers={[buttonStyle('borderedProminent'), controlSize('large'), disabled(!valid || joining)]}>
+            // A prominent capsule is a button, not a row: left inside the
+            // section's own plate it reads as a button drawn inside a button.
+            // Clearing the row's background and insets sits it directly on the
+            // grouped background, where Apple puts a primary action.
+            modifiers={[
+              buttonStyle('borderedProminent'),
+              controlSize('large'),
+              listRowBackground('clear'),
+              listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }),
+              disabled(!valid || joining),
+            ]}>
             <HStack>
               <Spacer />
               {joining ? <ProgressView /> : <Text>Join</Text>}
