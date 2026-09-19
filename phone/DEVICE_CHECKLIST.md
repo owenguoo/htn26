@@ -428,3 +428,53 @@ Build for a phone (Release, no Metro needed on stage):
 - [ ] Background → foreground: preview resumes, session is `recalibrating`.
 - [ ] Then run every section above this one on the Expo build. When they pass,
       retire `SwarmSight.xcodeproj` (Gate 10).
+
+## Voice capture (`MicrophoneCapture.swift`) — unverified on hardware
+
+The Simulator has no microphone of its own and its `AVAudioSession` is a stub
+over the Mac's audio, so **nothing in this section has ever run for real**. What
+*has* been verified elsewhere: `VoiceGate` (threshold, 600 ms hang, one pre-roll
+chunk, 16 kHz decimation, `Int16` LE) by `swift test`, and `audio` frames plus
+`audio_end` arriving at the hub in order, by driving `SwarmClient.offerAudio`
+with synthetic PCM over a real socket. Neither involved a microphone.
+
+- [ ] **The prompt appears**, once, on the first join — and only on the first
+      join. `NSMicrophoneUsageDescription` is in `mobile/app.json`; a missing one
+      fails silently, with an input tap that returns nothing and throws nothing.
+- [ ] **Denial degrades, it does not wedge.** Decline the prompt: the app stays
+      joined, keeps streaming frames and taking commands, and Settings › Voice
+      shows `no microphone` with the switch greyed. Nothing re-prompts.
+- [ ] Granting it later in iOS Settings › SwarmSight, then rejoining, brings
+      voice back.
+- [ ] **The beep does not kill the tap.** This is the one that
+      `AudioSessionOwner` exists to prevent, and the one that only shows up on
+      hardware. Talk; have a console `ping` you mid-sentence; keep talking.
+      Confirm the second half of the sentence still transcribes and the green
+      ring comes back. Before the single-owner change, `SoundPlayer` set
+      `.ambient` here and capture stopped for the rest of the session.
+- [ ] **The silent-switch trade is what we think it is.** With voice capturing,
+      the session is `.playAndRecord` and beeps are audible with the ringer off.
+      With voice off or unavailable it is `.ambient` and they are silent. Check
+      both. If the room needs silent beeps more than it needs voice, that is a
+      product decision, not a bug.
+- [ ] **Muting means muted.** Toggle Settings › Voice off: iOS's orange
+      microphone indicator clears within a second or so. Toggle it back on and
+      the first word of the next sentence is not clipped.
+- [ ] Muting mid-sentence ends the utterance immediately on the hub — the
+      caption appears at once rather than 1200 ms later.
+- [ ] **Transcripts are not gibberish.** Say a known phrase; the console caption
+      matches. Chipmunk or slowed speech means the tap's sample rate is not
+      reaching `offerAudio` and the 16 kHz assumption in `hub.py` is being fed
+      the wrong thing.
+- [ ] **Echo cancellation is doing its job.** `setVoiceProcessingEnabled(true)`
+      is best-effort. Trigger a ping beep in a quiet room with nobody talking:
+      the beep must **not** open the voice gate and produce a caption of itself.
+- [ ] **ARKit is undisturbed.** Pose rate and tracking state over ten minutes
+      with voice live look the same as with voice off. An audio session that
+      moves the camera's route would show up here.
+- [ ] **A phone call interrupts and recovers.** Take a call mid-session, hang
+      up: capture resumes by itself, without leaving or rejoining.
+- [ ] Route changes: plug in and unplug wired headphones, connect and disconnect
+      AirPods while capturing. The tap rebuilds each time and voice keeps working.
+- [ ] Thirty minutes with voice live: memory flat, no growth in the transport's
+      in-flight count, thermal state no worse than with voice off.

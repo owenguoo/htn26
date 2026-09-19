@@ -37,6 +37,22 @@ export type StoredConfig = {
 
 export type Alignment = 'none' | 'seat' | 'marker';
 
+/**
+ * What the microphone control shows, mirroring `.mic` / `.mic.off` / `.mic.live`
+ * in `web/phone.html`.
+ *
+ * - `unavailable` — voice is off for this session (replay), or the operator
+ *   declined the microphone prompt. The control is struck through and inert.
+ * - `muted` — the operator turned it off. Nothing is captured at all.
+ * - `idle` — listening, gate closed. Nothing is leaving the phone.
+ * - `speaking` — the loudness gate is open and PCM is on the wire.
+ *
+ * JS never sees an audio sample. This string and a mute boolean are the entire
+ * voice surface on this side of the bridge; the capture, the gate and the
+ * framing are native, in `MicrophoneCapture.swift` and SwarmCore's `VoiceGate`.
+ */
+export type MicState = 'unavailable' | 'muted' | 'idle' | 'speaking';
+
 export type Diagnostics =
   | { joined: false }
   | {
@@ -61,6 +77,7 @@ export type Diagnostics =
       thermal: 'nominal' | 'fair' | 'serious' | 'critical';
       lastCommand?: string;
       lastError?: string;
+      micState: MicState;
     };
 
 export type WelcomePayload = { phoneId: string; index: number; color: string; phase: string };

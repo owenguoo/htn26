@@ -1,11 +1,19 @@
 import { Host } from '@expo/ui';
 import { Button, Form, Label, LabeledContent, Picker, Section, Text, Toggle } from '@expo/ui/swift-ui';
-import { font, foregroundStyle, monospacedDigit, pickerStyle, tag, textSelection } from '@expo/ui/swift-ui/modifiers';
+import {
+  disabled,
+  font,
+  foregroundStyle,
+  monospacedDigit,
+  pickerStyle,
+  tag,
+  textSelection,
+} from '@expo/ui/swift-ui/modifiers';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
-import SwarmSight, { type Diagnostics, type ThemePreference } from '../../modules/swarm-sight';
+import SwarmSight, { type Diagnostics, type MicState, type ThemePreference } from '../../modules/swarm-sight';
 import { setPreference, usePreferences } from '../preferences';
 import { colors, secondaryStyle, textStyles } from '../theme/tokens';
 
@@ -17,6 +25,27 @@ const Value = ({ children }: { children: string }) => (
   <Text modifiers={[foregroundStyle(secondaryStyle), monospacedDigit(), textSelection(true)]}>{children}</Text>
 );
 
+/**
+ * What each microphone state means, in the operator's terms. The distinction
+ * that matters on a demo floor is "off because I turned it off" versus "off
+ * because nothing is listening", and the web client's struck-through pill made
+ * exactly that distinction (`web/phone.html`, `.mic.off`).
+ */
+const MIC_STATUS: Record<MicState, string> = {
+  unavailable: 'no microphone',
+  muted: 'off',
+  idle: 'listening',
+  speaking: 'sending',
+};
+
+const MIC_FOOTER: Record<MicState, string> = {
+  unavailable:
+    'No microphone on this session — either it is a replay, or the prompt was declined. iOS Settings › SwarmSight can grant it.',
+  muted: 'Off. Nothing is captured while this is off, and the hub was told your last sentence had ended.',
+  idle: 'Listening. Nothing leaves the phone until you speak; quiet room audio is never sent.',
+  speaking: 'Sending. The operator sees what you say as a live caption. Used live, never stored.',
+};
+
 const CONNECTION_SYMBOL = {
   online: 'antenna.radiowaves.left.and.right',
   connecting: 'antenna.radiowaves.left.and.right',
@@ -27,13 +56,34 @@ const CONNECTION_SYMBOL = {
 export default function Settings() {
   const { showDebug, showMiniMap, theme } = usePreferences();
   const [state, setState] = useState<Diagnostics>({ joined: false });
+  // The native side is the truth and pushes it at 2 Hz, but 500 ms of a switch
+  // sitting where you did not leave it reads as a broken switch. `setMicrophoneMuted`
+  // returns the new state, so hold that until the next push agrees.
+  const [pendingMic, setPendingMic] = useState<MicState | null>(null);
+  const micState: MicState = pendingMic ?? (state.joined ? state.micState : 'unavailable');
 
   // The native side already pushes this at 2 Hz; no polling loop of our own.
   useEffect(() => {
-    void SwarmSight.getDiagnostics().then(setState);
-    const subscription = SwarmSight.addListener('onState', setState);
+    const apply = (next: Diagnostics) => {
+      setState(next);
+      setPendingMic((pending) => {
+        if (pending === null) return null;
+        const live: MicState = next.joined ? next.micState : 'unavailable';
+        // Only the muted bit belongs to the toggle. `idle` ↔ `speaking` is the
+        // loudness gate moving on its own, and holding a stale optimistic value
+        // over it would freeze the status line mid-sentence.
+        return (pending === 'muted') === (live === 'muted') ? null : pending;
+      });
+    };
+    void SwarmSight.getDiagnostics().then(apply);
+    const subscription = SwarmSight.addListener('onState', apply);
     return () => subscription.remove();
   }, []);
+
+  const setMicrophoneOn = async (on: boolean) => {
+    setPendingMic(on ? 'idle' : 'muted');
+    setPendingMic(await SwarmSight.setMicrophoneMuted(!on));
+  };
 
   const leave = async () => {
     await SwarmSight.leave();
@@ -71,6 +121,23 @@ export default function Settings() {
             isOn={showMiniMap}
             onIsOnChange={(on) => setPreference('showMiniMap', on)}
           />
+        </Section>
+
+        <Section
+          title="Voice"
+          footer={
+            <Text modifiers={[font({ textStyle: textStyles.footnote })]}>{MIC_FOOTER[micState]}</Text>
+          }>
+          <Toggle
+            label="Microphone"
+            systemImage={micState === 'unavailable' || micState === 'muted' ? 'mic.slash' : 'mic.fill'}
+            isOn={micState !== 'muted' && micState !== 'unavailable'}
+            onIsOnChange={(on) => void setMicrophoneOn(on)}
+            modifiers={micState === 'unavailable' ? [disabled(true)] : []}
+          />
+          <LabeledContent label="Status">
+            <Value>{MIC_STATUS[micState]}</Value>
+          </LabeledContent>
         </Section>
 
         {state.joined ? (
