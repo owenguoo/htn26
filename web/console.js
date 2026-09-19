@@ -113,12 +113,17 @@ function renderControls() {
     const f = phones.get(t.foundBy);
     const arrived = Object.values(t.responders).filter(Boolean).length;
     const total = Object.keys(t.responders).length;
-    s.textContent = `Found by #${f?.index ?? '?'} in ${(t.searchMs / 1000).toFixed(1)}s · ${arrived}/${total} responders arrived`;
+    const sure = t.confidence != null ? ` (${Math.round(t.confidence * 100)}% sure)` : '';
+    s.textContent = `Found by #${f?.index ?? '?'}${sure} in ${(t.searchMs / 1000).toFixed(1)}s · ${arrived}/${total} responders arrived`;
   } else {
-    s.textContent = `Hidden at (${t.x.toFixed(1)}, ${t.y.toFixed(1)}) · searching`;
+    const top = (st.sightings || []).reduce((a, b) => (b.confidence > (a?.confidence ?? 0) ? b : a), null);
+    s.textContent = `Hidden at (${t.x.toFixed(1)}, ${t.y.toFixed(1)}) · `
+      + (top && top.confidence >= 0.4 ? `possible sighting ${Math.round(top.confidence * 100)}%` : 'searching');
   }
   $('#respN').textContent = t ? t.respondersWanted : respondersPref;
   $('#lookingFor').textContent = st.lookingFor ? `Looking for: ${st.lookingFor}` : '';
+  const top = st.likely?.[0];
+  $('#likely').textContent = top ? `Most likely: ${top.sector} · ${Math.round(top.share * 100)}%` : '';
   const m = st.mission || {};
   $('#mcModel').textContent = m.ready ? m.model : (m.why || '');
   renderAutonomy(m);
@@ -137,6 +142,7 @@ function phoneStatus(p) {
   else if (p.stale) out.push(['Stale', '']);
   if (p.pitch != null && Math.abs(p.pitch) > 65) out.push([p.pitch < 0 ? 'Floor' : 'Ceiling', '']);
   if (p.hidden) out.push(['Hidden', '']);
+  if (p.speaking) out.push(['🎙 Speaking', 'w']);
   if (p.oldPage && !p.sim && p.connected) out.push(['Old page · reload', 'r']);
   return out;
 }
@@ -163,7 +169,8 @@ function renderPhones() {
     tr.classList.toggle('off', !p.connected);
     tr.querySelector('.thumb').classList.toggle('hidden', p.hidden);
     tr.querySelector('.idx').textContent = p.index;
-    tr.querySelector('.name').innerHTML = `${escapeHtml(p.name || 'Phone')} <span class="faint">${escapeHtml(p.device || '')}</span>`;
+    tr.querySelector('.name').innerHTML = `${escapeHtml(p.name || 'Phone')} <span class="faint">${escapeHtml(p.device || '')}</span>`
+      + (p.caption ? `<div class="cap">“${escapeHtml(p.caption.text)}”</div>` : '');
     const pose = p.pose;
     tr.querySelector('.pos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : '–';
     tr.querySelector('.hd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
@@ -215,6 +222,9 @@ function renderViewer() {
   const p = phones.get(viewing);
   if (!p) { closeViewer(); return; }
   $('#vNum').textContent = `#${p.index}`;
+  const cap = $('#vCap');
+  cap.textContent = p.caption ? p.caption.text : p.speaking ? '…' : '';
+  cap.classList.toggle('on', !!(p.caption || p.speaking));
   $('#vName').textContent = p.name || 'Phone';
   $('#vDevice').textContent = p.device || '';
   $('#vBadges').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
@@ -514,14 +524,15 @@ function draw() {
   if (!view || !st) return;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
 
-  // searched floor: faint white
+  // probability heatmap: brighter = the candidate is more likely here (relative to the hottest cell)
   const cov = st.coverage;
-  if (cov) {
+  if (cov?.heat) {
     const s = cov.cell * view.scale;
-    ctx.fillStyle = 'rgba(255,255,255,0.13)';
     for (let r = 0; r < cov.rows; r++) {
       for (let c = 0; c < cov.cols; c++) {
-        if (cov.cells.charCodeAt(r * cov.cols + c) !== 49) continue;
+        const level = parseInt(cov.heat[r * cov.cols + c], 36) / 35;
+        if (level < 0.02) continue;
+        ctx.fillStyle = `rgba(255,255,255,${(0.04 + 0.4 * level * level).toFixed(3)})`;
         const [px, py] = view.toPx(cov.x0 + c * cov.cell, r * cov.cell);
         ctx.fillRect(px, py, s + 0.5, s + 0.5);
       }
@@ -555,6 +566,7 @@ function draw() {
     drawCone(ctx, view, p.pose.x, p.pose.y, p.pose.heading, room.cameraFovDeg, room.coneLength,
       p.connected ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.04)');
   }
+  drawSightings();
   drawCandidate();
   drawPings();
   for (const p of list) {
@@ -591,11 +603,41 @@ function drawPings() {
   }
 }
 
+function drawSightings() {
+  if (st.target?.foundBy) return;
+  for (const sg of st.sightings || []) {
+    if (sg.confidence < 0.4) continue;
+    const [x, y] = view.toPx(sg.x, sg.y);
+    const k = (performance.now() / 700) % 1;
+    ctx.save();
+    ctx.strokeStyle = '#ff4d4d';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.lineDashOffset = -k * 8;
+    ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ff4d4d';
+    ctx.font = '500 11px "Geist Mono", ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${Math.round(sg.confidence * 100)}% ?`, x, y - 22);
+    ctx.restore();
+  }
+}
+
 function drawCandidate() {
   const t = st.target;
   if (!t) return;
-  const pos = dragPos || t;
-  const [cx, cy] = view.toPx(pos.x, pos.y);
+  // the mock candidate (rehearsals): where it really is, draggable
+  if (t.x != null || dragPos) {
+    const [mx, my] = view.toPx((dragPos || t).x, (dragPos || t).y);
+    ctx.strokeStyle = t.foundBy ? 'rgba(237,237,237,0.4)' : '#ededed';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(mx, my, 7, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(mx - 3, my); ctx.lineTo(mx + 3, my); ctx.moveTo(mx, my - 3); ctx.lineTo(mx, my + 3); ctx.stroke();
+  }
+  if (!t.foundBy || !t.fix) return;
+  const [cx, cy] = view.toPx(t.fix[0], t.fix[1]); // where the confirmed sighting is
   for (const [pid, arrived] of Object.entries(t.responders || {})) {
     const p = phones.get(pid);
     if (!p?.pose) continue;
@@ -606,19 +648,12 @@ function drawCandidate() {
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(cx, cy); ctx.stroke();
     ctx.setLineDash([]);
   }
-  if (t.foundBy) {
-    const k = (performance.now() / 1100) % 1;
-    ctx.strokeStyle = `rgba(255,77,77,${1 - k})`;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(cx, cy, 7 + k * 26, 0, Math.PI * 2); ctx.stroke();
-    ctx.fillStyle = '#ff4d4d';
-    ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
-  } else {
-    ctx.strokeStyle = '#ededed';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy); ctx.moveTo(cx, cy - 3); ctx.lineTo(cx, cy + 3); ctx.stroke();
-  }
+  const k = (performance.now() / 1100) % 1;
+  ctx.strokeStyle = `rgba(255,77,77,${1 - k})`;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(cx, cy, 7 + k * 26, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = '#ff4d4d';
+  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
 }
 
 // drag the candidate
@@ -628,7 +663,7 @@ function roomPoint(e) {
   return { x: Math.max(-room.width / 2, Math.min(room.width / 2, x)), y: Math.max(0, Math.min(room.depth, y)) };
 }
 function nearCandidate(e) {
-  if (!st?.target || !view) return false;
+  if (!st?.target || st.target.x == null || !view) return false;
   const r = canvas.getBoundingClientRect();
   const [cx, cy] = view.toPx(st.target.x, st.target.y);
   return Math.hypot(cx - (e.clientX - r.left), cy - (e.clientY - r.top)) <= 14;

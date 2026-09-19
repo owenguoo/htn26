@@ -138,6 +138,16 @@ Rules:
 - send_phones_to_sector and look_at only help for areas within a phone's camera reach (about 5 m from where
   it stands). For sectors nobody can see from where they stand, use move_to to walk a nearby phone there.
 - You do not know where the candidate is. Never guess its location.
+- React to SPEECH. If someone asks for help ("I need help", "over here", "can someone come"), send the
+  1-2 nearest available phones to them with move_to their position and message the person that help is
+  coming. If someone reports seeing something ("I think I see someone"), treat their facing direction as a
+  lead: send the nearest available phone to look_at that area. Ignore chatter that isn't a request or report,
+  and never act on the same thing someone said twice.
+- If there is a POSSIBLE SIGHTING, double-checking it comes first: send the nearest available phone that
+  hasn't seen it (look_at if it's within 5 m, move_to otherwise). A second look confirms or rules it out.
+- Otherwise go after the most likely sectors (highest share of probability), not just unsearched ones.
+- Once the candidate is FOUND it is confirmed: never send anyone to check or confirm it again. Only
+  help the find team if a responder is stuck; otherwise do nothing.
 - Typical good moves: walk a nearby idle phone to a sector nobody can reach; tell a phone pointing at the
   floor to hold it up; point idle phones at unsearched areas; ping an unreached area; after a find, nudge
   late responders.
@@ -193,6 +203,7 @@ class MissionControl:
         self.coverage_history: deque[tuple[float, float]] = deque(maxlen=120)  # (t, searched fraction)
         self.calls = 0
         self.tokens = 0
+        self.speech_shown: list[tuple[str, dict]] = []  # (phone id, caption) in the review being thought about
 
 
     def status(self) -> dict:
@@ -345,12 +356,14 @@ class MissionControl:
         raw = next((r for r in recs if r["actions"]), None)
         self.last_review_acted = raw is not None
         if not raw or not self.autonomy or self.hub.target.complete():
+            self._settle_speech(None)
             return  # nothing to do, paused, or the mission finished while this review was thinking
         a = raw["actions"][0]
         why_not = self._blocked(a)
         if why_not:  # the model ignored a rule; skip this review rather than churn phones
             self.hub.planner.note(f"skipped “{raw['title'][:40]}”: {why_not}")
             self.last_review_acted = False  # nothing happened, so don't re-review an unchanged room
+            self._settle_speech(None)
             return
         rec = {"id": next(self.rec_ids), "t": time.time(), "title": raw["title"][:80],
                "reason": raw["reason"][:160], "severity": raw["severity"],
@@ -362,6 +375,28 @@ class MissionControl:
             rec["results"].append(f"failed: {e}")
         self.recs.append(rec)
         self.hub.planner.note(f"⚡ {rec['title']}")
+        self._settle_speech(a if rec["status"] == "executed" else None)
+
+    def _settle_speech(self, action: dict | None) -> None:
+        """After a review: speech it acted on is handled; speech seen twice without action was chatter."""
+        for pid, cap in self.speech_shown:
+            cap["reviews"] = cap.get("reviews", 0) + 1
+            if (action and self._addresses(action, pid)) or cap["reviews"] >= 2:
+                cap["handled"] = True
+        self.speech_shown = []
+
+    def _addresses(self, a: dict, pid: str) -> bool:
+        """Does this action respond to what this phone said: sent to them, or aimed at where they are?"""
+        phone = self.hub.phones.get(pid)
+        if not phone:
+            return False
+        args = a["args"]
+        if phone.index in (args.get("phones") or []):
+            return True
+        pose = phone.pose(now_ms())
+        if pose and "x" in args and "y" in args:
+            return math.hypot(float(args["x"]) - pose["x"], float(args["y"]) - pose["y"]) <= 3
+        return False
 
     def busy_phones(self) -> dict[int, str]:
         """Phone number → task, for phones that haven't finished what they were told to do."""
@@ -456,6 +491,39 @@ class MissionControl:
                     pose = near.pose(now)
                     d = math.hypot(pose["x"] - cx, pose["y"] - cy)
                     out.append(f"  - {s} center ({cx:g}, {cy:g}): nearest free phone #{near.index}, {d:.1f} m away")
+        # what people said recently (they may be asking for help or reporting something).
+        # Each caption is shown until a review acts on it, or for 2 reviews at most, so a request
+        # gets answered once rather than on every review while it's still recent.
+        self.speech_shown = []
+        for p in sorted(live, key=lambda p: p.index):
+            for cap in p.captions:
+                age = (now - cap["t"]) / 1000
+                if age <= 30 and not cap.get("handled"):
+                    self.speech_shown.append((p.id, cap))
+                    pose = p.pose(now)
+                    where = f" at ({pose['x']:.1f}, {pose['y']:.1f})" if pose else ""
+                    out.append(f"- SPEECH: #{p.index}{where} said {round(age)}s ago: “{cap['text']}”")
+        # where the candidate probably is, and sightings that need a second look
+        likely = hub.likely_sectors(4)
+        out.append("- most likely sectors (share of probability): "
+                   + ", ".join(f"{s['sector']} {round(s['share'] * 100)}%" for s in likely))
+        if not hub.target.found_by:
+            for sg in sorted(hub.sightings.items, key=hub.sightings.confidence, reverse=True)[:3]:
+                conf = hub.sightings.confidence(sg)
+                if conf < 0.4:
+                    continue
+                seen_by = ", ".join(f"#{hub.phones[pid].index}" for pid in sg["phones"] if pid in hub.phones)
+                near = min((p for p in live if p.pose(now) and p.index not in self.busy_phones()
+                            and p.id not in sg["phones"]),
+                           key=lambda p: math.hypot(p.pose(now)["x"] - sg["x"], p.pose(now)["y"] - sg["y"]),
+                           default=None)
+                hint = ""
+                if near:
+                    pose = near.pose(now)
+                    d = math.hypot(pose["x"] - sg["x"], pose["y"] - sg["y"])
+                    hint = f"; nearest available phone that hasn't seen it: #{near.index}, {d:.1f} m away"
+                out.append(f"- POSSIBLE SIGHTING at ({sg['x']:.1f}, {sg['y']:.1f}), {round(conf * 100)}% confident, "
+                           f"seen by {seen_by}{hint}. A second phone confirming it raises the confidence.")
         # coverage progress
         hist = self.coverage_history
         if len(hist) > 20:
@@ -503,10 +571,12 @@ class MissionControl:
         if name == "place_candidate":
             x = max(-self.room["width"] / 2, min(self.room["width"] / 2, float(a["x"])))
             y = max(0.0, min(self.room["depth"], float(a["y"])))
-            hub.target.place(x, y)
+            if hub.target.place(x, y):
+                hub.new_search()
             return f"candidate at ({x:.1f}, {y:.1f})"
         if name == "remove_candidate":
             hub.target.remove()
+            hub.new_search()
             return "candidate removed"
         if name == "set_responders":
             hub.target.responders_wanted = max(0, min(10, int(a["count"])))
@@ -540,6 +610,7 @@ class MissionControl:
             return "looking-for updated"
         if name == "reset_coverage":
             hub.coverage.reset()
+            hub.sightings.reset()
             hub.planner.reset()
             return "coverage reset"
         raise ValueError(f"unknown tool {name}")
@@ -598,14 +669,19 @@ class MissionControl:
                 tags.append("arrived" if t.responders[p.id]["arrived"] else "responding")
             name = f" {p.name}" if p.name else ""
             lines.append(f"  #{p.index}{name} {where}" + (f" [{', '.join(tags)}]" if tags else ""))
+            recent = [c for c in p.captions if now - c["t"] < 60_000]
+            if recent:
+                lines.append(f"    last said ({round((now - recent[-1]['t']) / 1000)}s ago): “{recent[-1]['text']}”")
 
-        if t.pos is None:
-            lines.append("candidate: none")
+        if t.found_by:
+            finder = hub.phones.get(t.found_by)
+            lines.append(f"candidate: FOUND at ({t.fix[0]:.1f}, {t.fix[1]:.1f}) by #{finder.index if finder else '?'} "
+                         f"({round((t.confidence or 0) * 100)}% sure)")
+        elif t.pos is None:
+            lines.append("candidate: not placed (real detections only)" if reveal_candidate
+                         else "candidate: location unknown (not found yet)")
         elif not reveal_candidate and not t.found_by:
             lines.append("candidate: somewhere in the room, location unknown (not found yet)")
-        elif t.found_by:
-            finder = hub.phones.get(t.found_by)
-            lines.append(f"candidate: found at ({t.pos[0]:.1f}, {t.pos[1]:.1f}) by #{finder.index if finder else '?'}")
         else:
             lines.append(f"candidate: hidden at ({t.pos[0]:.1f}, {t.pos[1]:.1f}), not found yet; "
                          f"{t.responders_wanted} responders will be sent")

@@ -63,6 +63,10 @@ $('#joinBtn').addEventListener('click', async () => {
     ? DeviceOrientationEvent.requestPermission().catch(() => 'denied')
     : Promise.resolve('granted');
   startGps();
+  // microphone separately, so declining it doesn't cost the camera
+  const micPerm = navigator.mediaDevices?.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false,
+  }).catch(() => null) ?? Promise.resolve(null);
   const camPerm = FAKE || SLAM ? Promise.resolve(null) : navigator.mediaDevices?.getUserMedia({
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false,
@@ -70,7 +74,8 @@ $('#joinBtn').addEventListener('click', async () => {
 
   try {
     if (!FAKE && !SLAM && !camPerm) throw new Error('Camera API unavailable. This page must be opened over HTTPS.');
-    const [ori, stream] = await Promise.all([oriPerm, camPerm]);
+    const [ori, stream, mic] = await Promise.all([oriPerm, camPerm, micPerm]);
+    state.mic = mic;
     if (ori !== 'granted') console.warn('orientation permission:', ori);
     state.stream = stream;
     await startLive();
@@ -108,6 +113,7 @@ async function startLive() {
   window.addEventListener('deviceorientation', onOrientation);
   window.addEventListener('deviceorientationabsolute', onAbsoluteOrientation); // Android: north-referenced
   keepAwake();
+  startVoice();
   state.room = await loadRoom();
   setupSeatMap();
   connect();
@@ -856,6 +862,66 @@ function screenToFrame(x, y, W, H) {
   return [(x - dx) / (v.videoWidth * s), (y - dy) / (v.videoHeight * s)];
 }
 
+// ---------------------------------------------------------------- voice
+// Only sends audio while the person is talking (a simple loudness gate with a short pre-roll and
+// hang time). The hub transcribes each utterance into a caption the console and Mission Control see.
+const VOICE_RATE = 16000;
+const VOICE_THRESHOLD = 0.02;  // RMS loudness that counts as talking
+const VOICE_HANG_MS = 600;     // keep sending this long after it goes quiet (ends the utterance)
+const voice = { muted: false, talking: false, lastLoud: 0, preroll: [], seq: 0 };
+
+function startVoice() {
+  if (!state.mic || !state.audio) { $('#mic').classList.add('off'); $('#mic').title = 'No microphone'; return; }
+  const ctx = state.audio;
+  const src = ctx.createMediaStreamSource(state.mic);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  const sink = ctx.createGain();
+  sink.gain.value = 0; // the processor must be connected to run, but we don't want to hear ourselves
+  src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+  const step = ctx.sampleRate / VOICE_RATE;
+  proc.onaudioprocess = (e) => {
+    const input = e.inputBuffer.getChannelData(0);
+    const out = new Int16Array(Math.floor(input.length / step));
+    let sum = 0;
+    for (let i = 0; i < out.length; i++) {
+      const v = input[Math.floor(i * step)];
+      sum += v * v;
+      out[i] = Math.max(-1, Math.min(1, v)) * 0x7fff;
+    }
+    const now = Date.now();
+    const loud = Math.sqrt(sum / Math.max(out.length, 1)) > VOICE_THRESHOLD;
+    if (voice.muted) return;
+    if (loud) voice.lastLoud = now;
+    const talking = now - voice.lastLoud < VOICE_HANG_MS;
+    if (talking && !voice.talking) {  // start of an utterance: include the moment just before
+      for (const chunk of voice.preroll) sendVoice(chunk);
+      voice.preroll = [];
+    }
+    if (talking) sendVoice(out);
+    else {
+      if (voice.talking) sendJson({ type: 'audio_end' });
+      voice.preroll = [...voice.preroll, out].slice(-1); // ~0.25 s
+    }
+    voice.talking = talking;
+  };
+  state.voiceNode = proc; // keep a reference so it isn't garbage-collected
+}
+
+function sendVoice(pcm) {
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN || !state.connected) return;
+  ws.send(pack({ type: 'audio', seq: voice.seq++, rate: VOICE_RATE, tCapture: Date.now() }, pcm.buffer));
+}
+
+$('#mic').addEventListener('click', () => {
+  if (!state.mic) return;
+  voice.muted = !voice.muted;
+  if (voice.muted && voice.talking) sendJson({ type: 'audio_end' });
+  voice.talking = false;
+  $('#mic').classList.toggle('off', voice.muted);
+  $('#mic').title = voice.muted ? 'Muted: tap to unmute' : 'Tap to mute';
+});
+
 // ---------------------------------------------------------------- HUD mirror
 // While an operator has this phone expanded in the console, send a description of what's on
 // screen (compass, banners, AR markers, boxes) so the console can draw the same HUD over the feed.
@@ -994,6 +1060,7 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------- ui loop
 let lastUi = 0;
 function tickUi(t) {
+  $('#mic').classList.toggle('live', voice.talking && !voice.muted);
   drawCompass();
   updateGuideBanner();
   drawAR();

@@ -14,6 +14,7 @@ import math
 import os
 import re
 import socket
+import struct
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .coverage import Coverage
 from .planner import Planner
+from .sightings import FOUND_CONF, POSSIBLE_CONF, MockDetector, Sightings
 from .target import Target
 from .protocol import now_ms, pack, unpack
 
@@ -51,6 +53,12 @@ LOOK_SECONDS = 20        # default time an operator "look" direction holds a pho
 GO_SECONDS = 90          # default time a "walk to" order stays active
 ARRIVE_M = 1.5           # a phone this close to a walk-to spot has arrived
 FOCUS_FPS = 15           # a phone expanded in a console captures and streams this fast
+VOICE_MODEL = os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+VOICE_RATE = 16000       # phones send 16 kHz mono 16-bit PCM
+VOICE_MIN_S = 0.4        # shorter utterances are dropped (coughs, clicks)
+VOICE_MAX_S = 12         # longer ones are cut and transcribed in pieces
+VOICE_QUIET_MS = 1200    # no audio for this long ends an utterance even without audio_end
+CAPTION_SHOW_MS = 8000   # how long a caption stays on screen
 FOCUS_INTERVAL_MS = 1000 / FOCUS_FPS
 
 
@@ -76,6 +84,9 @@ class Phone:
     hidden: bool = False             # operator hid this feed from the projector
     hud: dict | None = None          # what's on the phone's screen, sent while it's expanded in a console
     build: str = ""                  # version of the page the phone is running (see build_id)
+    audio: bytearray = field(default_factory=bytearray)  # current utterance (PCM), until transcribed
+    audio_at: float = 0              # when the last audio chunk arrived
+    captions: deque = field(default_factory=lambda: deque(maxlen=6))  # {"text", "t"}: what they said
     searched_cells: int = 0          # coverage cells this phone was first to look at
     tilted_since: float | None = None  # when it started pointing at the floor/ceiling
     # latest frame (latest wins, never queued)
@@ -124,6 +135,9 @@ class Phone:
             "hidden": self.hidden,
             "oldPage": self.build != build_id(),
             "hud": self.hud if self.hud and now - self.hud["t"] < 2000 else None,
+            "speaking": now - self.audio_at < 700,
+            "caption": (self.captions[-1] | {"ageMs": round(now - self.captions[-1]["t"])})
+                       if self.captions and now - self.captions[-1]["t"] < CAPTION_SHOW_MS else None,
             "gps": None if not self.gps else {**self.gps, "ageMs": round(now - self.gps["t"])},
         }
 
@@ -145,6 +159,8 @@ class Hub:
         self.coverage = Coverage(ROOM)
         self.planner = Planner(ROOM, self.coverage)
         self.target = Target(ROOM, self.planner.note)
+        self.sightings = Sightings(ROOM)        # detections placed in the room and merged
+        self.mock_detector = MockDetector(ROOM)  # reports the operator's hidden candidate in rehearsals
         # "search" by default so the hub works without an operator; the show starts at "lobby"
         self.phase = "search"
         self.phase_started = now_ms()
@@ -207,6 +223,12 @@ class Hub:
         except Exception:
             return
         now = now_ms()
+        if header.get("type") == "audio":  # a chunk of speech, not a video frame
+            phone.audio += jpeg
+            phone.audio_at = now
+            if len(phone.audio) >= VOICE_MAX_S * VOICE_RATE * 2:
+                self.end_utterance(phone)
+            return
         phone.arrivals.append((now, len(buf)))
         t_phone = header.get("tCapture")
         if t_phone is not None and phone.clock_offset is not None:
@@ -233,6 +255,8 @@ class Hub:
             # phone-side world tracking (8th Wall): already in room meters
             self._apply_orientation(phone, msg)
             self.set_external_pose({**msg, "phoneId": phone.id, "source": "slam"})
+        elif kind == "audio_end":
+            self.end_utterance(phone)
         elif kind == "hud":
             phone.hud = {k: v for k, v in msg.items() if k != "type"} | {"t": now_ms()}
         elif kind == "debug":
@@ -301,13 +325,20 @@ class Hub:
             if searching:
                 for pid, n in self.coverage.update(viewers).items():
                     self.phones[pid].searched_cells += n
+                if self.target.pos and not self.target.found_by:  # rehearsal: mock model sees the mock candidate
+                    for pid, (x, y, heading, pitch) in viewers.items():
+                        boxes = self.mock_detector.detect(x, y, heading, pitch, self.target.pos)
+                        if boxes:
+                            await self.ingest_detections(self.phones[pid], boxes)
             # responders and phones with an operator "look" direction are not the planner's to steer
+            sighting_cmds = self.check_sightings(viewers, now) if searching else []
             busy = self.target.busy() | set(self.directives)
             cmds = self.planner.tick({k: v for k, v in viewers.items() if k not in busy}, now)
             cmds += self.target.tick(viewers if searching else {}, now)
             for pid in self.target.busy() & set(self.directives):
                 del self.directives[pid]  # joining the find team replaces any earlier walk/look order
             cmds += self.directive_tick(now)
+            cmds += sighting_cmds
             if cmds:
                 await asyncio.gather(*(self.phones[pid].send({"type": "command", **cmd})
                                        for pid, cmd in cmds if pid in self.phones))
@@ -315,6 +346,9 @@ class Hub:
                 await self.set_phase("found")
                 if self.mission:
                     self.mission.trigger()  # a find is exactly when the autonomy layer should look
+            for p in self.phones.values():
+                if p.audio and now - p.audio_at > VOICE_QUIET_MS:
+                    self.end_utterance(p)
             done = self.target.complete()
             if done and not self.mission_complete:  # the whole team is on target: stop searching
                 self.planner.enabled = False
@@ -323,6 +357,70 @@ class Hub:
                                   + (f", released {', '.join(f'#{n}' for n in released)}" if released else ""))
             self.mission_complete = done
             await asyncio.sleep(1 / hz)
+
+    async def ingest_detections(self, phone: Phone, boxes: list[dict]) -> None:
+        """Detections for one phone's frame, from the real model (POST /api/detections) or the mock:
+        draw them on that phone, and while searching, turn them into sightings and heatmap evidence."""
+        await phone.send({"type": "command", "cmd": "detections", "boxes": boxes, "ttlMs": 1500})
+        if self.phase not in SEARCH_PHASES or self.target.found_by:
+            return
+        pose = phone.pose(now_ms())
+        if not pose:
+            return
+        for x, y, score in self.sightings.ingest(phone.id, pose, boxes, now_ms() / 1000):
+            self.coverage.boost(x, y, score)
+
+    def end_utterance(self, phone: Phone) -> None:
+        """Someone stopped talking: transcribe what they said (in the background)."""
+        pcm, phone.audio = bytes(phone.audio), bytearray()
+        if len(pcm) < VOICE_MIN_S * VOICE_RATE * 2 or not (self.mission and self.mission.client):
+            return
+        asyncio.create_task(self.transcribe(phone, pcm))
+
+    async def transcribe(self, phone: Phone, pcm: bytes) -> None:
+        wav = _wav(pcm, VOICE_RATE)
+        try:
+            r = await self.mission.client.audio.transcriptions.create(
+                model=VOICE_MODEL, file=("speech.wav", wav, "audio/wav"), language="en",
+                prompt="People searching a room together, talking to each other and to the operator.")
+        except Exception as e:  # speech is best-effort: never let it take anything else down
+            self.planner.note(f"transcription failed: {str(e)[:60]}", phone.id)
+            return
+        text = (r.text or "").strip()
+        if len(text) < 2:
+            return
+        phone.captions.append({"text": text[:200], "t": now_ms()})
+        self.planner.note(f"🎙 “{text[:120]}”", phone.id)
+        if self.mission:
+            self.mission.trigger()  # speech can be a request ("I need help here"): look right away
+
+    def check_sightings(self, viewers: dict, now: float) -> list[tuple[str, dict]]:
+        """Announce new possible sightings; confirm the find once one is confident enough."""
+        if self.target.found_by:
+            return []
+        for s in self.sightings.items:
+            conf = self.sightings.confidence(s)
+            if conf >= POSSIBLE_CONF and not s["announced"]:
+                s["announced"] = True
+                first = self.phones.get(next(iter(s["phones"])))
+                self.planner.note(f"Possible sighting ({round(conf * 100)}%) near ({s['x']:.1f}, {s['y']:.1f})",
+                                  first.id if first else None)
+                if self.mission:
+                    self.mission.trigger()  # a sighting to double-check is exactly what autonomy is for
+        best = self.sightings.best()
+        if not best or self.sightings.confidence(best) < FOUND_CONF:
+            return []
+        finder = max(best["phones"], key=best["phones"].get)
+        return self.target.confirm(finder, best["x"], best["y"], self.sightings.confidence(best), viewers, now)
+
+    def likely_sectors(self, n: int = 3) -> list[dict]:
+        """Where the candidate most probably is: sectors by share of the probability map."""
+        prob = self.coverage.prob
+        mass = {name: sum(prob[i] for i, _, _ in cells) for name, cells in self.planner.sector_cells.items()}
+        return [{"sector": s, "share": round(m, 3)} for s, m in sorted(mass.items(), key=lambda kv: -kv[1])[:n]]
+
+    def new_search(self) -> None:
+        self.sightings.reset()
 
     async def set_phase(self, phase: str) -> None:
         """Re-selecting the current phase re-applies its effects (e.g. turns the planner back on)."""
@@ -494,7 +592,7 @@ class Hub:
             cov = self.coverage.snapshot()
             cell_m2 = self.coverage.cell ** 2
             ranked = sorted(live, key=lambda p: -p.searched_cells)
-            found = self.target.pos if self.target.found_by else None
+            found = self.target.fix if self.target.found_by else None
             pings = self.active_pings(now)
             base = {
                 "type": "world", "phase": self.phase, "phones": others,
@@ -525,12 +623,20 @@ class Hub:
                 "target": self.target.snapshot(now),
                 "phase": self.phase, "phaseStartedAt": self.phase_started,
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
+                "sightings": self.sightings.snapshot(), "likely": self.likely_sectors(),
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
                 "mission": self.mission.status() if self.mission else {"ready": False, "why": "not started"}}
 
     async def command(self, target: str, cmd: dict) -> None:
         phones = self.phones.values() if target == "all" else [self.phones.get(target)]
         await asyncio.gather(*(p.send({"type": "command", **cmd}) for p in phones if p))
+
+
+def _wav(pcm: bytes, rate: int) -> bytes:
+    """Wrap 16-bit mono PCM in a WAV header."""
+    return (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+            + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+            + b"data" + struct.pack("<I", len(pcm)) + pcm)
 
 
 def _device(ua: str) -> str:
@@ -662,14 +768,16 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
             elif msg.get("type") == "reset_coverage":
                 hub.coverage.reset()
                 hub.planner.reset()
+                hub.sightings.reset()
             elif msg.get("type") == "planner":
                 hub.planner.enabled = bool(msg.get("enabled"))
             elif msg.get("type") == "target":
                 if msg.get("remove"):
                     hub.target.remove()
+                    hub.new_search()
                 else:
-                    if "x" in msg and "y" in msg:
-                        hub.target.place(float(msg["x"]), float(msg["y"]))
+                    if "x" in msg and "y" in msg and hub.target.place(float(msg["x"]), float(msg["y"])):
+                        hub.new_search()
                     if "responders" in msg:
                         hub.target.responders_wanted = max(0, int(msg["responders"]))
             elif msg.get("type") == "phase":
@@ -730,8 +838,11 @@ def post_pose(body: dict) -> dict:
 
 @app.post("/api/detections")
 async def post_detections(body: dict) -> dict:
-    """From the detection service: boxes to draw on one phone's camera view.
-    {phoneId, boxes: [{x, y, w, h, label?, score?}]} with x/y/w/h as 0..1 fractions of the frame."""
+    """From the detection model, for one phone's frame:
+    {phoneId, boxes: [{x, y, w, h, label?, score}]} with x/y/w/h as 0..1 fractions of the frame and
+    score as the model's confidence (0..1) that this is the search target. Boxes are drawn on the
+    phone; while searching they also become sightings (>= 0.4 possible, >= 0.8 found) and nudge
+    the probability heatmap (>= 0.1)."""
     phone = hub.phones.get(str(body.get("phoneId")))
     if not phone:
         return {"ok": False, "error": "unknown phoneId"}
@@ -739,7 +850,7 @@ async def post_detections(body: dict) -> dict:
         {k: b[k] for k in ("x", "y", "w", "h", "label", "score") if k in b}
         for b in body.get("boxes", []) if all(k in b for k in ("x", "y", "w", "h"))
     ][:20]
-    await phone.send({"type": "command", "cmd": "detections", "boxes": boxes, "ttlMs": 1500})
+    await hub.ingest_detections(phone, boxes)
     return {"ok": True, "boxes": len(boxes)}
 
 
