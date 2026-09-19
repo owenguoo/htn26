@@ -500,8 +500,8 @@ public final class URLSessionWebSocketChannel: WebSocketChannel {
     /// down a few milliseconds later, and the symptom is not "you forgot to
     /// retain something" — it is `NSURLErrorNetworkConnectionLost` (-1005) on a
     /// socket the server never saw, which reads exactly like a hub that is down
-    /// or a Wi-Fi that dropped. The phone then sits on "Lost the hub. Check the
-    /// Wi-Fi" while the hub is healthy and answering everyone else.
+    /// or a Wi-Fi that dropped. The phone then sits on "Reconnecting…" while the
+    /// hub is healthy and answering everyone else.
     private let session: URLSession
 
     public init(session: URLSession, task: URLSessionWebSocketTask) {
@@ -567,7 +567,21 @@ public struct URLSessionWebSocketChannelFactory: WebSocketChannelFactory {
     }
 
     public func connect(to url: URL) async throws -> any WebSocketChannel {
-        let session = URLSession(configuration: configuration)
+        // `expo-dev-launcher` swizzles `URLSessionConfiguration.default` to
+        // insert its CDP network inspector's `URLProtocol` at index 0, and that
+        // protocol's `canInit` claims *every* http/https request. A WebSocket
+        // upgrade handed to it is proxied through a plain data task, which
+        // cannot upgrade: the handshake reaches 101 and the task then dies with
+        // -1005 on a socket the hub saw open and is happily waiting on.
+        //
+        // This is why the dev client could never hold a socket while the plain
+        // Xcode shell and the macOS CLI both connected to the same hub in the
+        // same minute. Expo works around its own interceptor the same way
+        // (`expo-dev-launcher`'s `Avatar.swift`). Copy first: the swizzled
+        // getter hands back a shared instance and we must not mutate it.
+        let sessionConfiguration = (configuration.copy() as? URLSessionConfiguration) ?? configuration
+        sessionConfiguration.protocolClasses = []
+        let session = URLSession(configuration: sessionConfiguration)
         let channel = URLSessionWebSocketChannel(session: session, task: session.webSocketTask(with: url))
         // Not connected until the handshake lands. Returning before that makes
         // every downstream connection indicator a lie.
