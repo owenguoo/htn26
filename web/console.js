@@ -139,7 +139,7 @@ function renderControls() {
       : sc.error ? `Error: ${sc.error}`
       : !sc.enabled ? 'VGGT on the GPU, from phone frames'
       : sc.paused ? `Paused in the lobby · ${sc.keyframes} views kept`
-      : `${sc.keyframes}/${sc.maxKeyframes} archived · batch ≤${sc.maxBatch} · ${sc.newSince} pending`
+      : `${sc.sections || 0} retained sections · ${sc.keyframes}/${sc.maxKeyframes} views · batch ≤${sc.maxBatch} · ${sc.newSince} pending`
         + (l ? ` · v${l.version} in ${l.seconds}s` : '');
     $('#scanSelection').textContent = sc.enabled ? Object.values(sc.selectionHints || {})
       .map(h => `${h.name}: ${h.message}`).join(' · ') : '';

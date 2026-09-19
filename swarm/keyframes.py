@@ -49,6 +49,12 @@ class VisualSelector:
         sharp = float(cv2.Laplacian(image, cv2.CV_32F).var())
         if sharp < 35:
             return None, 'Hold still for a sharper frame'
+        # A sharp edge in one corner must not rescue an otherwise blurred frame.
+        tiles = [tile for row in np.array_split(image, 3, axis=0)
+                 for tile in np.array_split(row, 3, axis=1)]
+        sharp_tiles = sum(float(cv2.Laplacian(tile, cv2.CV_32F).var()) >= 25 for tile in tiles)
+        if sharp_tiles < 4:
+            return None, 'Too little clear detail across the image'
         kp, desc = self.features.detectAndCompute(image, None)
         if desc is None or len(kp) < 40:
             return None, 'Aim at textured room details'
@@ -121,7 +127,7 @@ class VisualSelector:
                     self.record(candidate, 'Duplicate')
                 else:
                     pool.append(candidate | {'_visual': visual, '_stagedAt': now})
-        pool.sort(key=lambda c: c['t'])
+        pool.sort(key=lambda c: (int(c['t'] // 500), -c['_visual']['sharp']))
         while pool:
             remaining = []
             progress = False

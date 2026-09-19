@@ -226,6 +226,53 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     }, undefined, () => { if (!scanObj) scanStatus = 'failed'; });
   }
 
+  async function loadSections(live) {
+    const version = live.version;
+    const sections = live.sections;
+    const old = new Map((scanObj?.children || []).filter(o => o.userData.sectionURL)
+      .map(o => [o.userData.sectionURL, o]));
+    const results = await Promise.allSettled(sections.map(async section => {
+      if (old.has(section.url)) return old.get(section.url);
+      const gltf = await loader.loadAsync(section.url);
+      const obj = gltf.scene;
+      obj.userData.sectionURL = section.url;
+      obj.traverse(o => {
+        if (!o.isMesh && !o.isPoints) return;
+        o.material?.dispose?.();
+        if (o.isMesh) o.material = new THREE.MeshBasicMaterial({vertexColors: true, side: THREE.DoubleSide});
+        else {
+          o.userData.spacing = .01;
+          o.material = scanMaterial(.01);
+        }
+      });
+      return obj;
+    }));
+    if (scanVersion !== version || results.some(r => r.status === 'rejected')) {
+      for (const r of results) if (r.status === 'fulfilled' && !old.has(r.value.userData.sectionURL)) dropScan(r.value);
+      if (scanVersion === version) { scanStatus = 'failed'; scanVersion = null; }
+      return;
+    }
+    const group = new THREE.Group();
+    group.userData.scanVersion = version;
+    const latest = getState()?.scan?.last;
+    const currentSections = latest?.version === version ? latest.sections : sections;
+    results.forEach((r, i) => {
+      applyTransform(r.value, currentSections[i].transform);
+      group.add(r.value); // move retained sections out of the old group before disposal
+    });
+    if (scanObj) dropScan(scanObj);
+    scene.add(group);
+    scanObj = group;
+    transformKey = JSON.stringify(currentSections.map(s => s.transform));
+    scanStatus = 'ready';
+    scanLabel = `live map · ${sections.length} retained sections · v${version}`;
+    outline.visible = stage.visible = false;
+    updateCutaway();
+    if (!fitted) { fitView(); fitted = true; }
+    heatMask = footprint(group);
+    heatKey = '';
+  }
+
   // floor cells (same grid as the coverage heatmap) that have scan points above them, grown by a cell
   function footprint(obj) {
     const cov = getState()?.coverage;
@@ -260,6 +307,21 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
 
   function syncScan(st) {
     const live = st?.scan?.last;
+    if (live?.sections?.length) {
+      if (live.version !== scanVersion) {
+        scanVersion = live.version;
+        loadSections(live);
+      } else if (scanObj?.userData.scanVersion === live.version &&
+                 JSON.stringify(live.sections.map(s => s.transform)) !== transformKey) {
+        for (const section of live.sections) {
+          const child = scanObj.children.find(o => o.userData.sectionURL === section.url);
+          if (child) applyTransform(child, section.transform);
+        }
+        transformKey = JSON.stringify(live.sections.map(s => s.transform));
+        heatMask = footprint(scanObj); heatKey = ''; updateCutaway();
+      }
+      return;
+    }
     if (live && live.version !== scanVersion) {
       scanVersion = live.version;
       const a = live.alignment || {};

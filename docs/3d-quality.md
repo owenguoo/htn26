@@ -167,3 +167,29 @@ The console shows cumulative selection outcomes since hub restart/reset and
 current overlap-buffer occupancy. `/api/state` → `scan.selection` also contains
 the last 100 decisions, with phone IDs and timestamps. No rejected JPEGs are
 persisted. This improves capture continuity, not batch alignment or fusion.
+
+### Persistent sections
+
+Live reconstruction now selects at most 12 connected views, targeting four shared
+references. The first section establishes a fixed visual frame (initial scale is
+still estimated from camera height). Later sections fit yaw, scale and translation
+against immutable shared camera positions, independently of later phone pose
+resets/calibration. At least three shared references, 15 cm reference spread,
+and bounded 3D residuals are required; failed sections leave the current map and
+pending views intact. An identical failed batch is not sent to the GPU again.
+
+Accepted GLBs and their transforms are retained across updates/restarts and loaded
+incrementally by the viewer. Manual fit controls use a fixed pivot for all sections.
+The limit is 32 retained sections; reaching it stops additions without deleting
+coverage. This is overlapping mesh retention, not TSDF fusion: seams and duplicate
+surfaces can remain. Sections are not automatically replaced on a quality score yet.
+
+Image quality now requires clear detail in at least four of nine tiles. This is a
+blur/detail heuristic, not a semantic hand/person mask. Near-simultaneous candidates
+prefer sharper images while distinct connecting views remain eligible.
+
+Run with MAP_NATIVE_ONLY=1 for the clean Swift capture workflow: browser clients and
+synthetic drive/replay clients do not seed it, and the first phone must have a room
+pose before capture starts. After anchoring, visual registration controls map
+placement rather than later ARKit origin changes. Metric accuracy still requires
+valid initial calibration and cannot be inferred from the internal fit residual.

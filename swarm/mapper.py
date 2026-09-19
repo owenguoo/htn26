@@ -21,6 +21,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+from .sections import section_batch, register, SECTION_FRAMES, MAX_SECTIONS
 from .protocol import now_ms
 from .keyframes import VisualSelector, working_batch, MAX_ARCHIVE, MAX_BATCH, WINDOW_MS
 
@@ -44,6 +45,7 @@ class Mapper:
         self.room = room
         self.out_dir = out_dir
         self.enabled = False
+        self.native_only = os.environ.get("MAP_NATIVE_ONLY") == "1"
         self.include_sims = os.environ.get("MAP_INCLUDE_SIMS") == "1"  # sim frames are drawings: off
         self.keyframes: list[dict] = []
         self.ids = 0
@@ -59,6 +61,9 @@ class Mapper:
         self.running = False
         self.version = 0
         self.generation = 0     # bumped by reset(): results from before it are thrown away
+        self.sections = []
+        self.blocked_batch = None
+        self.fit_pivot = None
         self.placed: dict[str, tuple[float, float, float]] = {}  # keyframe id → where the last scan put its camera
         # operator's fit on top of the automatic alignment (scale factor and turn about where the phones
         # are): monocular scans have no true scale, so a quick manual fit is the reliable fallback
@@ -81,6 +86,8 @@ class Mapper:
                 self.placed = {k: tuple(v) for k, v in saved.get("placed", {}).items()}
                 self.fit = saved.get("fit") or self.fit
                 self.last.setdefault("autoTransform", self.last["transform"])
+            self.sections = saved.get("sections", [])
+            self.fit_pivot = saved.get("fitPivot")
             self.previous_batch = saved.get("previousBatch", [])
             for k in saved.get("keyframes", []):
                 jpeg = self.out_dir / "views" / f"{k['id']}.jpg"
@@ -106,7 +113,7 @@ class Mapper:
                 f.unlink(missing_ok=True)
         saved = self.out_dir / "last.json.tmp"
         saved.write_text(json.dumps({
-            "last": self.last, "placed": self.placed, "fit": self.fit,
+            "last": self.last, "placed": self.placed, "fit": self.fit, "sections": self.sections, "fitPivot": self.fit_pivot,
             "previousBatch": self.previous_batch, "pending": sorted(self.pending),
             "keyframes": [{key: v for key, v in k.items() if key != "jpeg" and not key.startswith("_")}
                           for k in self.keyframes]}))
@@ -120,6 +127,9 @@ class Mapper:
 
     def reset(self) -> None:
         """Start the scan over: forget every view and the current model (a rebuild in flight is discarded)."""
+        self.blocked_batch = None
+        self.fit_pivot = None
+        self.sections.clear()
         self.keyframes.clear()
         self.pending.clear()
         self.previous_batch.clear()
@@ -150,6 +160,7 @@ class Mapper:
         if self.last:
             self.last["transform"] = self.display(self.last["autoTransform"])
             self.last["fit"] = dict(f)
+            self.last["sections"] = [k | {"transform": self.display(k["autoTransform"])} for k in self.sections]
             self._save()
 
     def display(self, auto: dict) -> dict:
@@ -158,8 +169,7 @@ class Mapper:
         if f["scale"] == 1.0 and f["turnDeg"] == 0.0 or not self.placed:
             return auto
         k, d = f["scale"], math.radians(f["turnDeg"])
-        cx = sum(v[0] for v in self.placed.values()) / len(self.placed)
-        cz = sum(v[2] for v in self.placed.values()) / len(self.placed)
+        cx, cz = self.fit_pivot or (0, 0)
         ox, oy, oz = auto["offset"]
         # rotate (by d about Y, three.js convention) and scale the offset about the pivot
         rx, rz = (ox - cx) * math.cos(d) + (oz - cz) * math.sin(d), -(ox - cx) * math.sin(d) + (oz - cz) * math.cos(d)
@@ -169,7 +179,7 @@ class Mapper:
     def status(self) -> dict:
         return {"enabled": self.enabled, "configured": bool(self.url), "workerOk": self.worker_ok,
                 "running": self.running, "keyframes": len(self.keyframes), "maxKeyframes": MAX_ARCHIVE,
-                "batchSize": self.batch_size, "maxBatch": MAX_BATCH,
+                "batchSize": self.batch_size, "maxBatch": SECTION_FRAMES, "sections": len(self.sections),
                 "selectionMs": self.selection_ms,
                 "selection": self.selector.status(),
                 "selectionHints": {p.id: {"name": p.name or f"Phone {p.index}", "message": self.selection_hints[p.id]}
@@ -183,7 +193,13 @@ class Mapper:
         now = now_ms()
         groups = {}
         for p in list(self.hub.phones.values()):
-            if not p.connected or (p.sim and not self.include_sims):
+            if not p.connected or ((p.sim or p.build.endswith(("-drive", "-replay"))) and not self.include_sims):
+                continue
+            if self.native_only and not p.native:
+                self.selection_hints[p.id] = 'Use the native iPhone app for this scan'
+                continue
+            if self.native_only and not self.keyframes and p.pose(now) is None:
+                self.selection_hints[p.id] = 'Align the iPhone to the room before starting the map'
                 continue
             if now - self.sample_times.get(p.id, 0) < 450:
                 continue
@@ -264,7 +280,10 @@ class Mapper:
             self.running = False
 
     async def _rebuild(self) -> None:
-        frames = working_batch(self.keyframes, self.previous_batch, self.pending)
+        frames = section_batch(self.keyframes, self.placed, self.pending)
+        if len(self.sections) >= MAX_SECTIONS:
+            self.error = "Section limit reached; current coverage preserved. Start a new scan for another area."
+            return
         self.batch_size = len(frames)
         self.last_attempt = now_ms()
         if len(frames) < 2:
@@ -273,6 +292,9 @@ class Mapper:
             return
         if self.pending and not self.pending.intersection(k["id"] for k in frames):
             self.error = "New views need a shorter overlap path to the mapped area"
+            return
+        signature = tuple(sorted(k["id"] for k in frames))
+        if signature == self.blocked_batch:
             return
         gen = self.generation
         t0 = time.time()
@@ -294,11 +316,28 @@ class Mapper:
         if gen != self.generation:  # reset while this was running
             self.running = False
             return
-        transform, alignment = align(meta["cameras"], {k["id"]: k for k in frames}, meta.get("medianDepth"))
+        if self.sections:
+            try:
+                transform, alignment = register(meta["cameras"], self.placed)
+            except ValueError as exc:
+                self.blocked_batch = signature
+                self.error = str(exc)
+                self.hub.planner.note(self.error)
+                return
+        else:
+            # Only one initial room pose sets the origin; later calibration changes
+            # must never move an already reconstructed room.
+            first = next((k for k in frames if k.get("x") is not None), None)
+            anchor_frames = {first["id"]: first} if first else {}
+            transform, alignment = align(meta["cameras"], anchor_frames, meta.get("medianDepth"))
+            alignment["method"] = "initial visual anchor; camera-height scale estimate"
         alignment["leveledBy"] = meta.get("leveledBy")
         alignment["floorBy"] = meta.get("floorBy")
-        transform, alignment["steadiedBy"] = steady(transform, meta["cameras"], self.placed)
-        self.placed = place(transform, meta["cameras"])
+        for key, value in place(transform, meta["cameras"]).items():
+            self.placed.setdefault(key, value)  # accepted anchors never drift
+        self.blocked_batch = None
+        if self.fit_pivot is None:
+            self.fit_pivot = [sum(v[i] for v in self.placed.values()) / len(self.placed) for i in (0, 2)]
         self.previous_batch = [k["id"] for k in frames]
         self.pending.difference_update(self.previous_batch)
         self.pending_since = now_ms() if self.pending else 0
@@ -306,9 +345,9 @@ class Mapper:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         path = self.out_dir / f"scan-{self.version}.glb"
         path.write_bytes(glb)
-        for old in self.out_dir.glob("scan-*.glb"):
-            if int(old.stem.split("-")[1]) <= self.version - KEEP_SCANS:
-                old.unlink(missing_ok=True)
+        self.sections.append({"url": f"/web/models/live/{path.name}",
+                              "autoTransform": transform, "frames": self.previous_batch[:],
+                              "version": self.version})
         secs = round(time.time() - t0, 1)
         self.last = {"version": self.version, "url": f"/web/models/live/{path.name}", "transform": self.display(transform),
                      "autoTransform": transform, "fit": dict(self.fit),
@@ -319,6 +358,7 @@ class Mapper:
                      "gpuSeconds": meta.get("totalSeconds"), "t": time.time(),
                      # typical distance to what the cameras saw, after scaling: a quick sanity check on scale
                      "viewDistanceM": round(transform["scale"] * meta["medianDepth"], 2) if meta.get("medianDepth") else None}
+        self.last["sections"] = [k | {"transform": self.display(k["autoTransform"])} for k in self.sections]
         self.running = False
         self._save()
         self.hub.planner.note(f"🧊 Scan v{self.version}: {meta['frames']} views, {meta['points']:,} points in {secs}s"
