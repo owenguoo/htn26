@@ -25,6 +25,12 @@ Scripts/preflight.sh >/dev/null 2>&1 || {
 }
 xcodebuild -scheme SwarmSight -destination 'platform=iOS Simulator,name=iPhone 16' build
 
+if [ "${1:-}" = "--e2e" ]; then
+  echo
+  echo "=== gate 3/3: replayed phone against the real hub in this checkout ==="
+  Scripts/e2e-hub.sh
+fi
+
 echo
-echo "both gates green."
+echo "gates green."
 echo "neither of them proves the phone knows where it is — see DEVICE_CHECKLIST.md."

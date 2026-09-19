@@ -51,10 +51,12 @@ public final class HapticPlayer {
         guard let engine, isAvailable else { return }
         let events: [CHHapticEvent]
         switch cue.pattern {
-        case "double":
+        // The hub has no haptic command; these names are the local events
+        // `OverlayModel` raises. A ping is the one that must not be missed.
+        case "double", "ping":
             events = [transient(at: 0, intensity: cue.intensity),
                       transient(at: 0.12, intensity: cue.intensity)]
-        case "continuous":
+        case "continuous", "flash":
             events = [CHHapticEvent(eventType: .hapticContinuous,
                                     parameters: [
                                         .init(parameterID: .hapticIntensity, value: cue.intensity),

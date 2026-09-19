@@ -24,6 +24,12 @@ import UIKit
 // mean encode time at 640, 960 and 1280 px, and pick a resolution from those
 // numbers rather than from this comment; and confirm the drop count under load
 // is non-zero but well below the submit count. DEVICE_CHECKLIST.md item 9.
+//
+// DEVICE-VERIFY: the JPEG is rotated to portrait here so the hub's feed wall
+// shows it upright and `/api/detections` boxes (fractions of the frame the hub
+// received) line up with the preview. A human must confirm a tile on the
+// dashboard is upright for a phone held upright, and that a detection box drawn
+// around a real object sits on that object on the phone.
 public final class CoreImageFrameEncoder: FrameEncoding, @unchecked Sendable {
     private let context: CIContext
     private let queue = DispatchQueue(label: "swarmsight.encode", qos: .userInitiated)
@@ -80,9 +86,11 @@ public final class CoreImageFrameEncoder: FrameEncoding, @unchecked Sendable {
         return try await withCheckedThrowingContinuation { continuation in
             queue.async { [context] in
                 do {
-                    continuation.resume(returning: try Self.encode(handoff.buffer,
-                                                                   request: request,
-                                                                   context: context))
+                    var encoded = try Self.encode(handoff.buffer, request: request, context: context)
+                    // Latency is measured from this buffer, not from the pose
+                    // that asked for a frame.
+                    encoded.captureTimestamp = handoff.deviceTimestamp
+                    continuation.resume(returning: encoded)
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -93,7 +101,11 @@ public final class CoreImageFrameEncoder: FrameEncoding, @unchecked Sendable {
     private static func encode(_ pixelBuffer: CVPixelBuffer,
                                request: FrameEncodeRequest,
                                context: CIContext) throws -> EncodedFrame {
-        let image = CIImage(cvPixelBuffer: pixelBuffer)
+        // ARKit's capture is in sensor orientation: landscape for a phone held
+        // upright. `.right` turns it the way the operator is holding it — the
+        // same rotation the preview applies, so what the hub sees is what the
+        // operator sees. The app is locked to portrait.
+        let image = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
         let captureWidth = Int(image.extent.width)
         let captureHeight = Int(image.extent.height)
         let factor = request.configuration.scaleFactor(forCaptureWidth: captureWidth,
@@ -118,11 +130,8 @@ public final class CoreImageFrameEncoder: FrameEncoding, @unchecked Sendable {
         // The intrinsics must describe the image that is actually being sent.
         // Capture-resolution intrinsics with a downscaled JPEG is a silent
         // factor-of-two error in every depth estimate the server produces.
-        let intrinsics = request.intrinsics.map {
-            CameraIntrinsics(fx: $0.fx, fy: $0.fy, cx: $0.cx, cy: $0.cy,
-                             imageWidth: captureWidth, imageHeight: captureHeight)
-                .scaled(by: factor)
-        }
+        // Rotated first, then scaled, exactly as the pixels were.
+        let intrinsics = request.intrinsics.map { $0.rotatedClockwise().scaled(by: factor) }
         return EncodedFrame(frameID: request.frameID, jpeg: data,
                             width: size.width, height: size.height, intrinsics: intrinsics)
     }

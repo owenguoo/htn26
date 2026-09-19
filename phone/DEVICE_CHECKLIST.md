@@ -349,3 +349,35 @@ Listed so nobody mistakes them for tested facts:
 5. **`setWorldOrigin` timing.** The session suppresses two frames after the
    origin moves, assuming at most a frame or two of ARKit lag. If corrections
    visibly corrupt geometry, raise `framesSuppressedAfterOriginChange`.
+
+
+## Hub protocol port (htn26) — everything below is unverified on hardware
+
+The protocol, room-frame maths, commands, reconnect and UI were verified by
+`swift test`, `Scripts/e2e-hub.sh` (replayed walk → real hub → `/api/state`) and
+the Simulator in replay mode. None of that involved ARKit or a camera.
+
+- [ ] Join: type or deep-link the dashboard address; the local-network prompt
+      appears; the dashboard shows the phone as `iPhone` with a live tile.
+- [ ] **Room mapping, marker:** stand on a tape-measured spot → the dashboard dot
+      is within 0.5 m. Face the stage → cone points at the stage. Turn right →
+      cone turns clockwise. Walk away from the stage → y increases.
+- [ ] **Room mapping, seat tap:** with no marker in view, tap your spot, face the
+      stage, confirm → same four checks. `debug.alignment` reads `seat`.
+- [ ] Seat → marker hand-over: sight a marker after a seat tap; the cone should
+      settle, not teleport across the room. `debug.alignment` becomes `marker`.
+- [ ] Before any alignment the dashboard shows a live tile but **no cone**.
+- [ ] **JPEG upright** on the feed wall for a phone held upright; a
+      `POST /api/detections` box drawn round a real object sits on it on the phone.
+- [ ] Dashboard `latencyMs` is plausible (tens of ms on LAN), not 0 and not seconds.
+- [ ] Planner guide: the arrow shrinks as you turn toward it; on-target haptic fires once.
+- [ ] Console ping / message / flash: marker pinned to the floor spot, toast,
+      full-screen colour with text; beeps obey the ringer switch; haptics fire.
+- [ ] Starting the audio engine does not disturb ARKit tracking.
+- [ ] Expanding the phone in a console raises fps to ~8; thermals over 10 min.
+- [ ] Wi-Fi drop under 30 s: same index and colour on return.
+- [ ] Reinstall-free relaunch keeps the same index (persisted `phoneId`).
+- [ ] QR forms: `http://ip:8000/`, `https://ip:8443/` (falls back to ws on 8000),
+      tunnel `https://host/` (wss).
+- [ ] Backgrounding → `recalibrating`, no cone until a marker or a new seat tap.
+- [ ] No actor-isolation runtime warnings in the console over 10 minutes.

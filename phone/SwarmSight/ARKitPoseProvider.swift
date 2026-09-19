@@ -35,9 +35,14 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
         public var wantsSceneDepth: Bool
         /// How many image anchors ARKit tracks at once.
         public var maximumConcurrentImages: Int
+        /// Where `Markers/<id>.png` live. Inside the Expo module that is the
+        /// pod's resource bundle, not `Bundle.main`.
+        public var markerBundle: Bundle
 
         public init(venue: Venue, referenceImageGroup: String? = "Markers",
-                    wantsSceneDepth: Bool = true, maximumConcurrentImages: Int = 4) {
+                    wantsSceneDepth: Bool = true, maximumConcurrentImages: Int = 4,
+                    markerBundle: Bundle = .main) {
+            self.markerBundle = markerBundle
             self.venue = venue
             self.referenceImageGroup = referenceImageGroup
             self.wantsSceneDepth = wantsSceneDepth
@@ -167,8 +172,9 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
     private func referenceImagesFromVenue() throws -> Set<ARReferenceImage> {
         var images: Set<ARReferenceImage> = []
         for marker in configuration.venue.markers {
-            guard let url = Bundle.main.url(forResource: marker.id, withExtension: "png",
-                                            subdirectory: "Markers"),
+            guard let url = configuration.markerBundle.url(forResource: marker.id, withExtension: "png",
+                                                           subdirectory: "Markers")
+                    ?? configuration.markerBundle.url(forResource: marker.id, withExtension: "png"),
                   let source = CGImageSourceCreateWithURL(url as CFURL, nil),
                   let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
                 throw ProviderError.missingMarkerImage(marker.id)

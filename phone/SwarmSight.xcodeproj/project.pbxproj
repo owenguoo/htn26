@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		7B706DD1A7A93F034B708B9B /* venue.json in Resources */ = {isa = PBXBuildFile; fileRef = FEA3CD2C29190FF061EE5105 /* venue.json */; };
+		7B706DD1A7A93F034B708B9C /* trajectory-walk-2min.json in Resources */ = {isa = PBXBuildFile; fileRef = FEA3CD2C29190FF061EE5106 /* trajectory-walk-2min.json */; };
 		C4F841605C97960D3C2767E0 /* Markers in Resources */ = {isa = PBXBuildFile; fileRef = 2D812EE175604B7393968D43 /* Markers */; };
 		EFDC4954493FAD8C432B3157 /* SwarmCore in Frameworks */ = {isa = PBXBuildFile; productRef = 63006837D02926BC53E4FE36 /* SwarmCore */; };
 /* End PBXBuildFile section */
@@ -18,6 +19,7 @@
 		8BCD5BC4CDFDF0918087C782 /* SwarmSight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwarmSight.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6346E8A533AB5823AD3F27F /* markers-print.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = "markers-print.pdf"; path = "Resources/markers-print.pdf"; sourceTree = SOURCE_ROOT; };
 		FEA3CD2C29190FF061EE5105 /* venue.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = venue.json; path = Fixtures/venue.json; sourceTree = SOURCE_ROOT; };
+		FEA3CD2C29190FF061EE5106 /* trajectory-walk-2min.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "trajectory-walk-2min.json"; path = "Fixtures/trajectory-walk-2min.json"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -53,6 +55,7 @@
 			children = (
 				141BE85673A1D7CFB5CE3F07 /* Info.plist */,
 				FEA3CD2C29190FF061EE5105 /* venue.json */,
+				FEA3CD2C29190FF061EE5106 /* trajectory-walk-2min.json */,
 				2D812EE175604B7393968D43 /* Markers */,
 				B6346E8A533AB5823AD3F27F /* markers-print.pdf */,
 			);
@@ -137,6 +140,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7B706DD1A7A93F034B708B9B /* venue.json in Resources */,
+				7B706DD1A7A93F034B708B9C /* trajectory-walk-2min.json in Resources */,
 				C4F841605C97960D3C2767E0 /* Markers in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

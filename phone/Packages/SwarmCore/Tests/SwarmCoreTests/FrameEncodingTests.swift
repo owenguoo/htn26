@@ -279,4 +279,26 @@ struct FrameEncodingTests {
         #expect(stats.encoded == tickets.count)
         #expect(stats.droppedBusy == 0)
     }
+
+    /// The encoder rotates the sensor's landscape image to portrait. Intrinsics
+    /// that still describe the landscape image would put every projected point
+    /// in the wrong place — the same class of silent error as forgetting to
+    /// scale them.
+    @Test func rotatingIntrinsicsClockwiseFollowsThePixels() {
+        let landscape = CameraIntrinsics(fx: 1_400, fy: 1_450, cx: 1_000, cy: 700,
+                                         imageWidth: 1_920, imageHeight: 1_440)
+        let portrait = landscape.rotatedClockwise()
+        #expect(portrait.imageWidth == 1_440 && portrait.imageHeight == 1_920)
+        #expect(portrait.fx == 1_450 && portrait.fy == 1_400)
+        // The principal point obeys the same (x, y) → (H − y, x) map as any pixel.
+        #expect(portrait.cx == 1_440 - 700)
+        #expect(portrait.cy == 1_000)
+        // A point right of centre in landscape is below centre in portrait.
+        let right = CGPoint(x: 1_500, y: 700)
+        let mapped = CGPoint(x: 1_440 - right.y, y: right.x)
+        #expect(Float(mapped.y) > portrait.cy)
+        #expect(Float(mapped.x) == portrait.cx)
+        // Four quarter turns is the identity.
+        #expect(portrait.rotatedClockwise().rotatedClockwise().rotatedClockwise() == landscape)
+    }
 }

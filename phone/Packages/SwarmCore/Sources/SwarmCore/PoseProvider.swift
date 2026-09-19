@@ -65,6 +65,16 @@ public struct CameraIntrinsics: Sendable, Equatable, Codable {
         self.imageHeight = imageHeight
     }
 
+    /// Intrinsics for the same camera after the image is rotated 90° clockwise —
+    /// sensor-landscape to portrait, which is what the encoder does so the hub's
+    /// feed wall shows upright tiles. A pixel at (x, y) in a W×H image lands at
+    /// (H − y, x) in the H×W result, so the axes swap and the principal point
+    /// follows the same map.
+    public func rotatedClockwise() -> CameraIntrinsics {
+        CameraIntrinsics(fx: fy, fy: fx, cx: Float(imageHeight) - cy, cy: cx,
+                         imageWidth: imageHeight, imageHeight: imageWidth)
+    }
+
     /// Intrinsics for the same camera after the image is scaled by `factor`.
     public func scaled(by factor: Float) -> CameraIntrinsics {
         CameraIntrinsics(fx: fx * factor, fy: fy * factor,

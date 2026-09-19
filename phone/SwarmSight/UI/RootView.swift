@@ -2,62 +2,88 @@ import SwiftUI
 import SwarmCore
 
 struct RootView: View {
-    @Bindable var launch: LaunchState
-    /// Only a fallback. `venue.json` is the authority, so the address can be
-    /// changed on the day by dropping a new file onto the phone.
-    @AppStorage("orchestratorURL") private var orchestratorURL = "ws://127.0.0.1:8765/device"
+    @State private var model = OperatorViewModel()
+    @State private var hub = ""
+    @State private var name = PhoneIdentity.name
+    @State private var error: String?
+    @State private var isJoining = false
 
     var body: some View {
         Group {
-            switch launch.phase {
-            case .loading:
-                ProgressView("Loading venue…")
-                    .task { launch.load(fallbackOrchestrator: resolvedURL) }
-            case .ready(let coordinator):
-                OverlayView(coordinator: coordinator)
-                    .task { await coordinator.start() }
-            case .failed(let message):
-                FailureView(message: message)
+            if model.isJoined {
+                OperatorView(model: model, onRequestLeave: { Task { await SwarmRuntime.shared.leave() } })
+            } else {
+                joinForm
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black)
+        .onAppear {
+            model.attach()
+            if hub.isEmpty { hub = PhoneIdentity.lastHubURL.isEmpty ? venueHub : PhoneIdentity.lastHubURL }
+            // `simctl launch … -SwarmSightJoin <link>`: iOS puts a confirmation
+            // in front of `simctl openurl` that nothing headless can tap.
+            if let link = UserDefaults.standard.string(forKey: "SwarmSightJoin"),
+               let url = URL(string: link), !model.isJoined {
+                open(url)
+            }
+        }
+        .onOpenURL { open($0) }
     }
 
-    /// A mistyped orchestrator URL in the preference falls back to localhost
-    /// rather than trapping. `URL(string:)` on a literal is the classic "this
-    /// can never be nil" force unwrap, and it is still a crash on stage if
-    /// somebody edits the literal.
-    private var resolvedURL: URL {
-        if let parsed = URL(string: orchestratorURL), parsed.scheme != nil {
-            return parsed
-        }
-        var components = URLComponents()
-        components.scheme = "ws"
-        components.host = "127.0.0.1"
-        components.port = 8765
-        components.path = "/device"
-        return components.url ?? URL(fileURLWithPath: "/")
+    private func open(_ url: URL) {
+        // swarmsight://join?hub=… from the dashboard QR prefills the form.
+        guard HubURL.derive(url.absoluteString) != nil else { return }
+        hub = url.absoluteString
+        // `&replay=1` is the test hook: replay a recorded walk instead of ARKit
+        // and join without a tap. `&markers=0` strips sightings, for the seat
+        // fallback.
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        guard items.contains(where: { $0.name == "replay" && $0.value == "1" }) else { return }
+        let markers = !items.contains { $0.name == "markers" && $0.value == "0" }
+        SwarmRuntime.shared.configure(RuntimeOptions(poseSource: .replay, replayMarkers: markers))
+        if name.isEmpty { name = "sim" }
+        join()
     }
-}
 
-/// Failures are read by a person standing in a room with a phone, not by a
-/// developer reading a console.
-struct FailureView: View {
-    let message: String
+    /// `venue.json` is the day-of authority for where the hub is.
+    private var venueHub: String {
+        (try? ModuleResources.loadVenue())?.hubURL ?? ""
+    }
 
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48))
-                .foregroundStyle(.yellow)
-            Text("Cannot start")
-                .font(.title2.bold())
-            Text(message)
-                .font(.callout)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+    private var joinForm: some View {
+        Form {
+            Section("Hub") {
+                TextField("http://10.0.0.5:8000/", text: $hub)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Your name", text: $name)
+            }
+            if let error {
+                // Failures are read by a person standing in a room with a phone,
+                // not by a developer reading a console.
+                Section { Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.yellow) }
+            }
+            Section {
+                Button(isJoining ? "Joining…" : "Join") { join() }
+                    .disabled(isJoining || HubURL.derive(hub) == nil)
+            } footer: {
+                Text("The address on the dashboard's QR code. Phone ID \(PhoneIdentity.phoneId.prefix(8)).")
+            }
         }
-        .padding(32)
+    }
+
+    private func join() {
+        isJoining = true
+        error = nil
+        Task {
+            do {
+                try await SwarmRuntime.shared.join(hub: hub, name: name)
+            } catch {
+                self.error = error.localizedDescription
+            }
+            isJoining = false
+        }
     }
 }

@@ -105,6 +105,15 @@ struct ImageToViewTransform {
                         height: (view.height - rotatedSize.height * scale) / 2)
     }
 
+    /// A rect given as 0…1 fractions of the *upright* image — the portrait JPEG
+    /// the hub received — mapped onto the preview.
+    func rect(uprightFractionX x: Double, y: Double, width: Double, height: Double) -> CGRect {
+        CGRect(x: x * rotatedSize.width * scale + offset.width,
+               y: y * rotatedSize.height * scale + offset.height,
+               width: width * rotatedSize.width * scale,
+               height: height * rotatedSize.height * scale)
+    }
+
     func callAsFunction(_ point: CGPoint) -> CGPoint {
         // 90° clockwise: a pixel at (x, y) in a W×H image lands at (H−y, x).
         let rotated = CGPoint(x: captureSize.height - point.y, y: point.x)

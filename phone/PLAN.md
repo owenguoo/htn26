@@ -26,7 +26,7 @@ SwarmSight/
 │   ├── FrameEncoder.swift           # CVPixelBuffer → JPEG
 │   └── UI/                          # SwiftUI overlay
 ├── Fixtures/trajectory-*.json       # recorded real ARKit poses
-├── tools/mock-orchestrator/         # stub WS server for integration tests
+├── (tools/mock-orchestrator/ retired: the real hub lives at ../swarm, see Scripts/e2e-hub.sh)
 └── DEVICE_CHECKLIST.md              # written by the agent, run by a human
 Gate 1 — Wire protocol and transport
 

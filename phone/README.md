@@ -17,7 +17,7 @@ SwarmSight/               the thin app target
   ARKitPoseProvider.swift the ONLY file that imports ARKit
 Fixtures/                 recorded trajectories and venue.json
 tools/fixture-gen/        generates the stand-in fixtures
-tools/mock-orchestrator/  a stub server, so the phones have something to talk to
+../swarm/                 the real hub, in this same checkout (not ours to edit)
 DEVICE_CHECKLIST.md       everything the tests cannot prove
 ```
 
@@ -109,7 +109,7 @@ Then work through `DEVICE_CHECKLIST.md`.
 ## Running against the stub orchestrator
 
 ```
-python3 tools/mock-orchestrator/server.py --port 8765
+(cd .. && uv run python -m swarm.hub)        # the real hub; then Scripts/e2e-hub.sh
 ```
 
 It prints its LAN address; set that as the app's `orchestratorURL`. It has a
