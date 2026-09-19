@@ -1,0 +1,23 @@
+# Model weights — FAIR Noncommercial Research License, and 4.6 GB.
+# Never commit. Reference by path from config.
+*.pt
+*.safetensors
+*.ckpt
+*.bin
+checkpoints/
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+.swiftpm/
+Packages/*/.build/
+
+# macOS
+.DS_Store
+
+# Recorded ARWorldMaps (tens of MB, device-specific)
+*.arworldmap

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The keys iOS needs to install the bundle at all. Without
+	     CFBundleIdentifier the build still succeeds and simctl then refuses the
+	     result with "Missing bundle ID", which is a confusing way to find out.
+	     The $(...) values are expanded from build settings at package time. -->
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>SwarmSight</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+
+	<!-- Every key below fails silently if it is missing: the prompt never
+	     appears, the API returns nothing, and the app looks broken rather than
+	     unauthorised. -->
+	<key>NSCameraUsageDescription</key>
+	<string>SwarmSight uses the camera to track this phone's position in the room and to send occasional frames to the search orchestrator.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>SwarmSight connects to the search orchestrator running on this local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<!-- iOS local-network permission bites everyone when the orchestrator is
+		     on the LAN. Without these the connection fails with no prompt. -->
+		<string>_swarmsight._tcp</string>
+		<string>_swarmsight._udp</string>
+		<string>_http._tcp</string>
+	</array>
+	<key>NSMotionUsageDescription</key>
+	<string>SwarmSight uses device motion only to tell whether this phone moved while camera tracking was unavailable.</string>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+		<string>arkit</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<!-- So a new venue.json can be dropped onto the phone on the day without a
+	     rebuild. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UIStatusBarHidden</key>
+	<true/>
+</dict>
+</plist>

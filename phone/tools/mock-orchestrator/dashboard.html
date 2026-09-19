@@ -1,0 +1,166 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>SwarmSight debug view</title>
+<style>
+  :root { color-scheme: dark; --ink:#e8e8ea; --dim:#8a8a91; --line:#26262b;
+          --ok:#37d67a; --warn:#f2b134; --bad:#ff5252; --bg:#0c0c0e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  header { padding:10px 16px; border-bottom:1px solid var(--line);
+           display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  h1 { font-size:13px; margin:0; font-weight:600; letter-spacing:.02em; }
+  .note { color:var(--dim); font-size:11px; }
+  main { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:1px;
+         background:var(--line); height:calc(100vh - 42px); }
+  @media (max-width:900px){ main{ grid-template-columns:1fr; height:auto; } }
+  section { background:var(--bg); padding:14px; overflow:auto; }
+  canvas { width:100%; height:auto; display:block; background:#111116; border-radius:6px; }
+  table { border-collapse:collapse; width:100%; }
+  th,td { text-align:left; padding:4px 8px 4px 0; border-bottom:1px solid var(--line);
+          white-space:nowrap; font-variant-numeric:tabular-nums; }
+  th { color:var(--dim); font-weight:500; font-size:11px; text-transform:uppercase; }
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .dim{color:var(--dim)}
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+       color:var(--dim); margin:18px 0 6px; font-weight:500; }
+  h2:first-child { margin-top:0; }
+</style>
+<header>
+  <h1>SwarmSight debug view</h1>
+  <span class="note">stub orchestrator &mdash; this is not the team dashboard</span>
+  <span class="note" id="conn">connecting…</span>
+</header>
+<main>
+  <section>
+    <canvas id="plan" width="900" height="720"></canvas>
+    <p class="note" style="margin:10px 0 0">
+      Plan view, metres. +X right, +Z up the page (out from the stage); origin is the
+      floor below the primary marker. Squares are markers, wedges are phones showing
+      where each is looking. A wedge that wanders while the phone is still means drift.
+    </p>
+  </section>
+  <section>
+    <h2>Devices</h2>
+    <table id="devices"><thead><tr>
+      <th>device</th><th>x</th><th>y</th><th>z</th><th>state</th><th>conf</th><th>fix</th><th>rate</th>
+    </tr></thead><tbody></tbody></table>
+    <h2>Latency, client capture&rarr;sent</h2>
+    <table id="latency"><thead><tr>
+      <th>device</th><th>last</th><th>median</th><th>p95</th><th>over 50ms</th>
+    </tr></thead><tbody></tbody></table>
+    <h2>Markers in venue</h2>
+    <table id="markers"><thead><tr><th>id</th><th>x</th><th>y</th><th>z</th><th>width</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<script>
+const plan = document.getElementById('plan'), ctx = plan.getContext('2d');
+let state = { devices: {}, markers: [] };
+
+function fmt(v, digits = 2) { return v == null ? '—' : Number(v).toFixed(digits); }
+function cell(text, cls) { return `<td class="${cls || ''}">${text}</td>`; }
+
+function draw() {
+  const W = plan.width, H = plan.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Fit everything in view with a margin, so a phone that wanders off stays visible.
+  const pts = [...state.markers.map(m => m.position), ...Object.values(state.devices).map(d => d.position)]
+    .filter(Boolean);
+  let minX = -5, maxX = 5, minZ = -1, maxZ = 9;
+  for (const p of pts) {
+    minX = Math.min(minX, p[0] - 1); maxX = Math.max(maxX, p[0] + 1);
+    minZ = Math.min(minZ, p[2] - 1); maxZ = Math.max(maxZ, p[2] + 1);
+  }
+  const scale = Math.min(W / (maxX - minX), H / (maxZ - minZ));
+  const toX = x => (x - minX) * scale;
+  const toY = z => H - (z - minZ) * scale;   // +Z up the page
+
+  // One-metre grid.
+  ctx.strokeStyle = '#1b1b21'; ctx.lineWidth = 1;
+  for (let x = Math.ceil(minX); x <= maxX; x++) {
+    ctx.beginPath(); ctx.moveTo(toX(x), 0); ctx.lineTo(toX(x), H); ctx.stroke();
+  }
+  for (let z = Math.ceil(minZ); z <= maxZ; z++) {
+    ctx.beginPath(); ctx.moveTo(0, toY(z)); ctx.lineTo(W, toY(z)); ctx.stroke();
+  }
+  // Origin.
+  ctx.strokeStyle = '#3a3a44';
+  ctx.beginPath(); ctx.moveTo(toX(0), 0); ctx.lineTo(toX(0), H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, toY(0)); ctx.lineTo(W, toY(0)); ctx.stroke();
+
+  for (const m of state.markers) {
+    const [x, , z] = m.position;
+    ctx.fillStyle = m.isPrimary ? '#f2b134' : '#6f6f7a';
+    ctx.fillRect(toX(x) - 5, toY(z) - 5, 10, 10);
+    ctx.fillStyle = '#8a8a91'; ctx.font = '11px ui-monospace,monospace';
+    ctx.fillText(m.id.replace('marker-', ''), toX(x) + 9, toY(z) + 4);
+  }
+
+  for (const [id, d] of Object.entries(state.devices)) {
+    if (!d.position) continue;
+    const [x, , z] = d.position;
+    const colour = d.stale ? '#ff5252' : (d.fix == null ? '#f2b134' : '#37d67a');
+    // A wedge for the viewing direction.
+    //
+    // Venue yaw is measured from -Z toward +X. On this plan +Z is up the page,
+    // so yaw 0 (looking toward the stage) is straight DOWN the canvas, which is
+    // +PI/2 in canvas angles because canvas y grows downward. Turning right
+    // (+yaw) sweeps toward +X, which is -1 in canvas angle. Hence PI/2 - yaw.
+    if (d.yaw != null) {
+      const heading = Math.PI / 2 - d.yaw;
+      ctx.fillStyle = colour + '33';
+      ctx.beginPath(); ctx.moveTo(toX(x), toY(z));
+      const half = 0.5;
+      ctx.arc(toX(x), toY(z), 1.6 * scale, heading - half, heading + half);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = colour;
+    ctx.beginPath(); ctx.arc(toX(x), toY(z), 6, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = '#e8e8ea'; ctx.font = '11px ui-monospace,monospace';
+    ctx.fillText(id.slice(0, 8), toX(x) + 10, toY(z) - 8);
+  }
+}
+
+function render() {
+  const rows = Object.entries(state.devices).map(([id, d]) => {
+    const p = d.position || [null, null, null];
+    const fixClass = d.fix == null ? 'bad' : (d.fix > 30 ? 'warn' : 'ok');
+    const fixText = d.fix == null ? 'never' : fmt(d.fix, 1) + 's';
+    return '<tr>' + cell(id.slice(0, 10)) + cell(fmt(p[0])) + cell(fmt(p[1])) + cell(fmt(p[2]))
+      + cell(d.state || '—', d.state === 'normal' ? 'ok' : 'warn')
+      + cell(fmt(d.confidence)) + cell(fixText, fixClass)
+      + cell(fmt(d.poseHz, 1) + ' Hz', 'dim') + '</tr>';
+  });
+  document.querySelector('#devices tbody').innerHTML = rows.join('') ||
+    '<tr><td colspan="8" class="dim">no devices connected</td></tr>';
+
+  const lat = Object.entries(state.devices).map(([id, d]) => {
+    const l = d.latency || {};
+    const cls = (l.median ?? 0) > 50 ? 'bad' : 'ok';
+    return '<tr>' + cell(id.slice(0, 10)) + cell(fmt(l.last, 0) + ' ms', cls)
+      + cell(fmt(l.median, 0) + ' ms', cls) + cell(fmt(l.p95, 0) + ' ms')
+      + cell((l.overBudget ?? 0) + '/' + (l.count ?? 0)) + '</tr>';
+  });
+  document.querySelector('#latency tbody').innerHTML = lat.join('') ||
+    '<tr><td colspan="5" class="dim">no frames yet</td></tr>';
+
+  document.querySelector('#markers tbody').innerHTML = state.markers.map(m =>
+    '<tr>' + cell(m.id.replace('marker-', '') + (m.isPrimary ? ' *' : ''))
+    + cell(fmt(m.position[0])) + cell(fmt(m.position[1])) + cell(fmt(m.position[2]))
+    + cell(fmt(m.physicalWidth * 1000, 0) + ' mm', 'dim') + '</tr>').join('');
+
+  draw();
+}
+
+function connect() {
+  const ws = new WebSocket('ws://' + location.host + '/viewer');
+  ws.onopen = () => document.getElementById('conn').textContent = 'live';
+  ws.onclose = () => {
+    document.getElementById('conn').textContent = 'disconnected, retrying…';
+    setTimeout(connect, 1000);
+  };
+  ws.onmessage = event => { state = JSON.parse(event.data); render(); };
+}
+connect();
+render();
+</script>
