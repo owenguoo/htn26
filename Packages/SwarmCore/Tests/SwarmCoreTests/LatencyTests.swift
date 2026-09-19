@@ -139,6 +139,26 @@ struct LatencyTests {
         #expect(trace.exceedsEndToEnd(), "a 320 ms frame was not flagged")
     }
 
+    /// A trace missing a stage must not charge the span across the gap to
+    /// whichever stage happens to come next. Blaming the network for a slow
+    /// encode sends somebody to look at the Wi-Fi.
+    @Test func aMissingStageIsNotChargedToItsNeighbour() {
+        var trace = LatencyTrace(frameID: 1)
+        trace.stamp(.capture, at: 0)
+        trace.stamp(.encoded, at: 0.020)
+        // .sent never happened. 100 ms passed before the server saw it, which
+        // spans both the encode-to-send and network budgets.
+        trace.stamp(.serverReceived, at: 0.120)
+        trace.stamp(.serverDequeued, at: 0.150)
+
+        let violations = trace.violations()
+        #expect(!violations.contains { $0.stage == .serverReceived },
+                "a 100 ms gap across a missing .sent was charged to the network")
+        // The one interval that is genuinely adjacent and genuinely fine.
+        #expect(violations.isEmpty, "unexpected violations: \(violations.map(\.description))")
+        #expect(!trace.isClientComplete, "the gap is reported as incompleteness instead")
+    }
+
     @Test func statisticsRingStaysBoundedOverALongRun() throws {
         var statistics = LatencyStatistics(capacity: 64)
         for index in 0..<10_000 {

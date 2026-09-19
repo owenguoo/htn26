@@ -163,12 +163,17 @@ public struct LatencyTrace: Sendable, Equatable, Codable {
         }
     }
 
-    /// Stage intervals that exceeded their allowance. Only intervals whose two
-    /// endpoints are both present are checked — a missing server stage is
-    /// reported by `isComplete`, not silently counted as a violation.
+    /// Stage intervals that exceeded their allowance.
+    ///
+    /// Only *adjacent* stages are compared. Two stamps that happen to be
+    /// consecutive in this trace because the stage between them is missing span
+    /// two budgets, and charging that span to the later stage would blame the
+    /// network for a slow encode. A missing stage is reported by `isComplete`,
+    /// not silently turned into a violation of its neighbour.
     public func violations(against budget: LatencyBudget = .standard) -> [Violation] {
         var result: [Violation] = []
         for (previous, current) in zip(stamps, stamps.dropFirst()) {
+            guard current.stage.order == previous.stage.order + 1 else { continue }
             guard let limit = budget.limit(endingAt: current.stage) else { continue }
             let measured = current.t - previous.t
             if measured > limit {
