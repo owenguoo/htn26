@@ -14,6 +14,8 @@ const thumbs = new Map();    // id → object URL
 const sourceFrames = new Map();
 let snapshotAt = 0;
 let authenticated = false;
+let sessionGeneration = 0;
+let drawReference = null;
 let searchBusy = false;
 let dragPos = null;          // candidate position while dragging
 let lastDragSend = 0;
@@ -588,6 +590,7 @@ async function searchAction(action) {
 $('#loginForm').addEventListener('submit', (event) => {
   event.preventDefault();
   searchAction(async () => {
+    sessionGeneration++;
     await searchApi('/api/session', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code: $('#operatorCode').value})});
     $('#operatorCode').value = '';
     authenticated = true;
@@ -596,6 +599,7 @@ $('#loginForm').addEventListener('submit', (event) => {
   });
 });
 $('#logout').addEventListener('click', () => searchAction(async () => {
+  sessionGeneration++;
   await searchApi('/api/session', {method: 'DELETE'});
   authenticated = false;
   $('#searchMessage').textContent = 'Signed out';
@@ -603,6 +607,7 @@ $('#logout').addEventListener('click', () => searchAction(async () => {
   ws?.close();
 }));
 function clearReferencePreview() {
+  drawReference = null;
   $('#referencePreview').hidden = true;
   $('#personChoices').replaceChildren();
   $('#referenceFile').value = '';
@@ -628,22 +633,26 @@ $('#saveThreshold').addEventListener('click', () => {
 
 function paintPeople(canvas, detections, selected = -1) {
   const ctx = canvas.getContext('2d');
-  ctx.lineWidth = Math.max(2, canvas.width / 220);
-  ctx.font = `600 ${Math.max(16, canvas.width / 40)}px system-ui`;
+  const scale = canvas.width / Math.max(1, canvas.getBoundingClientRect().width);
+  const size = 24 * scale;
+  ctx.lineWidth = 2 * scale;
+  ctx.font = `600 ${14 * scale}px system-ui`;
   detections.forEach((d, i) => {
     const [x1, y1, x2, y2] = d.box;
     ctx.strokeStyle = selected === i ? '#ff4d4d' : '#fff';
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
     ctx.fillStyle = '#000';
-    ctx.fillRect(x1, Math.max(0, y1 - 32), 120, 32);
+    const x = Math.min(x1, canvas.width - size), y = Math.max(0, y1 - size);
+    ctx.fillRect(x, y, size, size);
     ctx.fillStyle = '#fff';
-    ctx.fillText(`Person ${i + 1}`, x1 + 4, Math.max(24, y1 - 8));
+    ctx.fillText(String(i + 1), x + 6 * scale, y + 17 * scale);
   });
 }
 $('#referenceFile').addEventListener('change', () => {
   const file = $('#referenceFile').files[0];
   if (!file) return;
   searchAction(async () => {
+    drawReference = null;
     $('#personChoices').replaceChildren();
     $('#referencePreview').hidden = true;
     $('#searchMessage').textContent = 'Finding people in the reference…';
@@ -660,8 +669,12 @@ $('#referenceFile').addEventListener('change', () => {
     const result = await searchApi('/api/search/reference/people', {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: blob});
     const preview = $('#referencePreview');
     preview.width = photo.width; preview.height = photo.height; preview.hidden = false;
-    preview.getContext('2d').drawImage(photo, 0, 0);
-    paintPeople(preview, result.detections);
+    let selected = -1;
+    drawReference = () => {
+      preview.getContext('2d').drawImage(photo, 0, 0);
+      paintPeople(preview, result.detections, selected);
+    };
+    drawReference();
     $('#searchMessage').textContent = result.detections.length ? 'Choose the numbered person to search for.' : 'No people detected. Try another photo.';
     result.detections.forEach((person, index) => {
       const button = document.createElement('button');
@@ -670,8 +683,8 @@ $('#referenceFile').addEventListener('change', () => {
         await searchApi(`/api/search/reference?${new URLSearchParams({box: person.box.join(',')})}`, {method: 'PUT', headers: {'Content-Type': 'image/jpeg'}, body: blob});
         if (st?.search) st.search.sightings = [];
         clearSourceFrames();
-        preview.getContext('2d').drawImage(photo, 0, 0);
-        paintPeople(preview, result.detections, index);
+        selected = index;
+        drawReference();
         $('#searchMessage').textContent = `Person ${index + 1} selected. Appearance similarity suggests likely sightings, not confirmed identity.`;
       }));
       $('#personChoices').append(button);
@@ -719,4 +732,16 @@ function renderAnalysis() {
   image.src = frame.url;
 }
 setInterval(() => { if (viewing) renderAnalysis(); }, 100);
-searchApi('/api/session').then(session => { authenticated = session.authenticated; renderSearch(); }).catch(error => { $('#searchMessage').textContent = error.message; });
+new ResizeObserver(() => drawReference?.()).observe($('#referencePreview'));
+async function loadSession() {
+  const generation = sessionGeneration;
+  try {
+    const session = await searchApi('/api/session');
+    if (generation !== sessionGeneration) return;
+    authenticated = session.authenticated;
+    renderSearch();
+  } catch (error) {
+    if (generation === sessionGeneration) $('#searchMessage').textContent = error.message;
+  }
+}
+loadSession();

@@ -66,3 +66,28 @@ test('console never substitutes a live thumbnail for missing exact source and ig
   vm.runInContext("sourceFrames.set(frameKey(result),{url:'exact'});renderAnalysis();st.search.sightings=[];renderAnalysis();pending.onload()",sandbox);
   assert.equal(vm.runInContext("nodes['#analyzedFrame'].hidden",sandbox),true);
 });
+test('reference numbers remain readable at a 210 by 280 CSS pixel portrait preview', () => {
+  const code = fs.readFileSync('web/console.js','utf8');
+  const fn = code.slice(code.indexOf('function paintPeople('),code.indexOf("\n$('#referenceFile').addEventListener"));
+  const sandbox = vm.createContext({});
+  vm.runInContext(`const ctx={strokeRect(){},fillRect(){},fillText(text){this.label=text;}};const canvas={width:960,height:1280,getContext:()=>ctx,getBoundingClientRect:()=>({width:210,height:280})};`+fn,sandbox);
+  vm.runInContext('paintPeople(canvas,[{box:[100,100,400,900]}])',sandbox);
+  assert.ok(vm.runInContext("parseFloat(ctx.font.split(' ')[1])*210/960 >= 14",sandbox));
+  assert.equal(vm.runInContext('ctx.label',sandbox),'1');
+});
+test('a deferred initial session response cannot overwrite newer login or logout', async () => {
+  const code = fs.readFileSync('web/console.js','utf8');
+  assert.ok(code.includes('async function loadSession()'));
+  const fn = code.slice(code.indexOf('async function loadSession()'),code.indexOf('\nloadSession();'));
+  const handlers = code.slice(code.indexOf("$('#loginForm').addEventListener"), code.indexOf('function clearReferencePreview()'));
+  for (const action of ['login','logout']) {
+    const sandbox = vm.createContext({});
+    vm.runInContext(`let authenticated=${action === 'logout'},sessionGeneration=0;let resolve,pendingAction;const listeners={};const searchApi=(path,options)=>options ? Promise.resolve({}) : new Promise(r=>resolve=r);const renderSearch=()=>{};const $=id=>({value:'test',addEventListener:(event,fn)=>listeners[id]=fn});const searchAction=fn=>pendingAction=fn();const ws=null;const clearReferencePreview=()=>{};`+fn+handlers,sandbox);
+    const pending = vm.runInContext('loadSession()',sandbox);
+    vm.runInContext(`listeners['${action === 'login' ? '#loginForm' : '#logout'}']({preventDefault(){}})`,sandbox);
+    await vm.runInContext('pendingAction',sandbox);
+    vm.runInContext(`resolve({authenticated:${action === 'logout'}})`,sandbox);
+    await pending;
+    assert.equal(vm.runInContext('authenticated',sandbox),action === 'login');
+  }
+});
