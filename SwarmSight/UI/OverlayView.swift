@@ -1,0 +1,42 @@
+import SwiftUI
+import SwarmCore
+
+/// The whole interface: a flash, an arrow, a status pill.
+///
+/// Everything it draws comes from `OverlayModel` in SwarmCore, so the decisions
+/// — which way to point, when an arrow is stale, when to stop showing a flash —
+/// are all tested. This file only turns that data into pixels.
+struct OverlayView: View {
+    let coordinator: AppCoordinator
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if let arrow = coordinator.overlay.arrow {
+                ArrowView(arrow: arrow)
+            }
+
+            VStack {
+                StatusPillView(pill: coordinator.overlay.pill)
+                    .padding(.top, 8)
+                Spacer()
+                if let error = coordinator.lastError {
+                    Text(error)
+                        .font(.footnote)
+                        .foregroundStyle(.yellow)
+                        .padding(.bottom, 24)
+                }
+            }
+            .padding(.horizontal, 16)
+
+            // Last, and over everything: a flash the audience can see from the
+            // back of the room is the point of the flash.
+            if let flash = coordinator.overlay.flash {
+                FlashView(flash: flash)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: coordinator.overlay.flash)
+        .animation(.easeOut(duration: 0.08), value: coordinator.overlay.arrow)
+    }
+}

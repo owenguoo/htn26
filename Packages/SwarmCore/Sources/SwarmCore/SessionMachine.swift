@@ -68,10 +68,22 @@ public struct FrameTicket: Sendable, Equatable {
     public var deviceTimestamp: Double
     public var serverTimestamp: Double
     public var pose: PoseUpdate
+    /// The capture's own resolution and focal lengths, so the encoder knows what
+    /// it is downscaling and by how much.
+    public var intrinsics: CameraIntrinsics?
     /// Already stamped at `.capture`, on the server clock. Every later stage is
     /// added to this same trace, so a regression past budget is attributable to
     /// a stage rather than to "the network".
     public var trace: LatencyTrace
+
+    public init(frameID: UInt64, deviceTimestamp: Double, serverTimestamp: Double, pose: PoseUpdate, intrinsics: CameraIntrinsics?, trace: LatencyTrace) {
+        self.frameID = frameID
+        self.deviceTimestamp = deviceTimestamp
+        self.serverTimestamp = serverTimestamp
+        self.pose = pose
+        self.intrinsics = intrinsics
+        self.trace = trace
+    }
 }
 
 /// A request to send one depth chunk. Four to eight frames is VGGT-Ω's
@@ -82,6 +94,12 @@ public struct DepthTicket: Sendable, Equatable {
     /// The widest camera separation inside the chunk. Below a few centimetres
     /// there is no parallax and no scale to recover.
     public var baseline: Float
+
+    public init(chunkID: UInt64, frames: [DepthChunk.FrameRef], baseline: Float) {
+        self.chunkID = chunkID
+        self.frames = frames
+        self.baseline = baseline
+    }
 }
 
 public enum SessionEvent: Sendable, Equatable {
@@ -295,6 +313,20 @@ public actor SessionMachine {
         advance(to: deviceTime)
         evaluateSilence()
         emitIfDue()
+    }
+
+    /// Converts device uptime to server time, or nil before the clock has
+    /// synchronised. The app stamps its own trace entries through this so every
+    /// stage is on one clock.
+    public func serverTime(forDeviceTime deviceTime: Double) -> Double? {
+        clock.serverTime(forDeviceTime: deviceTime)
+    }
+
+    public func clockOffset() -> Double? { clock.offset }
+
+    /// The most recent venue-frame pose, for the overlay's tracked arrow.
+    public func latestVenuePose() -> Pose? {
+        state.hasVenueFramePose ? lastPose : nil
     }
 
     public func currentDiagnostics() -> SessionDiagnostics {
@@ -570,6 +602,7 @@ public actor SessionMachine {
                                  deviceTimestamp: lastPoseTime ?? now,
                                  serverTimestamp: pose.serverTimestamp,
                                  pose: pose,
+                                 intrinsics: lastIntrinsics,
                                  trace: trace)
         diagnostics.framesRequested += 1
         recordFrameReference(ticket)

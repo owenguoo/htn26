@@ -103,11 +103,22 @@ public struct HapticCue: Sendable, Equatable {
     public var pattern: String
     public var intensity: Float
     public var commandID: String
+
+    public init(pattern: String, intensity: Float, commandID: String) {
+        self.pattern = pattern
+        self.intensity = intensity
+        self.commandID = commandID
+    }
 }
 
 public struct SoundCue: Sendable, Equatable {
     public var name: String
     public var commandID: String
+
+    public init(name: String, commandID: String) {
+        self.name = name
+        self.commandID = commandID
+    }
 }
 
 /// Everything the SwiftUI overlay renders, as plain data.
@@ -118,6 +129,15 @@ public struct OverlayState: Sendable, Equatable {
     /// Consumed once and cleared: a haptic is an event, not a state.
     public var pendingHaptic: HapticCue?
     public var pendingSound: SoundCue?
+
+    public init(pill: StatusPill = StatusPill(), flash: FlashCue? = nil, arrow: ArrowCue? = nil,
+                pendingHaptic: HapticCue? = nil, pendingSound: SoundCue? = nil) {
+        self.pill = pill
+        self.flash = flash
+        self.arrow = arrow
+        self.pendingHaptic = pendingHaptic
+        self.pendingSound = pendingSound
+    }
 }
 
 /// Turns commands and diagnostics into what to draw.

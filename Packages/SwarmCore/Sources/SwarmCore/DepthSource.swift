@@ -141,3 +141,18 @@ public struct ServerDepthSource: DepthSource {
         return DepthResult(chunkID: estimate.chunkID, maps: scaled, appliedScale: fit.scale, fit: fit)
     }
 }
+
+/// Metric depth straight off the device, copied out of whatever frame produced
+/// it.
+///
+/// This exists so `LiDARDepthSource` does not have to import ARKit. CLAUDE.md
+/// puts ARKit in exactly one file, and the only object that holds an `ARFrame`
+/// is `ARKitPoseProvider` — which conforms to this and copies the depth buffer
+/// out. An `ARFrame` retained beyond its delegate callback stalls the session.
+public protocol MetricDepthFrameSource: Sendable {
+    /// True on devices with a LiDAR scanner and `.sceneDepth` enabled.
+    var providesSceneDepth: Bool { get }
+    /// The most recent depth map, already copied, in metres, with the camera
+    /// pose it was captured at.
+    func latestSceneDepth() async -> (map: DepthMap, pose: Pose, deviceTimestamp: Double)?
+}
