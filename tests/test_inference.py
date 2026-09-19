@@ -471,3 +471,36 @@ def test_worker_health_without_reference_is_available_but_keeps_reference_loss()
             await bridge.health()
             assert statuses[-1] == 'unavailable'
     asyncio.run(run())
+
+
+def test_reference_photo_upload_detects_people_without_login(monkeypatch):
+    from swarm.control import Auth, Settings, install_routes
+    from fastapi import FastAPI
+    async def run():
+        frames = []
+        photo = b'reference-image-bytes'
+        detected = {'width': 100, 'height': 200, 'detections': [
+            {'label': 'person', 'score': .9, 'box': [10, 20, 80, 190]}]}
+        async def worker(request):
+            assert request.url.path == '/v1/detect'
+            assert request.headers['authorization'] == 'Bearer worker-key'
+            assert request.content == photo
+            assert request.url.params['labels'] == 'person'
+            assert request.url.params['phone_id'] == 'reference'
+            assert float(request.url.params['captured_at']) > 0
+            frames.append(request.url.params['frame_id'])
+            return httpx.Response(200, json=detected)
+        real_client = httpx.AsyncClient
+        transport = httpx.MockTransport(worker)
+        monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=transport, **kwargs))
+        app = FastAPI()
+        install_routes(app, module.Hub(), Auth(Settings(
+            inference_url='http://127.0.0.1:8001', inference_key='worker-key', bridge_key='bridge')))
+        async with real_client(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            for _ in range(2):
+                response = await client.post('/api/search/reference/people', content=photo,
+                                             headers={'Content-Type': 'image/jpeg', 'Origin': 'http://test'})
+                assert response.status_code == 200
+                assert response.json() == detected
+        assert len(set(frames)) == 2
+    asyncio.run(run())
