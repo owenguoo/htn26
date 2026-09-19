@@ -19,6 +19,7 @@ let coverage = null;        // look-count grid from the hub
 let planner = null;         // sector assignments + log from the hub
 let target = null;          // mock candidate from the hub
 let phase = null;           // show phase from the hub
+let pings = [];             // active pings from the hub
 let dragPos = null;         // candidate position while the operator drags it
 let frameCount = 0;         // thumbnails received, for a sanity check in the console
 
@@ -49,6 +50,7 @@ function onJson(msg) {
     planner = msg.planner || null;
     target = msg.target || null;
     phase = msg.phase || null;
+    pings = msg.pings || [];
     renderPlanner();
     const seen = new Set();
     for (const p of msg.phones) {
@@ -403,6 +405,25 @@ function drawMap() {
     ctx.globalAlpha = 1;
   }
   drawCandidate();
+  drawPings();
+}
+
+function drawPings() {
+  const k = (performance.now() / 1000) % 1;
+  for (const pg of pings) {
+    const [x, y] = view.toPx(pg.x, pg.y);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.3, 1 - (Date.now() - pg.t) / 12000);
+    ctx.strokeStyle = `rgba(255,209,102,${1 - k})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, 8 + k * 22, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ffd166';
+    ctx.beginPath(); ctx.moveTo(x, y - 9); ctx.lineTo(x + 9, y); ctx.lineTo(x, y + 9); ctx.lineTo(x - 9, y); ctx.closePath(); ctx.fill();
+    ctx.font = '700 12px ui-sans-serif, system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(pg.label, x, y - 16);
+    ctx.restore();
+  }
 }
 
 function hexA(hex, a) {

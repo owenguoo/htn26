@@ -40,13 +40,18 @@ class Coverage:
                     out.append(row * self.cols + col)
         return out
 
-    def update(self, viewers: dict[str, tuple[float, float, float, float | None]]) -> None:
-        """viewers: phone id → (x, y, heading, pitch) for every phone with a live camera."""
-        for x, y, heading, pitch in viewers.values():
+    def update(self, viewers: dict[str, tuple[float, float, float, float | None]]) -> dict[str, int]:
+        """viewers: phone id → (x, y, heading, pitch) for every phone with a live camera.
+        Returns how many cells each phone looked at for the first time."""
+        fresh: dict[str, int] = {}
+        for pid, (x, y, heading, pitch) in viewers.items():
             if pitch is not None and abs(pitch) > MAX_PITCH:
                 continue
             for c in self.cells_in_cone(x, y, heading):
-                self.looked[c] = True
+                if not self.looked[c]:
+                    self.looked[c] = True
+                    fresh[pid] = fresh.get(pid, 0) + 1
+        return fresh
 
     def snapshot(self) -> dict:
         return {

@@ -37,6 +37,8 @@ function onJson(msg) {
     room = msg.room;
     $('#roomName').textContent = `${room.width} × ${room.depth} m`;
     resizeMap();
+  } else if (msg.type === 'mission') {
+    onMission(msg);
   } else if (msg.type === 'state') {
     st = msg;
     phones.clear();
@@ -112,6 +114,9 @@ function renderControls() {
     s.textContent = `Hidden at (${t.x.toFixed(1)}, ${t.y.toFixed(1)}) · searching`;
   }
   $('#respN').textContent = t ? t.respondersWanted : respondersPref;
+  $('#lookingFor').textContent = st.lookingFor ? `Looking for: ${st.lookingFor}` : '';
+  const m = st.mission || {};
+  $('#mcModel').textContent = m.ready ? m.model : (m.why || '');
   $('#candBtn').textContent = t ? 'Remove candidate' : 'Place candidate';
   $('#candBtn').classList.toggle('primary', !t);
 }
@@ -188,6 +193,46 @@ function renderLog() {
   }).join('');
 }
 
+// ---------------------------------------------------------------- mission control
+const runs = new Map(); // id → {el, acts}
+$('#mcForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = $('#mcInput').value.trim();
+  if (!text) return;
+  send({ type: 'mission', text });
+  $('#mcInput').value = '';
+});
+
+function onMission(ev) {
+  let run = runs.get(ev.id);
+  if (ev.event === 'start') {
+    const el = document.createElement('div');
+    el.className = 'mc';
+    el.innerHTML = `<div class="cmd"><b></b><span class="ms"></span></div><div class="acts"></div>
+      <div class="reply"><span class="spin"></span>Thinking…</div>`;
+    el.querySelector('b').textContent = ev.text;
+    $('#mcFeed').prepend(el);
+    run = { el };
+    runs.set(ev.id, run);
+    while ($('#mcFeed').children.length > 3) $('#mcFeed').lastElementChild.remove();
+    return;
+  }
+  if (!run) return;
+  if (ev.event === 'action') {
+    const chip = document.createElement('span');
+    chip.className = `chip${ev.ok ? '' : ' bad'}`;
+    chip.textContent = `${ev.ok ? '✓' : '✕'} ${ev.result}`;
+    chip.title = `${ev.name}(${JSON.stringify(ev.args)})`;
+    run.el.querySelector('.acts').append(chip);
+  } else if (ev.event === 'done' || ev.event === 'error') {
+    const r = run.el.querySelector('.reply');
+    r.classList.toggle('err', ev.event === 'error');
+    r.textContent = ev.event === 'done' ? ev.reply : ev.message;
+    if (ev.ms) run.el.querySelector('.ms').textContent = `${(ev.ms / 1000).toFixed(1)}s`;
+    runs.delete(ev.id);
+  }
+}
+
 // ---------------------------------------------------------------- controls
 let respondersPref = 3;
 $('#plannerSw').addEventListener('click', () => send({ type: 'planner', enabled: !st?.planner?.enabled }));
@@ -213,7 +258,9 @@ function setResponders(d) {
 }
 
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && e.target === $('#mcInput')) { e.target.blur(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea')) return;
+  if (e.key === '/') { e.preventDefault(); $('#mcInput').focus(); return; }
   const n = Number(e.key);
   if (n >= 1 && n <= PHASES.length) send({ type: 'phase', phase: PHASES[n - 1][0] });
   else if (e.key === 'p' || e.key === 'P') send({ type: 'planner', enabled: !st?.planner?.enabled });
@@ -283,6 +330,7 @@ function draw() {
       p.connected ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.04)');
   }
   drawCandidate();
+  drawPings();
   for (const p of list) {
     const [px, py] = view.toPx(p.pose.x, p.pose.y);
     ctx.globalAlpha = p.connected ? 1 : 0.35;
@@ -294,6 +342,26 @@ function draw() {
     ctx.textBaseline = 'middle';
     ctx.fillText(String(p.index), px + 8, py);
     ctx.globalAlpha = 1;
+  }
+}
+
+function drawPings() {
+  const now = Date.now();
+  for (const pg of st.pings || []) {
+    const [x, y] = view.toPx(pg.x, pg.y);
+    const age = (now - pg.t) / 12000;
+    const k = (performance.now() / 1000) % 1;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0.25, 1 - age);
+    ctx.strokeStyle = `rgba(255,255,255,${0.8 * (1 - k)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(x, y, 6 + k * 18, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ededed';
+    ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x + 7, y); ctx.lineTo(x, y + 7); ctx.lineTo(x - 7, y); ctx.closePath(); ctx.fill();
+    ctx.font = '500 11px "Geist", ui-sans-serif, system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(pg.label, x, y - 14);
+    ctx.restore();
   }
 }
 
@@ -340,7 +408,12 @@ function nearCandidate(e) {
   return Math.hypot(cx - (e.clientX - r.left), cy - (e.clientY - r.top)) <= 14;
 }
 canvas.addEventListener('mousedown', (e) => {
+  if (e.altKey && view) { send({ type: 'ping', ...roomPoint(e) }); return; } // alt-click pings too
   if (nearCandidate(e)) { dragPos = roomPoint(e); e.preventDefault(); }
+});
+canvas.addEventListener('contextmenu', (e) => { // right-click: ping, like Valorant
+  e.preventDefault();
+  if (view) send({ type: 'ping', ...roomPoint(e) });
 });
 canvas.addEventListener('mousemove', (e) => {
   canvas.style.cursor = dragPos ? 'grabbing' : nearCandidate(e) ? 'grab' : 'default';

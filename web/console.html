@@ -65,6 +65,30 @@
     .step.on.found { background: var(--red); color: #000; }
     .timer { font: 500 20px var(--mono); letter-spacing: -0.02em; }
 
+    /* mission control */
+    .mission { margin-bottom: 16px; }
+    #mcForm { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 16px; }
+    #mcForm .prompt { font: 500 16px var(--mono); color: var(--fg-3); }
+    #mcInput { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; color: var(--fg);
+      font: 15px var(--sans); }
+    #mcInput::placeholder { color: var(--fg-3); }
+    .mission:focus-within { border-color: #3e3e3e; }
+    #mcFeed:empty { display: none; }
+    #mcFeed { border-top: 1px solid var(--line); }
+    .mc { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+    .mc:last-child { border-bottom: 0; }
+    .mc .cmd { display: flex; gap: 10px; align-items: baseline; }
+    .mc .cmd b { font-weight: 500; }
+    .mc .cmd .ms { margin-left: auto; font: 12px var(--mono); color: var(--fg-3); }
+    .mc .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { font: 12px var(--mono); padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--fg-2); }
+    .chip.bad { color: var(--red); border-color: rgba(255,77,77,0.4); }
+    .mc .reply { color: var(--fg-2); font-size: 13px; }
+    .mc .reply.err { color: var(--red); }
+    .spin { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--fg-3); border-top-color: var(--fg);
+      border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -1px; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     /* metrics */
     .metrics { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line); border-radius: var(--r);
       background: var(--bg-1); margin-bottom: 16px; }
@@ -165,6 +189,16 @@
       <span class="timer" id="timer">00:00</span>
     </section>
 
+    <section class="card mission">
+      <form id="mcForm" autocomplete="off">
+        <span class="prompt">›</span>
+        <input id="mcInput" placeholder="Tell Mission Control what to do — “send phones 3 and 5 to the back-left corner”" spellcheck="false">
+        <span class="faint mono" style="font-size:12px" id="mcModel"></span>
+        <kbd>/</kbd>
+      </form>
+      <div id="mcFeed"></div>
+    </section>
+
     <section class="metrics">
       <div class="metric"><div class="k">Phones live</div><div class="v" id="mLive">0</div></div>
       <div class="metric"><div class="k">Placed</div><div class="v" id="mPlaced">0</div></div>
@@ -177,7 +211,7 @@
     <section class="grid">
       <div class="card">
         <div class="card-h"><h2>Floor plan</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
-          <span class="faint" style="font-size:12px">Drag the candidate to move it</span></div>
+          <span class="faint" style="font-size:12px">Drag the candidate · right-click to ping</span></div>
         <div id="mapWrap"><canvas id="map"></canvas></div>
       </div>
       <div class="stack">
@@ -196,6 +230,7 @@
           <div class="card-h"><h2>Candidate</h2></div>
           <div class="card-b">
             <div class="status" id="candStatus">No candidate placed</div>
+            <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
             <div class="row" style="margin-top:16px"><div><div class="label">Responders</div><div class="hint">Nearest phones sent when found</div></div>
               <div class="stepper"><button id="respMinus" aria-label="Fewer">−</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
             <div class="divider"></div>

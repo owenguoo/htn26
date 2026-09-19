@@ -7,8 +7,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import io
+import itertools
 import json
 import math
+import os
 import socket
 import uuid
 from collections import deque
@@ -40,6 +42,10 @@ EXTERNAL_POSE_TTL = 5000  # a pose from the positioning service overrides the se
 REAP_AFTER_MS = 30000    # forget disconnected phones after this long
 PHASES = ("lobby", "calibrate", "search", "found", "end")  # show flow, driven from /console
 SEARCH_PHASES = ("search", "found")  # coverage and candidate detection only run in these
+PING_TTL_MS = 12000
+MESSAGE_TTL_MS = 8000
+WORLD_HZ = 2             # how often phones get the shared picture (mini-map, progress)
+LOOK_SECONDS = 20        # default time an operator "look" direction holds a phone
 
 
 @dataclass
@@ -62,6 +68,7 @@ class Phone:
     gps: dict | None = None          # latest browser geolocation fix
     debug: dict | None = None        # latest diagnostics the phone reported
     hidden: bool = False             # operator hid this feed from the projector
+    searched_cells: int = 0          # coverage cells this phone was first to look at
     # latest frame (latest wins, never queued)
     frame: bytes | None = None
     frame_seq: int = -1
@@ -127,6 +134,14 @@ class Hub:
         # "search" by default so the hub works without an operator; the show starts at "lobby"
         self.phase = "search"
         self.phase_started = now_ms()
+        self.looking_for = ""               # what searchers should look for, shown on phones
+        self.pings: list[dict] = []         # {id, x, y, label, t, phones: set | None}
+        self.ping_ids = itertools.count(1)
+        self.consoles: set = set()          # dashboard/console subscribers, for pushed events
+        # operator "look" directions: phone id → {label, until, sent, and compass | heading | point}
+        self.directives: dict[str, dict] = {}
+        self.directives_cleared: list[str] = []
+        self.mission = None                 # Mission Control (LLM); created in main()
 
     # ---- phone lifecycle -------------------------------------------------
     async def register(self, hello: dict, ws: WebSocket) -> Phone:
@@ -263,10 +278,13 @@ class Hub:
             # nothing counts as searched and nobody can find the candidate.
             searching = self.phase in SEARCH_PHASES
             if searching:
-                self.coverage.update(viewers)
-            busy = self.target.busy()  # responders are steered to the candidate, not by the planner
+                for pid, n in self.coverage.update(viewers).items():
+                    self.phones[pid].searched_cells += n
+            # responders and phones with an operator "look" direction are not the planner's to steer
+            busy = self.target.busy() | set(self.directives)
             cmds = self.planner.tick({k: v for k, v in viewers.items() if k not in busy}, now)
             cmds += self.target.tick(viewers if searching else {}, now)
+            cmds += self.directive_tick(now)
             if cmds:
                 await asyncio.gather(*(self.phones[pid].send({"type": "command", **cmd})
                                        for pid, cmd in cmds if pid in self.phones))
@@ -287,6 +305,145 @@ class Hub:
             self.planner.enabled = False
         await asyncio.gather(*(p.send({"type": "phase", "phase": phase}) for p in self.phones.values()))
 
+    # ---- operator actions (console + Mission Control) --------------------------
+    def phones_by_index(self, indexes: list[int] | None) -> list[Phone]:
+        """Empty or None means every phone."""
+        if not indexes:
+            return list(self.phones.values())
+        wanted = set(indexes)
+        return [p for p in self.phones.values() if p.index in wanted]
+
+    async def ping(self, x: float, y: float, label: str = "Check here", phones: list[int] | None = None) -> dict:
+        x = max(-ROOM["width"] / 2, min(ROOM["width"] / 2, float(x)))
+        y = max(0.0, min(ROOM["depth"], float(y)))
+        targets = self.phones_by_index(phones)
+        ping = {"id": next(self.ping_ids), "x": x, "y": y, "label": str(label)[:32] or "Check here",
+                "t": now_ms(), "phones": {p.id for p in targets} if phones else None}
+        self.pings.append(ping)
+        self.planner.note(f"Ping “{ping['label']}” at ({x:.1f}, {y:.1f})"
+                          + (f" → {', '.join('#' + str(p.index) for p in targets)}" if phones else ""))
+        cmd = {"type": "command", "cmd": "ping", "id": ping["id"], "x": x, "y": y,
+               "label": ping["label"], "ttlMs": PING_TTL_MS}
+        await asyncio.gather(*(p.send(cmd) for p in targets))
+        return ping
+
+    async def message(self, text: str, phones: list[int] | None = None) -> int:
+        targets = self.phones_by_index(phones)
+        text = str(text)[:140]
+        self.planner.note(f"Message: “{text}”" + (f" → {len(targets)} phones" if phones else " → everyone"))
+        cmd = {"type": "command", "cmd": "message", "text": text, "ttlMs": MESSAGE_TTL_MS}
+        await asyncio.gather(*(p.send(cmd) for p in targets))
+        return len(targets)
+
+    def assign(self, phones: list[int], sector: str) -> list[int]:
+        sector = sector.upper().strip()
+        if not self.planner.is_sector(sector):
+            raise ValueError(f"unknown sector {sector!r}")
+        now = now_ms()
+        done = []
+        for p in self.phones_by_index(phones):
+            pose = p.pose(now)
+            if pose:
+                self.planner.assign(p.id, sector, pose["x"], pose["y"], now)
+                done.append(p.index)
+        return done
+
+    def look(self, phones: list[int] | None, label: str, seconds: float | None = None, *,
+             compass: float | None = None, heading: float | None = None,
+             point: tuple[float, float] | None = None) -> list[int]:
+        """Point phones somewhere: a real compass bearing, a room heading (0 = stage), or a spot."""
+        now = now_ms()
+        until = now + 1000 * (seconds or LOOK_SECONDS)
+        done = []
+        for p in self.phones_by_index(phones):
+            self.planner.assignments.pop(p.id, None)  # the operator overrides the plan
+            self.directives[p.id] = {"label": str(label)[:16], "until": until, "sent": 0.0,
+                                     "compass": compass, "heading": heading, "point": point}
+            done.append(p.index)
+        self.planner.note(f"Look {label} → " + ", ".join(f"#{i}" for i in done))
+        return done
+
+    def clear_look(self, phones: list[int] | None) -> list[int]:
+        done = []
+        for p in self.phones_by_index(phones):
+            if self.directives.pop(p.id, None):
+                self.directives_cleared.append(p.id)
+                done.append(p.index)
+        return done
+
+    def directive_tick(self, now: float) -> list[tuple[str, dict]]:
+        out = [(pid, {"cmd": "guide", "clear": True}) for pid in self.directives_cleared]
+        self.directives_cleared = []
+        for pid, d in list(self.directives.items()):
+            phone = self.phones.get(pid)
+            if not phone or now > d["until"]:
+                del self.directives[pid]
+                out.append((pid, {"cmd": "guide", "clear": True}))
+                continue
+            if pid in self.target.busy() or now - d["sent"] < 1000:
+                continue  # responding to the candidate wins; otherwise refresh once a second
+            cmd = {"cmd": "guide", "kind": "look", "sector": d["label"], "untilMs": round(d["until"] - now)}
+            if d["compass"] is not None:
+                cmd["compass"] = d["compass"] % 360
+            elif d["heading"] is not None:
+                cmd["heading"] = d["heading"] % 360
+            else:
+                pose = phone.pose(now)
+                if not pose:
+                    continue
+                x, y = d["point"]
+                cmd["heading"] = math.degrees(math.atan2(x - pose["x"], -(y - pose["y"]))) % 360
+                cmd["distance"] = round(math.hypot(x - pose["x"], y - pose["y"]), 1)
+            d["sent"] = now
+            out.append((pid, cmd))
+        return out
+
+    def set_looking_for(self, text: str) -> None:
+        self.looking_for = str(text)[:80]
+        self.planner.note(f"Looking for: {self.looking_for or '(cleared)'}")
+
+    async def emit(self, event: dict) -> None:
+        """Push an event (e.g. Mission Control progress) to every open console/dashboard."""
+        await asyncio.gather(*(c.send_json(event) for c in list(self.consoles)), return_exceptions=True)
+
+    def active_pings(self, now: float) -> list[dict]:
+        self.pings = [pg for pg in self.pings if now - pg["t"] < PING_TTL_MS]
+        return self.pings
+
+    # ---- shared picture for phones --------------------------------------------
+    async def world_loop(self) -> None:
+        while True:
+            await asyncio.sleep(1 / WORLD_HZ)
+            now = now_ms()
+            live = [p for p in self.phones.values() if p.connected]
+            others = []
+            for p in live:
+                pose = p.pose(now)
+                if pose:
+                    others.append({"id": p.id, "i": p.index, "x": round(pose["x"], 2), "y": round(pose["y"], 2),
+                                   "h": None if pose["heading"] is None else round(pose["heading"])})
+            cov = self.coverage.snapshot()
+            cell_m2 = self.coverage.cell ** 2
+            ranked = sorted(live, key=lambda p: -p.searched_cells)
+            found = self.target.pos if self.target.found_by else None
+            pings = self.active_pings(now)
+            base = {
+                "type": "world", "phase": self.phase, "phones": others,
+                "coverage": {k: cov[k] for k in ("cols", "rows", "cell", "x0", "cells")},
+                "searched": cov["searched"], "searchers": len(live),
+                "lookingFor": self.looking_for,
+                "candidate": None if found is None else {"x": found[0], "y": found[1]},
+            }
+            sends = []
+            for p in live:
+                mine = [{"id": pg["id"], "x": pg["x"], "y": pg["y"], "label": pg["label"],
+                         "ageMs": round(now - pg["t"])}
+                        for pg in pings if pg["phones"] is None or p.id in pg["phones"]]
+                stats = {"m2": round(p.searched_cells * cell_m2, 1),
+                         "rank": ranked.index(p) + 1, "of": len(ranked)}
+                sends.append(p.send({**base, "me": p.id, "pings": mine, "stats": stats}))
+            await asyncio.gather(*sends)
+
     # ---- outbound ----------------------------------------------------------
     def state(self) -> dict:
         now = now_ms()
@@ -294,7 +451,10 @@ class Hub:
         return {"type": "state", "t": now, "phones": [p.summary(now) for p in phones],
                 "coverage": self.coverage.snapshot(), "planner": self.planner.snapshot(),
                 "target": self.target.snapshot(now),
-                "phase": self.phase, "phaseStartedAt": self.phase_started}
+                "phase": self.phase, "phaseStartedAt": self.phase_started,
+                "lookingFor": self.looking_for,
+                "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
+                "mission": self.mission.status() if self.mission else {"ready": False, "why": "not started"}}
 
     async def command(self, target: str, cmd: dict) -> None:
         phones = self.phones.values() if target == "all" else [self.phones.get(target)]
@@ -404,6 +564,8 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
     sub = FrameSubscriber(ws, fps=fps, with_state=with_state, skip_hidden=skip_hidden)
     if hello:
         await sub.send_json(hello)
+    if with_state:
+        hub.consoles.add(sub)
     pump = asyncio.create_task(sub.run())
     try:
         while True:
@@ -429,10 +591,15 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                 phone = hub.phones.get(str(msg.get("phoneId")))
                 if phone:
                     phone.hidden = bool(msg.get("hidden"))
-    except (WebSocketDisconnect, RuntimeError, ValueError):
+            elif msg.get("type") == "ping":
+                await hub.ping(msg["x"], msg["y"], msg.get("label") or "Check here", msg.get("phones"))
+            elif msg.get("type") == "mission" and hub.mission:
+                asyncio.create_task(hub.mission.run(str(msg.get("text", ""))))
+    except (WebSocketDisconnect, RuntimeError, ValueError, KeyError):
         pass
     finally:
         pump.cancel()
+        hub.consoles.discard(sub)
 
 
 @app.websocket("/ws/dashboard")
@@ -465,6 +632,21 @@ def get_state() -> dict:
 def post_pose(body: dict) -> dict:
     """Stub for the positioning service: {phoneId, x, y, heading?, confidence?, source?}."""
     return {"ok": hub.set_external_pose(body)}
+
+
+@app.post("/api/detections")
+async def post_detections(body: dict) -> dict:
+    """From the detection service: boxes to draw on one phone's camera view.
+    {phoneId, boxes: [{x, y, w, h, label?, score?}]} with x/y/w/h as 0..1 fractions of the frame."""
+    phone = hub.phones.get(str(body.get("phoneId")))
+    if not phone:
+        return {"ok": False, "error": "unknown phoneId"}
+    boxes = [
+        {k: b[k] for k in ("x", "y", "w", "h", "label", "score") if k in b}
+        for b in body.get("boxes", []) if all(k in b for k in ("x", "y", "w", "h"))
+    ][:20]
+    await phone.send({"type": "command", "cmd": "detections", "boxes": boxes, "ttlMs": 1500})
+    return {"ok": True, "boxes": len(boxes)}
 
 
 @app.get("/api/qr.svg")
@@ -501,7 +683,21 @@ def lan_ip() -> str:
         return "127.0.0.1"
 
 
+def load_env(path: Path = ROOT / ".env") -> None:
+    """Minimal .env reader (KEY=VALUE lines); real environment variables win."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
 def main() -> None:
+    load_env()
+    from .mission import MissionControl  # after load_env so it sees the API key
+    hub.mission = MissionControl(hub, ROOM)
     ap = argparse.ArgumentParser(description="Swarm Sight hub")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8000, help="plain HTTP (dashboard, simulator, tunnel)")
@@ -530,6 +726,7 @@ def main() -> None:
     async def serve() -> None:
         asyncio.create_task(hub.reaper())
         asyncio.create_task(hub.coverage_loop())
+        asyncio.create_task(hub.world_loop())
         await asyncio.gather(*(uvicorn.Server(c).serve() for c in configs))
 
     try:

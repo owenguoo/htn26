@@ -137,8 +137,8 @@ class Planner:
         candidates = []
         for pid, (x, y, heading, pitch) in viewers.items():
             a = self.assignments.get(pid)
-            if a and now - a["t"] < MIN_REASSIGN_MS:
-                continue
+            if a and (a.get("manual") or now - a["t"] < MIN_REASSIGN_MS):
+                continue  # operator assignments stick until the sector is done
             options = self.available(pid, x, y)
             if options:
                 candidates.append((len(options), pid, x, y, heading, options))
@@ -161,6 +161,16 @@ class Planner:
                                      "left": options[best], "progress_t": now}
             taken.add(best)
             self.note(f"→ {best} ({round(options[best] * 100)}% unsearched)", pid)
+
+    def assign(self, pid: str, sector: str, x: float, y: float, now: float) -> None:
+        """Operator override: send this phone to a sector regardless of the greedy plan."""
+        self.assignments[pid] = {"sector": sector, "t": now, "onTarget": False, "manual": True,
+                                 "left": self.unsearched_from(sector, x, y), "progress_t": now}
+        self.skipped.get(pid, set()).discard(sector)
+        self.note(f"→ {sector} (operator)", pid)
+
+    def is_sector(self, name: str) -> bool:
+        return name in self.sector_cells
 
     def note(self, text: str, pid: str | None = None) -> None:
         self.log.append({"t": now_ms(), "text": text, "phoneId": pid})
