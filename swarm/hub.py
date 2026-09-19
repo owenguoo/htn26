@@ -10,7 +10,6 @@ import io
 import itertools
 import json
 import math
-import os
 import socket
 import uuid
 from collections import deque
@@ -21,11 +20,12 @@ from PIL import Image, UnidentifiedImageError
 
 import segno
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from .detection import FrameSnapshot, SearchState
+from .detection import FrameSnapshot, SearchState, DetectionResult
+from .control import Settings, Auth, install_routes, load_env
 from .coverage import Coverage
 from .planner import Planner
 from .target import Target
@@ -360,13 +360,27 @@ class Hub:
             self.mission_complete = done
             await asyncio.sleep(1 / hz)
 
+    async def clear_detection_overlays(self) -> None:
+        revision = self.search.revision
+        async def clear(phone: Phone) -> None:
+            async with phone.send_lock:
+                if self.search.revision == revision and phone.ws:
+                    try:
+                        await phone.ws.send_json({'type': 'command', 'cmd': 'detections', 'boxes': [],
+                                                  'searchRevision': revision, 'clear': True, 'ttlMs': 0})
+                    except (RuntimeError, WebSocketDisconnect):
+                        pass
+        await asyncio.gather(*(clear(phone) for phone in self.phones.values()))
+
     async def set_phase(self, phase: str) -> None:
         """Re-selecting the current phase re-applies its effects (e.g. turns the planner back on)."""
         if phase not in PHASES:
             return
         if phase != self.phase:
+            self.search.reset()
             self.phase, self.phase_started = phase, now_ms()
             self.planner.note(f"Phase → {phase}")
+            await self.clear_detection_overlays()
             if self.mission:
                 self.mission.trigger()
         if phase == "search":
@@ -559,6 +573,7 @@ class Hub:
                 "coverage": self.coverage.snapshot(), "planner": self.planner.snapshot(),
                 "target": self.target.snapshot(now),
                 "phase": self.phase, "phaseStartedAt": self.phase_started,
+                "search": self.search_state() if hasattr(self, "search_state") else {},
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
                 "mission": self.mission.status() if self.mission else {"ready": False, "why": "not started"}}
@@ -584,6 +599,10 @@ def _seat(seat: dict) -> dict | None:
 
 hub = Hub()
 app = FastAPI(title="Swarm Sight hub")
+load_env()
+settings = Settings()
+auth = Auth(settings)
+install_routes(app, hub, auth)
 
 
 class FrameSubscriber:
@@ -686,6 +705,9 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
     try:
         while True:
             msg = await ws.receive_json()
+            if not auth.operator(ws) or not auth.same_origin(ws):
+                await sub.send_json({"error": "operator authentication required"})
+                continue
             if msg.get("type") == "command":
                 await hub.command(str(msg.get("target", "all")), msg.get("cmd") or {})
             elif msg.get("type") == "reset_coverage":
@@ -729,7 +751,7 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
 async def ws_dashboard(ws: WebSocket) -> None:
     """Projector and operator console. The console (role=console) still sees hidden feeds."""
     fps = float(ws.query_params.get("thumb_fps", 3))
-    console = ws.query_params.get("role") == "console"
+    console = ws.query_params.get("role") == "console" and auth.operator(ws) and auth.same_origin(ws)
     await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url},
                             skip_hidden=not console)
 
@@ -737,6 +759,9 @@ async def ws_dashboard(ws: WebSocket) -> None:
 @app.websocket("/ws/frames")
 async def ws_frames(ws: WebSocket) -> None:
     """For inference/positioning teammates: every phone's latest frame + pose, up to `fps` per phone."""
+    if not auth.bridge(ws) and not (auth.operator(ws) and auth.same_origin(ws)):
+        await ws.close(code=1008)
+        return
     fps = float(ws.query_params.get("fps", 5))
     await _serve_subscriber(ws, fps, False, None)
 
@@ -752,24 +777,30 @@ def get_state() -> dict:
 
 
 @app.post("/api/pose")
-def post_pose(body: dict) -> dict:
+def post_pose(body: dict, request: Request) -> dict:
     """Stub for the positioning service: {phoneId, x, y, heading?, confidence?, source?}."""
+    auth.require_bridge(request)
     return {"ok": hub.set_external_pose(body)}
 
 
 @app.post("/api/detections")
-async def post_detections(body: dict) -> dict:
-    """From the detection service: boxes to draw on one phone's camera view.
-    {phoneId, boxes: [{x, y, w, h, label?, score?}]} with x/y/w/h as 0..1 fractions of the frame."""
-    phone = hub.phones.get(str(body.get("phoneId")))
-    if not phone:
-        return {"ok": False, "error": "unknown phoneId"}
-    boxes = [
-        {k: b[k] for k in ("x", "y", "w", "h", "label", "score") if k in b}
-        for b in body.get("boxes", []) if all(k in b for k in ("x", "y", "w", "h"))
-    ][:20]
-    await phone.send({"type": "command", "cmd": "detections", "boxes": boxes, "ttlMs": 1500})
-    return {"ok": True, "boxes": len(boxes)}
+async def post_detections(body: dict, request: Request) -> dict:
+    auth.require_bridge(request)
+    if hub.phase != 'search' or not hub.search.accept_result(body, now_ms=now_ms()):
+        raise HTTPException(409, 'obsolete or invalid detection')
+    result = DetectionResult.model_validate(body)
+    phone = hub.phones.get(result.phoneId)
+    if phone:
+        async with phone.send_lock:
+            if (result.searchRevision != hub.search.revision or hub.phase != 'search'
+                    or hub.search.streams.get(result.phoneId) != result.streamId
+                    or now_ms() - result.t > 1500
+                    or hub.search.latest.get(result.phoneId) is None
+                    or hub.search.latest[result.phoneId].result.seq != result.seq):
+                raise HTTPException(409, 'search changed')
+            if phone.ws:
+                await phone.ws.send_json({'type': 'command', 'cmd': 'detections', **result.model_dump(), 'ttlMs': 1500})
+    return {'ok': True, 'boxes': len(result.boxes)}
 
 
 @app.get("/api/qr.svg")
@@ -806,18 +837,9 @@ def lan_ip() -> str:
         return "127.0.0.1"
 
 
-def load_env(path: Path = ROOT / ".env") -> None:
-    """Minimal .env reader (KEY=VALUE lines); real environment variables win."""
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
 
 def main() -> None:
+    print(f"Operator code: {settings.operator_code}")
     load_env()
     from .mission import MissionControl  # after load_env so it sees the API key
     hub.mission = MissionControl(hub, ROOM)

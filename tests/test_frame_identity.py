@@ -61,13 +61,15 @@ def test_frame_pose_dimensions_and_malformed_frame():
 def test_websocket_welcome_and_subscriber_contract(monkeypatch):
     hub = module.Hub()
     monkeypatch.setattr(module, 'hub', hub)
+    from swarm.control import Auth, Settings
+    monkeypatch.setattr(module, 'auth', Auth(Settings(bridge_key='test-bridge')))
     with TestClient(module.app) as client:
         with client.websocket_connect('/ws/phone') as phone:
             phone.send_json({'phoneId': 'phone'})
             welcome = phone.receive_json()
             assert welcome['streamId']
             phone.send_bytes(pack({'seq': 0, 'width': 48, 'height': 64}, jpeg()))
-            with client.websocket_connect('/ws/frames') as frames:
+            with client.websocket_connect('/ws/frames', headers={'Authorization': 'Bearer test-bridge'}) as frames:
                 header, data = unpack(frames.receive_bytes())
                 assert header['streamId'] == welcome['streamId']
                 assert header['searchRevision'] == hub.search.revision
