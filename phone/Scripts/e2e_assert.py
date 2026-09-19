@@ -55,6 +55,12 @@ def check(phone: dict | None, args: argparse.Namespace) -> list[str]:
         expect(got == args.last_command, f"debug.lastCommand.cmd == {args.last_command} (got {got!r})")
     if args.index is not None:
         expect(phone.get("index") == args.index, f"index == {args.index} (got {phone.get('index')})")
+    if args.hud:
+        hud = phone.get("hud") or {}
+        expect(bool(hud), "hud mirror present while a console has the phone expanded")
+        expect(len(hud.get("screen") or []) == 4, "hud.screen is [x0, y0, x1, y1]")
+        expect(isinstance(hud.get("ar"), list), "hud.ar is a list")
+        expect((hud.get("compass") or {}).get("abs") is False, "hud.compass is a room heading, not true north")
     if args.min_fps is not None:
         expect((phone.get("fps") or 0) >= args.min_fps, f"fps >= {args.min_fps} (got {phone.get('fps')})")
     return bad
@@ -68,6 +74,7 @@ def main() -> int:
     ap.add_argument("--last-command")
     ap.add_argument("--index", type=int)
     ap.add_argument("--min-fps", type=float)
+    ap.add_argument("--hud", action="store_true", help="expect the console HUD mirror")
     ap.add_argument("--timeout", type=float, default=20)
     ap.add_argument("--print-index", action="store_true")
     args = ap.parse_args()

@@ -381,3 +381,23 @@ the Simulator in replay mode. None of that involved ARKit or a camera.
       tunnel `https://host/` (wss).
 - [ ] Backgrounding → `recalibrating`, no cone until a marker or a new seat tap.
 - [ ] No actor-isolation runtime warnings in the console over 10 minutes.
+
+## PR #2 review fixes — unverified on hardware
+
+- [ ] **Ordered ARKit delivery:** the delegate now yields straight into the
+      event stream instead of spawning a Task per callback. Confirm no dropped
+      session, no "retained ARFrame" warnings, and preview + encoder both still
+      receive buffers over 10 minutes.
+- [ ] **Co-visible markers average:** with two markers in view at once,
+      `diagnostics.averagedSightings` climbs (it could not, reliably, before).
+- [ ] **Re-anchor after a relocalization jump:** cover the camera / walk out and
+      back until ARKit relocalizes with the cone visibly wrong, then hold a marker
+      in view: within ~2 s the cone snaps back and `relocks` increments. A single
+      glare misdetection must *not* do this.
+- [ ] **Manual reset:** mini-map → "Position looks wrong — forget the marker
+      lock" returns to `recalibrating` with no cone until a marker is seen.
+- [ ] **Seat-located pill** is green with `fix seat`, not permanently orange.
+- [ ] **Console HUD mirror:** expand this phone in `/console`; the compass tape,
+      banner, toast, ping diamonds and detection boxes drawn over the feed line
+      up with what the phone shows, and the dimmed side strips match what the
+      phone's screen actually crops.

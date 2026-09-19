@@ -81,6 +81,11 @@ resumable from the last green commit.
   which the hub exposes verbatim in `/api/state`.
 - Alignment is `none → seat → marker`. Unaligned, the phone sends `orient` with
   pitch only — never a position or heading from ARKit's arbitrary start frame.
+- **HUD mirror:** while a console has the phone expanded the hub sends
+  `cmd: hud` and the phone answers `type: hud` at 5 Hz (`HUDMirror.swift`), in
+  upright-frame fractions. A reconnect starts un-viewed.
+- **Not implemented:** `audio` (16 kHz PCM voice captions). Native phones do not
+  take part in voice-directed search yet; the hub treats it as optional.
 - **Clock:** the hub pings, the phone pongs with its epoch-ms clock, the hub
   works out the offset. Frames carry epoch-ms `tCapture`. `ClockSync` is kept
   with its tests but unused on this path; all overlay TTLs are local-monotonic.
@@ -96,6 +101,15 @@ calibration**. Operators walk, so ARKit drift accumulates; every re-sighting is
 a fix. Handle `didAdd` and `didUpdate` for `ARImageAnchor` as first-class
 events, and reject any correction that disagrees with the current estimate by
 more than the configured threshold.
+
+Rejection must not become a lockout. If ARKit relocalizes with a jump, every
+*correct* sighting disagrees from then on. `CalibrationEngine` re-establishes
+the origin when several rejected sightings in a row agree with each other over
+~1.5 s with nothing accepted in between; the operator can also force it.
+
+ARKit's delegate yields into the event stream **synchronously, never via a
+`Task`**: unstructured tasks carry no ordering, and a pose slipping between two
+co-visible markers stops them being averaged.
 
 `physicalWidth` must be the true measured width in metres or all scale is wrong.
 

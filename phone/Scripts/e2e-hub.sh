@@ -37,9 +37,9 @@ echo "=== 2/5 a flash from the dashboard reaches the phone ==="
 inject flash
 assert --alignment marker --last-command flash
 
-echo "=== 3/5 a console focusing the phone boosts its frame rate ==="
+echo "=== 3/5 a console focusing the phone boosts its frame rate and gets its HUD ==="
 inject focus --hold 6 &
-assert --alignment marker --min-fps 5 --timeout 8
+assert --alignment marker --min-fps 5 --hud --timeout 8
 wait $! || true
 
 echo "=== 4/5 a reconnect inside 30 s keeps index and colour ==="
