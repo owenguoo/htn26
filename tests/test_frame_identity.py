@@ -188,3 +188,16 @@ def test_overlapping_welcome_only_reaches_its_own_connection(monkeypatch):
             await asyncio.gather(pending, current, return_exceptions=True)
 
     asyncio.run(run())
+
+
+def test_audio_packets_preserve_video_frame_identity():
+    hub = module.Hub()
+    phone = asyncio.run(hub.register({'phoneId': 'phone'}, Socket()))
+    hub.on_frame(phone, pack({'seq': 0}, jpeg()))
+    original = phone.frame
+    pcm = b'\x00\x01' * 100
+    hub.on_frame(phone, pack({'type': 'audio'}, pcm))
+    assert phone.audio == pcm
+    assert phone.audio_at > 0
+    assert phone.frame == original and phone.frame_seq == 0
+    assert phone.frames_total == 1

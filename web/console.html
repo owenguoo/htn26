@@ -123,6 +123,13 @@
     .rec .why { color: var(--fg-2); font-size: 13px; margin-top: 2px; }
     .rec .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .rec + .rec { opacity: .55; }
+    .rec { cursor: pointer; transition: background .15s; }
+    .rec:hover { background: var(--bg-1); }
+    .rec.sel { opacity: 1 !important; background: var(--bg-1); box-shadow: inset 2px 0 0 var(--fg); }
+    .evidence { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line-2); display: grid; gap: 4px;
+      font-size: 12px; color: var(--fg-2); }
+    .evidence .k { color: var(--fg-3); display: inline-block; min-width: 92px; }
+    .explain-hint { font-size: 11px; color: var(--fg-3); margin-top: 6px; }
     .rec .state { font: 12px var(--mono); color: var(--fg-3); white-space: nowrap; }
     .rec .state.auto { color: var(--red); }
 
@@ -205,6 +212,14 @@
       font: 500 11px var(--mono); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); }
     .vimg .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: breathe 1s infinite; }
     .vnone { position: absolute; color: var(--fg-3); font-size: 13px; }
+    #vHudCanvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+    .vcap { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80%; display: none;
+      padding: 8px 14px; border-radius: 8px; background: rgba(0,0,0,0.78); color: #fff; font-size: 16px; font-weight: 500;
+      text-align: center; line-height: 1.35; }
+    .vcap.on { display: block; }
+    td .cap { font-size: 12px; color: var(--fg-2); max-width: 280px; white-space: normal; margin-top: 2px; }
+    #vHud.on { background: var(--fg); color: #000; border-color: var(--fg); }
+    #vHud.on kbd { color: #555; border-color: #999; }
     .vstats { display: grid; grid-template-columns: 1.5fr 1.6fr repeat(5, 1fr); border-top: 1px solid var(--line); }
     .vstats div { padding: 12px 16px; border-left: 1px solid var(--line); min-width: 0; }
     .vstats div:first-child { border-left: 0; }
@@ -293,7 +308,7 @@
     <section class="metrics">
       <div class="metric"><div class="k">Phones live</div><div class="v" id="mLive">0</div></div>
       <div class="metric"><div class="k">Placed</div><div class="v" id="mPlaced">0</div></div>
-      <div class="metric"><div class="k">Frames / s</div><div class="v" id="mFps">0</div></div>
+      <div class="metric"><div class="k" id="mFpsK">Frames / s</div><div class="v" id="mFps">0</div></div>
       <div class="metric"><div class="k">Latency p50</div><div class="v" id="mLat">–</div></div>
       <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
       <div class="metric" id="mCandBox"><div class="k">Candidate</div><div class="v" id="mCand">–</div></div>
@@ -302,7 +317,8 @@
     <section class="grid">
       <div class="card">
         <div class="card-h"><h2>Floor plan</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
-          <span class="faint" style="font-size:12px">Drag the candidate · right-click to ping</span></div>
+          <span class="mono" style="font-size:12px" id="likely"></span>
+          <span class="faint" style="font-size:12px">· brighter = more likely · drag the candidate · right-click to ping</span></div>
         <div id="mapWrap"><canvas id="map"></canvas></div>
       </div>
       <div class="stack">
@@ -353,10 +369,11 @@
         <span class="num" id="vNum"></span><b id="vName"></b><span class="faint" id="vDevice"></span>
         <span id="vBadges"></span><span class="spacer"></span>
         <span class="vfoot"><kbd>←</kbd> <kbd>→</kbd> switch</span>
+        <button class="btn sm" id="vHud" title="Show what's on this phone's screen (H)">HUD <kbd>H</kbd></button>
         <button class="btn sm" id="vHide"></button><button class="btn sm" id="vClose">Close <kbd>Esc</kbd></button>
       </div>
-      <div class="vimg"><img id="vImg" alt=""><div class="vnone" id="vNone">Waiting for video…</div>
-        <div class="live"><i></i>LIVE</div></div>
+      <div class="vimg"><img id="vImg" alt=""><canvas id="vHudCanvas"></canvas><div class="vnone" id="vNone">Waiting for video…</div>
+        <div class="live"><i></i>LIVE</div><div class="vcap" id="vCap"></div></div>
       <div class="analysis"><strong>Analyzed source frame</strong><div id="analysisMeta" class="muted">No current result</div><button class="btn" id="confirmSighting" hidden>Confirm visual sighting</button><canvas id="analyzedFrame" hidden></canvas></div>
       <div class="vstats">
         <div><div class="k">Doing</div><div class="v" id="vTask"></div></div>

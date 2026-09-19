@@ -4,9 +4,9 @@ import { startSlam, cameraForward, slamDebug } from '/web/slam.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
-const FPS = Number(params.get('fps')) || 2;          // frames per second sent to the hub
+const FPS = Number(params.get('fps')) || 10;          // frames per second sent to the hub
 const WIDTH = Number(params.get('w')) || 480;         // frame width in px
-const QUALITY = Number(params.get('q')) || 0.6;       // JPEG quality
+const QUALITY = Number(params.get('q')) || 0.5;       // JPEG quality
 const FAKE = params.has('fake');                     // no camera: send a generated test pattern
 const SLAM = params.has('slam') && !FAKE;             // 8th Wall world tracking for position + heading
 const SLAM_SCALE = params.get('slam') === 'responsive' ? 'responsive' : 'absolute';
@@ -65,6 +65,10 @@ $('#joinBtn').addEventListener('click', async () => {
     ? DeviceOrientationEvent.requestPermission().catch(() => 'denied')
     : Promise.resolve('granted');
   startGps();
+  // microphone separately, so declining it doesn't cost the camera
+  const micPerm = navigator.mediaDevices?.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false,
+  }).catch(() => null) ?? Promise.resolve(null);
   const camPerm = FAKE || SLAM ? Promise.resolve(null) : navigator.mediaDevices?.getUserMedia({
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false,
@@ -72,7 +76,8 @@ $('#joinBtn').addEventListener('click', async () => {
 
   try {
     if (!FAKE && !SLAM && !camPerm) throw new Error('Camera API unavailable. This page must be opened over HTTPS.');
-    const [ori, stream] = await Promise.all([oriPerm, camPerm]);
+    const [ori, stream, mic] = await Promise.all([oriPerm, camPerm, micPerm]);
+    state.mic = mic;
     if (ori !== 'granted') console.warn('orientation permission:', ori);
     state.stream = stream;
     await startLive();
@@ -110,6 +115,7 @@ async function startLive() {
   window.addEventListener('deviceorientation', onOrientation);
   window.addEventListener('deviceorientationabsolute', onAbsoluteOrientation); // Android: north-referenced
   keepAwake();
+  startVoice();
   state.room = await loadRoom();
   setupSeatMap();
   connect();
@@ -139,6 +145,7 @@ function connect() {
     state.retry = 0;
     ws.send(JSON.stringify({
       type: 'hello', phoneId: state.phoneId, name: state.name, seat: state.seat,
+      build: document.querySelector('meta[name="swarm-build"]')?.content || '',
       ua: navigator.userAgent, sim: false,
     }));
   };
@@ -151,6 +158,8 @@ function connect() {
       state.dets = null;
       state.detection = {streamId: msg.streamId, revision: null, seq: -1, captures: new Map()};
       state.connected = true;
+      hud.on = false;          // a fresh connection starts un-viewed:
+      setCaptureRate(FPS);     // the hub re-sends these if a console is watching
       if (state.gps) sendJson({ type: 'gps', ...state.gps });
       state.index = msg.index;
       state.color = msg.color;
@@ -605,6 +614,10 @@ function onCommand(msg) {
     };
     return;
   }
+  if (msg.cmd === 'hud') {
+    hud.on = !!msg.on;
+    return;
+  }
   if (msg.cmd === 'rate') {
     setCaptureRate(msg.fps || FPS);
     return;
@@ -619,8 +632,8 @@ function onCommand(msg) {
     beep(660, 0.12);
     return;
   }
-  if (msg.cmd === 'detections') {
-    const result = acceptDetection(state.detection, msg, performance.now());
+  if (msg.cmd === 'detections' || msg.cmd === 'rehearsal_detections') {
+    const result = acceptDetection(state.detection, {...msg, rehearsal: msg.cmd === 'rehearsal_detections'}, performance.now());
     if (result || msg.clear) state.dets = result;
     return;
   }
@@ -672,6 +685,7 @@ function drawCompass() {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   if (center === null) {
+    hud.compass = null;
     ctx.fillStyle = '#8b93b0';
     ctx.font = '600 13px system-ui';
     ctx.fillText('No compass data', w / 2, h / 2);
@@ -714,6 +728,7 @@ function drawCompass() {
     if (t.kind === 'candidate' && state.guide?.kind === 'respond') continue; // already shown as the guide marker
     markers.push({ off: t.off, label: `${t.label} ${t.dist.toFixed(0)}m`, color: t.color });
   }
+  hud.compass = { center, abs: abs !== null, markers: markers.map(({ off, label, color, big }) => ({ off, label, color, big: !!big })) };
   for (const m of markers) {
     const edge = Math.abs(m.off) > SPAN / 2 - 8;
     const x = edge ? (m.off > 0 ? w - 22 : 22) : w / 2 + m.off * ppd;
@@ -854,6 +869,98 @@ function frameToScreen(nx, ny, W, H) {
   return [dx + nx * v.videoWidth * s, dy + ny * v.videoHeight * s];
 }
 
+// Inverse of frameToScreen: screen pixels → 0..1 position in the captured frame.
+function screenToFrame(x, y, W, H) {
+  const v = $('#video');
+  if (SLAM || FAKE || !v.videoWidth) return [x / W, y / H];
+  const s = Math.max(W / v.videoWidth, H / v.videoHeight);
+  const dx = (W - v.videoWidth * s) / 2, dy = (H - v.videoHeight * s) / 2;
+  return [(x - dx) / (v.videoWidth * s), (y - dy) / (v.videoHeight * s)];
+}
+
+// ---------------------------------------------------------------- voice
+// Only sends audio while the person is talking (a simple loudness gate with a short pre-roll and
+// hang time). The hub transcribes each utterance into a caption the console and Mission Control see.
+const VOICE_RATE = 16000;
+const VOICE_THRESHOLD = 0.02;  // RMS loudness that counts as talking
+const VOICE_HANG_MS = 600;     // keep sending this long after it goes quiet (ends the utterance)
+const voice = { muted: false, talking: false, lastLoud: 0, preroll: [], seq: 0 };
+
+function startVoice() {
+  if (!state.mic || !state.audio) { $('#mic').classList.add('off'); $('#mic').title = 'No microphone'; return; }
+  const ctx = state.audio;
+  const src = ctx.createMediaStreamSource(state.mic);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  const sink = ctx.createGain();
+  sink.gain.value = 0; // the processor must be connected to run, but we don't want to hear ourselves
+  src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+  const step = ctx.sampleRate / VOICE_RATE;
+  proc.onaudioprocess = (e) => {
+    const input = e.inputBuffer.getChannelData(0);
+    const out = new Int16Array(Math.floor(input.length / step));
+    let sum = 0;
+    for (let i = 0; i < out.length; i++) {
+      const v = input[Math.floor(i * step)];
+      sum += v * v;
+      out[i] = Math.max(-1, Math.min(1, v)) * 0x7fff;
+    }
+    const now = Date.now();
+    const loud = Math.sqrt(sum / Math.max(out.length, 1)) > VOICE_THRESHOLD;
+    if (voice.muted) return;
+    if (loud) voice.lastLoud = now;
+    const talking = now - voice.lastLoud < VOICE_HANG_MS;
+    if (talking && !voice.talking) {  // start of an utterance: include the moment just before
+      for (const chunk of voice.preroll) sendVoice(chunk);
+      voice.preroll = [];
+    }
+    if (talking) sendVoice(out);
+    else {
+      if (voice.talking) sendJson({ type: 'audio_end' });
+      voice.preroll = [...voice.preroll, out].slice(-1); // ~0.25 s
+    }
+    voice.talking = talking;
+  };
+  state.voiceNode = proc; // keep a reference so it isn't garbage-collected
+}
+
+function sendVoice(pcm) {
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN || !state.connected) return;
+  ws.send(pack({ type: 'audio', seq: voice.seq++, rate: VOICE_RATE, tCapture: Date.now() }, pcm.buffer));
+}
+
+$('#mic').addEventListener('click', () => {
+  if (!state.mic) return;
+  voice.muted = !voice.muted;
+  if (voice.muted && voice.talking) sendJson({ type: 'audio_end' });
+  voice.talking = false;
+  $('#mic').classList.toggle('off', voice.muted);
+  $('#mic').title = voice.muted ? 'Muted: tap to unmute' : 'Tap to mute';
+});
+
+// ---------------------------------------------------------------- HUD mirror
+// While an operator has this phone expanded in the console, send a description of what's on
+// screen (compass, banners, AR markers, boxes) so the console can draw the same HUD over the feed.
+const hud = { on: false, compass: null, ar: [], screen: null };
+setInterval(() => {
+  if (!hud.on) return;
+  const shown = (sel) => ($(sel).classList.contains('on') ? $(sel).textContent : null);
+  const g = $('#guide');
+  const card = $('#phaseCard');
+  sendJson({
+    type: 'hud',
+    compass: hud.compass,
+    banner: g.classList.contains('on')
+      ? { text: g.textContent, tone: g.classList.contains('alert') ? 'alert' : g.classList.contains('ok') ? 'ok' : 'warn' } : null,
+    lookingFor: shown('#lookingFor'),
+    toast: shown('#toast'),
+    card: card.classList.contains('on') ? { title: $('#phaseTitle').textContent, text: $('#phaseText').textContent } : null,
+    ar: hud.ar,
+    screen: hud.screen,
+    dets: state.dets && state.dets.until > performance.now() ? state.dets.boxes : null,
+  });
+}, 200);
+
 function drawAR() {
   const c = $('#ar');
   const W = c.clientWidth, H = c.clientHeight;
@@ -871,9 +978,12 @@ function drawAR() {
     for (const b of state.dets.boxes) {
       const [x0, y0] = frameToScreen(b.x, b.y, W, H);
       const [x1, y1] = frameToScreen(b.x + b.w, b.y + b.h, W, H);
-      ctx.strokeStyle = b.similarity >= state.dets.threshold ? '#ff5d73' : '#fff';
+      const likely = state.dets.rehearsal || b.similarity >= state.dets.threshold;
+      ctx.strokeStyle = likely ? '#ff5d73' : '#fff';
       ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
-      const label = `${b.similarity >= state.dets.threshold ? 'Likely · ' : ''}${scoreLabel(b)}`;
+      const label = state.dets.rehearsal
+        ? `Rehearsal · confidence ${(b.score * 100).toFixed(0)}%`
+        : `${likely ? 'Likely · ' : ''}${scoreLabel(b)}`;
       if (label) {
         const tw = ctx.measureText(label).width + 10;
         ctx.fillStyle = ctx.strokeStyle;
@@ -891,6 +1001,8 @@ function drawAR() {
     targets.push({ off: g, dist: state.guide.distance ?? 3, label: 'CANDIDATE', color: '#ff5d73', kind: 'candidate' });
   }
   const seen = new Set();
+  hud.ar = [];
+  hud.screen = [...screenToFrame(0, 0, W, H), ...screenToFrame(W, H, W, H)]; // the part of the frame this screen shows
   for (const t of targets) {
     if (t.kind === 'candidate' && seen.has('candidate')) continue;
     seen.add(t.kind);
@@ -898,6 +1010,8 @@ function drawAR() {
     if (!p) continue;
     const [x, y] = p;
     const r = Math.max(9, Math.min(22, 60 / Math.max(t.dist, 1)));
+    const [fx, fy] = screenToFrame(x, y, W, H);
+    hud.ar.push({ x: fx, y: fy, r: r / H, label: `${t.label.replace(/^◆ /, '')} · ${t.dist.toFixed(1)} m`, color: t.color });
     ctx.fillStyle = t.color;
     ctx.strokeStyle = 'rgba(0,0,0,0.6)';
     ctx.lineWidth = 2;
@@ -965,6 +1079,7 @@ function escapeHtml(s) {
 // ---------------------------------------------------------------- ui loop
 let lastUi = 0;
 function tickUi(t) {
+  $('#mic').classList.toggle('live', voice.talking && !voice.muted);
   drawCompass();
   updateGuideBanner();
   drawAR();

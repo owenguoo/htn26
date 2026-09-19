@@ -53,7 +53,7 @@ uv run python -m swarm.inference
 Wait for `curl --fail http://127.0.0.1:8001/readyz` to succeed.
 Open `http://localhost:8000/console`, log in with the operator code, upload a reference, select exactly one detected person, and register it.
 Join phones through the dashboard QR code over HTTPS, with camera permission.
-The bridge samples each phone at one FPS; focused console video can run at eight FPS.
+The bridge samples each phone at one FPS; focused console video can run at fifteen FPS.
 The bridge permits four global requests, at most one in flight and one latest pending frame per phone, with a default 64-phone admission bound (`SWARM_MAX_PHONES`, maximum 256).
 Accepted results must be less than 1500 ms old and match the stream, search revision, reference version, dimensions, and monotonic result sequence.
 A 30-phone fake-worker test does not establish 30-phone model capacity.

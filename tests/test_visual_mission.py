@@ -96,9 +96,16 @@ def test_real_mode_stays_after_clear_and_explicit_rehearsal_restores_mock():
         assert client.post('/api/search/rehearsal').status_code == 200
         hub.target.place(0, 0)
         viewers = {'p': (0, 0, 0, None)}
-        hub.target.tick(viewers, 1000)
-        hub.target.tick(viewers, 2000)
+        from swarm.hub import Phone
+        phone = Phone('p', 1, seat={'x': 0, 'y': 2}, heading=0)
+        hub.phones['p'] = phone
+        boxes = hub.mock_detector._box(2, 0, .95)
+        asyncio.run(hub.ingest_detections(phone, [boxes]))
+        assert hub.sightings.best() is not None
+        assert len(set(hub.coverage.prob)) > 1
+        assert hub.check_sightings(viewers, now_ms())
         assert hub.target.found_by == 'p'
+        assert hub.target.fix == pytest.approx((0, 0), abs=.02)
 
 
 def test_enter_real_clears_active_mock_guidance_and_mission_context(monkeypatch):
@@ -113,7 +120,7 @@ def test_enter_real_clears_active_mock_guidance_and_mission_context(monkeypatch)
             sent.append(command)
 
     hub.target.place(0, 0)
-    hub.target.on_found('p', {'p': (0, 0, 0, None)}, 1000)
+    hub.target.confirm('p', 0, 0, .95, {'p': (0, 0, 0, None)}, 1000)
     hub.phones['p'] = Phone()
     hub.mission_complete = True
     asyncio.run(hub.enter_real_search())
@@ -318,3 +325,65 @@ def test_ordinary_phase_publication_survives_search_edit(monkeypatch, edit):
         assert not hub.planner.enabled
 
     asyncio.run(run())
+
+
+def test_real_mode_rejects_geometric_rehearsal_evidence():
+    from swarm.hub import Phone
+    hub = Hub()
+    phone = Phone('p', 1, seat={'x': 0, 'y': 2}, heading=0)
+    hub.phones['p'] = phone
+    boxes = [hub.mock_detector._box(2, 0, .99)]
+    asyncio.run(hub.ingest_detections(phone, boxes))
+    assert hub.sightings.best()
+    asyncio.run(hub.enter_real_search())
+    assert not hub.sightings.items
+    assert len(set(hub.coverage.prob)) == 1
+    before = hub.coverage.prob.copy()
+    asyncio.run(hub.ingest_detections(phone, boxes))
+    assert not hub.sightings.items
+    assert hub.coverage.prob == before
+    assert hub.check_sightings({'p': (0, 2, 0, None)}, now_ms()) == []
+    assert hub.target.confirm('p', 0, 0, .99, {'p': (0, 2, 0, None)}, now_ms()) == []
+    assert not hub.target.found_by and not hub.target.complete()
+
+
+def test_waiting_mock_overlay_cannot_cross_into_real_search():
+    from swarm.hub import Phone
+
+    async def run():
+        hub = Hub()
+        phone = Phone('p', 1, seat={'x': 0, 'y': 2}, heading=0)
+        sent = []
+
+        class Socket:
+            async def send_json(self, message):
+                sent.append(message)
+
+        phone.ws = Socket()
+        await phone.send_lock.acquire()
+        pending = asyncio.create_task(hub.ingest_detections(phone, [hub.mock_detector._box(2, 0, .99)]))
+        await asyncio.sleep(0)
+        await hub.enter_real_search()
+        phone.send_lock.release()
+        await pending
+        assert not sent
+        assert not hub.sightings.items
+
+    asyncio.run(run())
+
+
+def test_rehearsal_overlay_carries_stream_and_search_identity():
+    from swarm.hub import Phone
+    hub = Hub()
+    sent = []
+
+    class Socket:
+        async def send_json(self, message):
+            sent.append(message)
+
+    phone = Phone('p', 1, stream_id='stream', frame_seq=7)
+    phone.ws = Socket()
+    boxes = [hub.mock_detector._box(2, 0, .99)]
+    asyncio.run(hub.ingest_detections(phone, boxes))
+    assert sent == [{'type': 'command', 'cmd': 'rehearsal_detections', 'boxes': boxes,
+                     'streamId': 'stream', 'seq': 7, 'searchRevision': hub.search.revision, 'ttlMs': 1500}]
