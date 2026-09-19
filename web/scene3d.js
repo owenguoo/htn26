@@ -274,6 +274,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     const group = new THREE.Group();
     group.userData.scanVersion = version;
     group.userData.fused = live.fused;
+    group.userData.jointFrames = live.mode === "joint" ? live.frames : null;
     const latest = displayLive(getState()?.scan?.last);
     const currentSections = latest?.version === version ? latest.sections : sections;
     results.forEach((r, i) => {
@@ -311,7 +312,9 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
       g.setIndex(o.userData.originalIndex);
     }
     if (!cleanupEnabled || !root.children.some(o=>o.userData.sectionURL)) {
-      scanLabel = `live map · ${root.children.length} surface layers · ${root.userData.fused ? "fused surface" : "original surfaces"}`;
+      scanLabel = root.userData.jointFrames
+        ? `joint room map · ${root.userData.jointFrames} views`
+        : `live map · ${root.children.length} surface layers · ${root.userData.fused ? "fused surface" : "original surfaces"}`;
       return;
     }
     // Meshes are visible immediately. Yield while preparing each buffer, then do
