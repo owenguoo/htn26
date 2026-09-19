@@ -73,6 +73,16 @@ class SectionLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual({k:mapper.placed[k] for k in anchors},anchors)
                 restored=Mapper(hub,ROOM,Path(directory))
                 self.assertEqual(len(restored.sections),2)
+                (Path(directory)/'clean-test.glb').write_bytes(b'glTF-test')
+                with self.assertRaises(ValueError): mapper.install_consolidated('clean-test.glb', 1)
+                mapper.install_consolidated('clean-test.glb', 2)
+                self.assertEqual(len(mapper.sections), 2)
+                self.assertEqual(mapper.last['consolidated']['throughVersion'], 2)
+                mapper.adjust(scale=1.1)
+                restored=Mapper(hub,ROOM,Path(directory))
+                self.assertEqual(restored.consolidated, mapper.consolidated)
+                self.assertEqual(restored.last['consolidated']['transform'],
+                                 mapper.display(mapper.consolidated['autoTransform']))
                 last=mapper.last
                 cameras[0]['position']=[100,20,100]
                 mapper.pending={'k4'}

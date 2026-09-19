@@ -61,6 +61,7 @@ class Mapper:
         self.running = False
         self.version = 0
         self.generation = 0     # bumped by reset(): results from before it are thrown away
+        self.consolidated = None
         self.sections = []
         self.blocked_batch = None
         self.fit_pivot = None
@@ -86,6 +87,7 @@ class Mapper:
                 self.placed = {k: tuple(v) for k, v in saved.get("placed", {}).items()}
                 self.fit = saved.get("fit") or self.fit
                 self.last.setdefault("autoTransform", self.last["transform"])
+            self.consolidated = saved.get("consolidated")
             self.sections = saved.get("sections", [])
             self.fit_pivot = saved.get("fitPivot")
             self.previous_batch = saved.get("previousBatch", [])
@@ -113,7 +115,7 @@ class Mapper:
                 f.unlink(missing_ok=True)
         saved = self.out_dir / "last.json.tmp"
         saved.write_text(json.dumps({
-            "last": self.last, "placed": self.placed, "fit": self.fit, "sections": self.sections, "fitPivot": self.fit_pivot,
+            "last": self.last, "placed": self.placed, "fit": self.fit, "sections": self.sections, "fitPivot": self.fit_pivot, "consolidated": self.consolidated,
             "previousBatch": self.previous_batch, "pending": sorted(self.pending),
             "keyframes": [{key: v for key, v in k.items() if key != "jpeg" and not key.startswith("_")}
                           for k in self.keyframes]}))
@@ -129,6 +131,7 @@ class Mapper:
         """Start the scan over: forget every view and the current model (a rebuild in flight is discarded)."""
         self.blocked_batch = None
         self.fit_pivot = None
+        self.consolidated = None
         self.sections.clear()
         self.keyframes.clear()
         self.pending.clear()
@@ -149,6 +152,24 @@ class Mapper:
             f.unlink(missing_ok=True)
         self.hub.planner.note("🧊 Scan reset")
 
+    def install_consolidated(self, filename: str, through: int) -> None:
+        if self.running:
+            raise ValueError("Wait for the current reconstruction before installing a cleaned map")
+        if not self.last or not self.sections or through != max(s["version"] for s in self.sections):
+            raise ValueError("Cleaned map must match the current section snapshot")
+        if Path(filename).name != filename or not filename.startswith("clean-") or not filename.endswith(".glb"):
+            raise ValueError("Invalid cleaned map filename")
+        path = self.out_dir / filename
+        if not path.exists() or path.read_bytes()[:4] != b"glTF":
+            raise ValueError("Cleaned mesh is missing or invalid")
+        self.consolidated = {"url": f"/web/models/live/{filename}", "throughVersion": through,
+                             "autoTransform": {"scale": 1, "rotateYDeg": 0, "offset": [0, 0, 0]}}
+        self.version += 1
+        self.last["version"] = self.version
+        self.last["consolidated"] = self.consolidated | {"transform": self.display(self.consolidated["autoTransform"])}
+        self._save()
+        self.hub.planner.note("Cleaned surface installed; original sections preserved")
+
     def adjust(self, scale: float | None = None, turn: float | None = None, reset: bool = False) -> None:
         f = self.fit
         if reset:
@@ -160,6 +181,8 @@ class Mapper:
         if self.last:
             self.last["transform"] = self.display(self.last["autoTransform"])
             self.last["fit"] = dict(f)
+            if self.consolidated:
+                self.last["consolidated"] = self.consolidated | {"transform": self.display(self.consolidated["autoTransform"])}
             self.last["sections"] = [k | {"transform": self.display(k["autoTransform"])} for k in self.sections]
             self._save()
 
@@ -358,6 +381,8 @@ class Mapper:
                      "gpuSeconds": meta.get("totalSeconds"), "t": time.time(),
                      # typical distance to what the cameras saw, after scaling: a quick sanity check on scale
                      "viewDistanceM": round(transform["scale"] * meta["medianDepth"], 2) if meta.get("medianDepth") else None}
+        if self.consolidated:
+            self.last["consolidated"] = self.consolidated | {"transform": self.display(self.consolidated["autoTransform"])}
         self.last["sections"] = [k | {"transform": self.display(k["autoTransform"])} for k in self.sections]
         self.running = False
         self._save()

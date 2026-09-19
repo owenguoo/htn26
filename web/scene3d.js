@@ -102,16 +102,21 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   draco.setWorkerLimit(1);
   loader.setDRACOLoader(draco);
   let transformKey = '', fitted = false, cutaway = true;
-  let cleanupWorker = null, cleanupEpoch = 0, cleanupEnabled = false;
+  let cleanupWorker = null, cleanupEpoch = 0, cleanupEnabled = false, fusedEnabled = true;
   const cutPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
 
   const toolbar = document.createElement('div');
   toolbar.className = 's3d-tools';
-  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="true">Cutaway</button><button type="button" data-view="clean" aria-pressed="false">Clean patches</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
+  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="true">Cutaway</button><button type="button" data-view="fused" aria-pressed="true" hidden>Fused surface</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
   host.appendChild(toolbar);
   toolbar.addEventListener('click', (e) => {
     const action = e.target.closest('button')?.dataset.view;
     if (action === 'fit' || action === 'top') fitView(action === 'top');
+    if (action === 'fused') {
+      fusedEnabled = !fusedEnabled;
+      e.target.setAttribute('aria-pressed', String(fusedEnabled));
+      syncScan(getState());
+    }
     if (action === 'clean') {
       cleanupEnabled = !cleanupEnabled;
       e.target.setAttribute('aria-pressed', String(cleanupEnabled));
@@ -232,6 +237,14 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     }, undefined, () => { if (!scanObj) scanStatus = 'failed'; });
   }
 
+  function displayLive(live) {
+    if (!live?.sections?.length) return live;
+    const fused = fusedEnabled && live.consolidated;
+    return {...live, version: live.version * 2 + (fused ? 1 : 0),
+      sections: fused ? [fused, ...live.sections.filter(s => s.version > fused.throughVersion)] : live.sections,
+      fused: Boolean(fused)};
+  }
+
   async function loadSections(live) {
     const version = live.version;
     const sections = live.sections;
@@ -260,7 +273,8 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     }
     const group = new THREE.Group();
     group.userData.scanVersion = version;
-    const latest = getState()?.scan?.last;
+    group.userData.fused = live.fused;
+    const latest = displayLive(getState()?.scan?.last);
     const currentSections = latest?.version === version ? latest.sections : sections;
     results.forEach((r, i) => {
       applyTransform(r.value, currentSections[i].transform);
@@ -297,7 +311,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
       g.setIndex(o.userData.originalIndex);
     }
     if (!cleanupEnabled || !root.children.some(o=>o.userData.sectionURL)) {
-      scanLabel = `live map · ${root.children.length} retained sections · original surfaces`;
+      scanLabel = `live map · ${root.children.length} surface layers · ${root.userData.fused ? "fused surface" : "original surfaces"}`;
       return;
     }
     // Meshes are visible immediately. Yield while preparing each buffer, then do
@@ -369,7 +383,8 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   }
 
   function syncScan(st) {
-    const live = st?.scan?.last;
+    toolbar.querySelector('[data-view="fused"]').hidden = !st?.scan?.last?.consolidated;
+    const live = displayLive(st?.scan?.last);
     if (live?.sections?.length) {
       if (live.version !== scanVersion) {
         scanVersion = live.version;
