@@ -212,7 +212,7 @@ class MissionControl:
                 "lastMs": self.last_ms, "why": None if self.client else "Add OPENAI_API_KEY to .env",
                 "autonomy": self.autonomy, "thinking": self.thinking, "lastThinkMs": self.last_think_ms,
                 "calls": self.calls, "tokens": self.tokens,
-                "recs": [{k: r[k] for k in ("id", "title", "reason", "severity", "actions", "status", "results")}
+                "recs": [{k: r.get(k) for k in ("id", "title", "reason", "severity", "actions", "status", "results", "evidence")}
                          | {"ageS": round(now - r["t"])} for r in reversed(self.recs)]}
 
     def set_autonomy(self, on: bool) -> None:
@@ -367,7 +367,8 @@ class MissionControl:
             return
         rec = {"id": next(self.rec_ids), "t": time.time(), "title": raw["title"][:80],
                "reason": raw["reason"][:160], "severity": raw["severity"],
-               "actions": [{"name": a["name"], "args": a["args"]}], "status": "executed", "results": []}
+               "actions": [{"name": a["name"], "args": a["args"]}], "status": "executed", "results": [],
+               "evidence": self._evidence(a)}
         try:
             rec["results"].append(await self.execute(a["name"], a["args"]))
         except Exception as e:
@@ -376,6 +377,32 @@ class MissionControl:
         self.recs.append(rec)
         self.hub.planner.note(f"⚡ {rec['title']}")
         self._settle_speech(a if rec["status"] == "executed" else None)
+
+    def _evidence(self, a: dict) -> dict:
+        """What this decision was based on, captured when it was made (for "explain this decision")."""
+        hub, now = self.hub, now_ms()
+        args = a["args"]
+        point = [float(args["x"]), float(args["y"])] if "x" in args and "y" in args else None
+        sector = str(args.get("sector") or "").upper() or None
+        if sector and hub.planner.is_sector(sector):
+            point = list(hub.planner.sector_center(sector))
+        phones = []
+        for n in args.get("phones") or []:
+            p = next((q for q in hub.phones.values() if q.index == n), None)
+            pose = p.pose(now) if p else None
+            phones.append({"index": n, "x": pose["x"] if pose else None, "y": pose["y"] if pose else None})
+        speech = []
+        for pid, cap in self.speech_shown:
+            p = hub.phones.get(pid)
+            pose = p.pose(now) if p else None
+            if p:
+                speech.append({"index": p.index, "text": cap["text"],
+                               "x": pose["x"] if pose else None, "y": pose["y"] if pose else None})
+        best = None if hub.target.found_by else hub.sightings.best()
+        sighting = ({"x": best["x"], "y": best["y"], "confidence": round(hub.sightings.confidence(best), 2)}
+                    if best and hub.sightings.confidence(best) >= 0.4 else None)
+        return {"tool": a["name"], "point": point, "sector": sector, "phones": phones, "speech": speech,
+                "sighting": sighting, "likely": hub.likely_sectors(3)}
 
     def _settle_speech(self, action: dict | None) -> None:
         """After a review: speech it acted on is handled; speech seen twice without action was chatter."""

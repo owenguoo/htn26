@@ -440,6 +440,7 @@ function onMission(ev) {
 
 // ---------------------------------------------------------------- autonomy
 let recsKey = '';
+let explaining = null; // id of the autonomy action whose evidence is shown on the map
 
 function renderAutonomy(m) {
   const on = !!m.autonomy;
@@ -454,15 +455,139 @@ function renderAutonomy(m) {
     : `Autonomous${m.lastThinkMs ? ` · reviews take ${(m.lastThinkMs / 1000).toFixed(1)}s` : ''}`;
   $('#aiUsage').textContent = `${m.calls || 0} calls · ${((m.tokens || 0) / 1000).toFixed(1)}k tokens`;
 
-  // live feed of what autonomy did (newest first, last minute)
-  const recs = (m.recs || []).filter((r) => r.ageS < 60).slice(0, 4);
-  const key = JSON.stringify(recs.map((r) => r.id));
+  // live feed of what autonomy did (newest first, last minute), plus the one being explained
+  const all = m.recs || [];
+  let recs = all.filter((r) => r.ageS < 60).slice(0, 4);
+  const sel = all.find((r) => r.id === explaining);
+  if (explaining && !sel) explaining = null; // aged out of the hub's history
+  if (sel && !recs.includes(sel)) recs = [sel, ...recs.slice(0, 3)];
+  const key = JSON.stringify([explaining, recs.map((r) => r.id)]);
   if (key === recsKey) return; // unchanged: don't rebuild
   recsKey = key;
-  $('#recs').innerHTML = recs.map((r) => `<div class="rec"><span class="sev ${r.severity}"></span>
+  $('#recs').innerHTML = recs.map((r) => `<div class="rec ${r.id === explaining ? 'sel' : ''}" data-rec="${r.id}">
+      <span class="sev ${r.severity}"></span>
       <div><div class="t">${escapeHtml(r.title)}</div><div class="why">${escapeHtml(r.reason)}</div>
-      <div class="acts">${r.results.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join('')}</div></div>
+      <div class="acts">${r.results.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join('')}</div>
+      ${r.id === explaining ? evidenceHtml(r.evidence) : ''}</div>
       <span class="state ${r.status === 'failed' ? '' : 'auto'}">${r.status === 'failed' ? '✕ failed' : '⚡ done'}</span></div>`).join('');
+}
+
+// ---------------------------------------------------------------- explain a decision
+// Click an autonomy action: its card lists what it was based on (captured when it was decided),
+// and the map highlights the same evidence. Click again or press Esc to clear.
+function evidenceHtml(ev) {
+  if (!ev) return '<div class="evidence">No evidence was recorded for this action.</div>';
+  const pos = (x, y) => (x != null ? `(${x.toFixed(1)}, ${y.toFixed(1)})` : '');
+  const rows = [];
+  if (ev.phones?.length) {
+    rows.push(['Ordered', ev.phones.map((p) => {
+      const d = ev.point && p.x != null ? ` · ${Math.hypot(ev.point[0] - p.x, ev.point[1] - p.y).toFixed(1)} m away` : '';
+      return `#${p.index} at ${pos(p.x, p.y)}${d}`;
+    }).join('; ')]);
+  }
+  if (ev.point) rows.push(['Target', `${ev.sector ? `sector ${ev.sector} ` : ''}${pos(ev.point[0], ev.point[1])}`]);
+  for (const s of ev.speech || []) rows.push(['Heard', `#${s.index} ${pos(s.x, s.y)}: “${s.text}”`]);
+  if (ev.sighting) rows.push(['Sighting', `${Math.round(ev.sighting.confidence * 100)}% at ${pos(ev.sighting.x, ev.sighting.y)}`]);
+  if (ev.likely?.length) rows.push(['Most likely then', ev.likely.map((l) => `${l.sector} ${Math.round(l.share * 100)}%`).join(' · ')]);
+  return `<div class="evidence">${rows.map(([k, v]) => `<div><span class="k">${k}</span>${escapeHtml(v)}</div>`).join('')}
+    <div class="explain-hint">Highlighted on the map · click again or Esc to clear</div></div>`;
+}
+
+$('#recs').addEventListener('click', (e) => {
+  const card = e.target.closest('[data-rec]');
+  if (!card) return;
+  const id = Number(card.dataset.rec);
+  explaining = explaining === id ? null : id;
+  recsKey = ''; // rebuild the feed now
+  if (st?.mission) renderAutonomy(st.mission);
+});
+
+function drawExplain() {
+  const r = explaining && st.mission?.recs?.find((x) => x.id === explaining);
+  const ev = r?.evidence;
+  if (!ev) return;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.45)'; // dim everything else so the evidence stands out
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '500 11px "Geist Mono", ui-monospace, monospace';
+  // what was most likely at the time
+  const size = st.planner?.sectorSize || 2.5, x0 = -room.width / 2;
+  for (const l of ev.likely || []) {
+    const c = l.sector.charCodeAt(0) - 65, row = Number(l.sector.slice(1)) - 1;
+    const [ax, ay] = view.toPx(x0 + c * size, row * size);
+    const [bx, by] = view.toPx(x0 + (c + 1) * size, (row + 1) * size);
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ax, ay, bx - ax, by - ay);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText(`${l.sector} ${Math.round(l.share * 100)}%`, (ax + bx) / 2, (ay + by) / 2);
+  }
+  // the sighting it was reacting to
+  if (ev.sighting) {
+    const [sx, sy] = view.toPx(ev.sighting.x, ev.sighting.y);
+    ctx.strokeStyle = '#ff4d4d';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(sx, sy, 15, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#ff4d4d';
+    ctx.fillText(`sighting ${Math.round(ev.sighting.confidence * 100)}%`, sx, sy - 24);
+  }
+  // who was sent, from where they were at the time, to where
+  let tx = null, ty = null;
+  if (ev.point) {
+    [tx, ty] = view.toPx(ev.point[0], ev.point[1]);
+    if (ev.sector) {
+      const c = ev.sector.charCodeAt(0) - 65, row = Number(ev.sector.slice(1)) - 1;
+      const [ax, ay] = view.toPx(x0 + c * size, row * size);
+      const [bx, by] = view.toPx(x0 + (c + 1) * size, (row + 1) * size);
+      ctx.strokeStyle = '#ededed';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(ax, ay, bx - ax, by - ay);
+    }
+  }
+  for (const p of ev.phones || []) {
+    if (p.x == null) continue;
+    const [px, py] = view.toPx(p.x, p.y);
+    if (tx != null) {
+      ctx.strokeStyle = '#ededed';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, ty); ctx.stroke();
+    }
+    ctx.strokeStyle = '#ededed';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ededed';
+    ctx.fillText(`#${p.index}`, px, py - 18);
+  }
+  if (tx != null) {
+    ctx.fillStyle = '#ededed';
+    ctx.beginPath(); ctx.arc(tx, ty, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(tx, ty, 11, 0, Math.PI * 2); ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  // what someone said that prompted it
+  for (const s of ev.speech || []) {
+    if (s.x == null) continue;
+    const [px, py] = view.toPx(s.x, s.y);
+    const text = `“${s.text.length > 44 ? `${s.text.slice(0, 43)}…` : s.text}”`;
+    ctx.font = '500 12px Geist, system-ui';
+    const w = ctx.measureText(text).width + 16;
+    const bx = Math.max(4, Math.min(W - w - 4, px - w / 2)), by = Math.max(4, py - 46);
+    ctx.fillStyle = '#ededed';
+    ctx.beginPath(); ctx.roundRect(bx, by, w, 24, 6); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(px - 5, by + 24); ctx.lineTo(px + 5, by + 24); ctx.lineTo(px, by + 30); ctx.fill();
+    ctx.fillStyle = '#000';
+    ctx.fillText(text, bx + w / 2, by + 12.5);
+    ctx.strokeStyle = '#ededed';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
 }
 
 $('#autoSw').addEventListener('click', () => send({ type: 'autonomy', enabled: !st?.mission?.autonomy }));
@@ -497,6 +622,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea')) return;
   if (e.key === '/') { e.preventDefault(); $('#mcInput').focus(); return; }
+  if (e.key === 'Escape' && explaining) { explaining = null; recsKey = ''; if (st?.mission) renderAutonomy(st.mission); return; }
   if (e.key === 'm' || e.key === 'M') { send({ type: 'autonomy', enabled: !st?.mission?.autonomy }); return; }
   const n = Number(e.key);
   if (n >= 1 && n <= PHASES.length) send({ type: 'phase', phase: PHASES[n - 1][0] });
@@ -569,6 +695,7 @@ function draw() {
   drawSightings();
   drawCandidate();
   drawPings();
+  drawExplain();
   for (const p of list) {
     const [px, py] = view.toPx(p.pose.x, p.pose.y);
     ctx.globalAlpha = p.connected ? 1 : 0.35;
