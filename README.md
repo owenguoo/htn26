@@ -24,6 +24,28 @@ DEVICE_CHECKLIST.md       everything the tests cannot prove
 About 95% of the logic is in `SwarmCore`, behind `PoseProvider`, so it builds and
 tests in seconds with no simulator and no device. ARKit plugs into that one seam.
 
+## Machine prerequisites
+
+`swift test` runs on the Command Line Tools toolchain alone. The `xcodebuild`
+gate needs two things this repo cannot do for you:
+
+```bash
+sudo xcodebuild -license accept
+```
+
+```bash
+xcodebuild -downloadPlatform iOS
+```
+
+The first is a one-off; until it is run, every `swift`, `xcrun` and `xcodebuild`
+invocation under Xcode refuses. The second installs the iOS Simulator runtime,
+which this Xcode does not ship with — without it there are no simulator devices,
+so `-destination 'platform=iOS Simulator,name=iPhone 16'` cannot resolve. It is
+a multi-gigabyte download.
+
+Note that the app **compiles** for the simulator without either of these; only
+the `xcodebuild` invocation needs them.
+
 ## Verifying
 
 ```
