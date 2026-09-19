@@ -1,0 +1,162 @@
+import Foundation
+import Testing
+@testable import SwarmCore
+
+/// CLAUDE.md's architectural rules, enforced rather than described.
+///
+/// Every one of these is a rule somebody will break at 3am while tired and
+/// convinced it is fine just this once. A comment does not stop that; a failing
+/// test does.
+@Suite("Architecture")
+struct ArchitectureTests {
+
+    private var repositoryRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SwarmCoreTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // SwarmCore
+            .deletingLastPathComponent()  // Packages
+            .deletingLastPathComponent()  // repo root
+    }
+
+    private func swiftFiles(under relativePath: String) -> [(url: URL, source: String)] {
+        let root = repositoryRoot.appendingPathComponent(relativePath)
+        guard let enumerator = FileManager.default.enumerator(atPath: root.path) else { return [] }
+        var results: [(URL, String)] = []
+        for case let name as String in enumerator where name.hasSuffix(".swift") {
+            let url = root.appendingPathComponent(name)
+            if let source = try? String(contentsOf: url, encoding: .utf8) {
+                results.append((url, source))
+            }
+        }
+        return results
+    }
+
+    /// Lines that are actual code, not comments. Every rule below is about what
+    /// the compiler sees, and a rule that fires on prose is a rule people learn
+    /// to work around.
+    private func codeLines(_ source: String) -> [(number: Int, text: String)] {
+        var inBlockComment = false
+        var result: [(Int, String)] = []
+        for (index, raw) in source.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            var line = String(raw)
+            if inBlockComment {
+                guard let end = line.range(of: "*/") else { continue }
+                inBlockComment = false
+                line = String(line[end.upperBound...])
+            }
+            if let start = line.range(of: "/*") {
+                inBlockComment = line.range(of: "*/", range: start.upperBound..<line.endIndex) == nil
+                line = String(line[..<start.lowerBound])
+            }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("//") else { continue }
+            if let comment = line.range(of: "//") {
+                line = String(line[..<comment.lowerBound])
+            }
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            result.append((index + 1, line))
+        }
+        return result
+    }
+
+    /// SwarmCore must build and test with `swift test` on macOS with no
+    /// simulator and no device. One of these imports and it cannot.
+    @Test(arguments: ["ARKit", "UIKit", "SwiftUI", "CoreMotion", "CoreHaptics",
+                      "RealityKit", "AVFoundation", "CoreImage"])
+    func swarmCoreDoesNotImport(framework: String) {
+        for (url, source) in swiftFiles(under: "Packages/SwarmCore/Sources") {
+            for line in codeLines(source) where line.text.contains("import \(framework)") {
+                Issue.record(Comment(rawValue:
+                    "\(url.lastPathComponent):\(line.number) imports \(framework). If SwarmCore "
+                    + "needs this, the abstraction is wrong — widen the protocol instead."))
+            }
+        }
+    }
+
+    /// "ARKit appears in exactly one file: ARKitPoseProvider.swift in the app
+    /// target."
+    @Test func arkitAppearsInExactlyOneFile() {
+        // Shipping code only. This very file mentions "import ARKit" in a string
+        // literal, which is code as far as the scanner is concerned — and the
+        // first run of this test caught itself, which is at least a working
+        // demonstration that the scan is not vacuous.
+        let importers = (swiftFiles(under: "SwarmSight")
+                         + swiftFiles(under: "Packages/SwarmCore/Sources"))
+            .filter { _, source in
+                codeLines(source).contains { $0.text.contains("import ARKit") }
+            }
+            .map { $0.url.lastPathComponent }
+            .sorted()
+        #expect(importers == ["ARKitPoseProvider.swift"],
+                "ARKit is imported by \(importers.isEmpty ? ["nothing"] : importers)")
+    }
+
+    /// "No force unwraps outside tests."
+    @Test func noForceUnwrapsOutsideTests() {
+        // `!` as a prefix (negation), `!=`, and `try!`/`as!` inside tests are all
+        // fine; a postfix `!` on an expression in shipping code is not.
+        let pattern = try! NSRegularExpression(
+            pattern: #"[A-Za-z0-9_\)\]]\!(?![=\w])"#)
+        var offences: [String] = []
+        for path in ["Packages/SwarmCore/Sources", "SwarmSight"] {
+            for (url, source) in swiftFiles(under: path) {
+                for line in codeLines(source) {
+                    let range = NSRange(line.text.startIndex..., in: line.text)
+                    guard pattern.firstMatch(in: line.text, range: range) != nil else { continue }
+                    let text = line.text.trimmingCharacters(in: .whitespaces)
+                    offences.append("\(url.lastPathComponent):\(line.number): \(text)")
+                }
+            }
+        }
+        #expect(offences.isEmpty, "force unwraps in shipping code:\n\(offences.joined(separator: "\n"))")
+    }
+
+    /// `worldAlignment = .gravityAndHeading` pulls in the magnetometer, which is
+    /// off by tens of degrees indoors. Gravity fixes pitch and roll; the marker
+    /// fixes yaw.
+    @Test func neverUsesGravityAndHeading() {
+        for (url, source) in swiftFiles(under: "SwarmSight") {
+            for line in codeLines(source) where line.text.contains("gravityAndHeading") {
+                Issue.record("\(url.lastPathComponent):\(line.number) uses .gravityAndHeading")
+            }
+        }
+    }
+
+    /// "Anything ARKit-dependent goes in a file with a `// DEVICE-VERIFY:`
+    /// comment stating exactly what a human must check on hardware."
+    @Test func everyDeviceDependentFileSaysWhatAHumanMustCheck() {
+        let deviceDependent = ["ARKitPoseProvider.swift", "FrameEncoder.swift",
+                               "LiDARDepthSource.swift", "Haptics.swift"]
+        for (url, source) in swiftFiles(under: "SwarmSight")
+        where deviceDependent.contains(url.lastPathComponent) {
+            let name = url.lastPathComponent
+            #expect(source.contains("DEVICE-VERIFY:"),
+                    "\(name) cannot be tested here and does not say what to check on hardware")
+            #expect(source.contains("DEVICE_CHECKLIST.md"), "\(name) does not point at the checklist")
+        }
+    }
+
+    @Test func theDeviceChecklistExists() throws {
+        let url = repositoryRoot.appendingPathComponent("DEVICE_CHECKLIST.md")
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        #expect(contents.count > 2_000, "the checklist is too short to be a real one")
+        for topic in ["local-network", "Marker detection range", "Re-lock", "Drift",
+                      "Thermal", "Backgrounding", "latency", "synthetic"] {
+            #expect(contents.localizedCaseInsensitiveContains(topic),
+                    "DEVICE_CHECKLIST.md does not cover \(topic)")
+        }
+    }
+
+    /// The 4.6 GB checkpoint must never be committable. GitHub rejects files over
+    /// 100 MB, a multi-gigabyte blob makes every clone painful even via LFS, and
+    /// the FAIR Noncommercial Research License makes redistribution a licensing
+    /// question as well as a git one.
+    @Test func weightsAreGitignored() throws {
+        let url = repositoryRoot.appendingPathComponent(".gitignore")
+        let contents = try String(contentsOf: url, encoding: .utf8)
+        for pattern in ["*.pt", "*.safetensors", "checkpoints/"] {
+            #expect(contents.contains(pattern), ".gitignore does not exclude \(pattern)")
+        }
+    }
+}
