@@ -70,7 +70,7 @@ test('reference numbers remain readable at a 210 by 280 CSS pixel portrait previ
   const code = fs.readFileSync('web/console.js','utf8');
   const fn = code.slice(code.indexOf('function paintPeople('),code.indexOf("\n$('#referenceFile').addEventListener"));
   const sandbox = vm.createContext({});
-  vm.runInContext(`const ctx={strokeRect(){},fillRect(){},fillText(text){this.label=text;}};const canvas={width:960,height:1280,getContext:()=>ctx,getBoundingClientRect:()=>({width:210,height:280})};`+fn,sandbox);
+  vm.runInContext(`const ctx={beginPath(){},moveTo(){},lineTo(){},stroke(){},strokeRect(){},fillRect(){},fillText(text){this.label=text;}};const canvas={width:960,height:1280,getContext:()=>ctx,getBoundingClientRect:()=>({width:210,height:280})};`+fn,sandbox);
   vm.runInContext('paintPeople(canvas,[{box:[100,100,400,900]}])',sandbox);
   assert.ok(vm.runInContext("parseFloat(ctx.font.split(' ')[1])*210/960 >= 14",sandbox));
   assert.equal(vm.runInContext('ctx.label',sandbox),'1');
@@ -90,4 +90,23 @@ test('a deferred initial session response cannot overwrite newer login or logout
     await pending;
     assert.equal(vm.runInContext('authenticated',sandbox),action === 'login');
   }
+});
+test('overlapping reference boxes keep every numeric marker visible', () => {
+  const code = fs.readFileSync('web/console.js','utf8');
+  const fn = code.slice(code.indexOf('function paintPeople('),code.indexOf("\n$('#referenceFile').addEventListener"));
+  const sandbox = vm.createContext({});
+  vm.runInContext(`const rects=[];const ctx={strokeRect(){},fillRect(x,y,w,h){rects.push({x,y,w,h})},fillText(){},beginPath(){},moveTo(){},lineTo(){},stroke(){}};const canvas={width:960,height:1280,getContext:()=>ctx,getBoundingClientRect:()=>({width:210,height:280})};`+fn,sandbox);
+  vm.runInContext('paintPeople(canvas,Array.from({length:5},()=>({box:[100,100,400,900]})))',sandbox);
+  const rects = JSON.parse(vm.runInContext('JSON.stringify(rects)',sandbox));
+  for (const [i,a] of rects.entries()) {
+    assert.ok(a.x >= 0 && a.y >= 0 && a.x+a.w <= 960 && a.y+a.h <= 1280);
+    for (const b of rects.slice(i+1)) assert.ok(a.x+a.w <= b.x || b.x+b.w <= a.x || a.y+a.h <= b.y || b.y+b.h <= a.y);
+  }
+});
+test('viewer has one overflow rule enabling vertical scrolling', () => {
+  const html = fs.readFileSync('web/console.html','utf8');
+  const rules = [...html.matchAll(/\.vbox\s*\{([^}]+)\}/g)].map(match=>match[1]);
+  assert.equal(rules.length,1);
+  assert.match(rules[0],/overflow-y:\s*auto/);
+  assert.doesNotMatch(rules[0],/overflow:\s*hidden/);
 });

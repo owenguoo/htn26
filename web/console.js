@@ -637,12 +637,35 @@ function paintPeople(canvas, detections, selected = -1) {
   const size = 24 * scale;
   ctx.lineWidth = 2 * scale;
   ctx.font = `600 ${14 * scale}px system-ui`;
+  const markers = [];
   detections.forEach((d, i) => {
     const [x1, y1, x2, y2] = d.box;
     ctx.strokeStyle = selected === i ? '#ff4d4d' : '#fff';
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    const origin = {x: Math.min(x1, canvas.width - size), y: Math.max(0, y1 - size)};
+    let position = origin;
+    const occupied = p => markers.some(m => Math.abs(m.x - p.x) < size && Math.abs(m.y - p.y) < size);
+    if (occupied(position)) {
+      let distance = Infinity;
+      for (let y = 0; y + size <= canvas.height; y += size + 4 * scale) {
+        for (let x = 0; x + size <= canvas.width; x += size + 4 * scale) {
+          const candidate = {x, y}, d = (x - origin.x) ** 2 + (y - origin.y) ** 2;
+          if (d < distance && !occupied(candidate)) { position = candidate; distance = d; }
+        }
+      }
+    }
+    markers.push({...position, x1, y1});
+  });
+  // Paint labels after all boxes so later box outlines cannot obscure earlier numbers.
+  markers.forEach(({x, y, x1, y1}, i) => {
+    ctx.strokeStyle = selected === i ? '#ff4d4d' : '#fff';
+    ctx.beginPath();
+    ctx.moveTo(x + size / 2, y + size / 2);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  });
+  markers.forEach(({x, y}, i) => {
     ctx.fillStyle = '#000';
-    const x = Math.min(x1, canvas.width - size), y = Math.max(0, y1 - size);
     ctx.fillRect(x, y, size, size);
     ctx.fillStyle = '#fff';
     ctx.fillText(String(i + 1), x + 6 * scale, y + 17 * scale);
