@@ -312,4 +312,3 @@ def load_env(path: Path = Path(__file__).resolve().parent.parent / ".env") -> No
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
             os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
