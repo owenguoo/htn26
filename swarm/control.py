@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket
 class Settings:
     inference_url: str = field(default_factory=lambda: os.getenv('SWARM_INFERENCE_URL', '').rstrip('/'))
     inference_key: str = field(default_factory=lambda: os.getenv('SWARM_INFERENCE_API_KEY', ''))
+    baseten_key: str = field(default_factory=lambda: os.getenv('SWARM_BASETEN_API_KEY', ''), repr=False)
     bridge_key: str = field(default_factory=lambda: os.getenv('SWARM_BRIDGE_KEY', ''))
     hub_url: str = field(default_factory=lambda: os.getenv('SWARM_HUB_URL', 'http://127.0.0.1:8000').rstrip('/'))
     max_phones: int = field(default_factory=lambda: int(os.getenv('SWARM_MAX_PHONES', '64')))
@@ -42,6 +43,13 @@ class Settings:
                 raise ValueError('Service URLs must not contain credentials, query, or fragment')
             if parsed.scheme != 'https' and not (parsed.scheme == 'http' and private):
                 raise ValueError('Service URLs require HTTPS or a private IP address')
+
+    @property
+    def inference_headers(self) -> dict[str, str]:
+        if self.baseten_key:
+            return {'Authorization': f'Bearer {self.baseten_key}',
+                    'X-Swarm-Api-Key': self.inference_key, 'X-Swarm-Content-Type': 'image/jpeg'}
+        return {'Authorization': f'Bearer {self.inference_key}'}
 
     @property
     def enabled(self) -> bool:
@@ -126,7 +134,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 result = await client.request(method, auth.settings.inference_url + path, params=params, content=data,
-                    headers={'Authorization': f'Bearer {auth.settings.inference_key}', 'Content-Type': 'image/jpeg'})
+                    headers={**auth.settings.inference_headers, 'Content-Type': 'image/jpeg'})
                 if result.status_code >= 400:
                     raise HTTPException(result.status_code, 'inference request failed')
                 return result.json() if result.content else {}

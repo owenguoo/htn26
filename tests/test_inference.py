@@ -504,3 +504,15 @@ def test_reference_photo_upload_detects_people_without_login(monkeypatch):
                 assert response.json() == detected
         assert len(set(frames)) == 2
     asyncio.run(run())
+
+
+def test_baseten_headers_keep_gateway_and_worker_credentials_separate():
+    from swarm.control import Settings
+    local = Settings(inference_key='worker')
+    assert local.inference_headers == {'Authorization': 'Bearer worker'}
+    cloud = Settings(inference_key='worker', baseten_key='gateway')
+    assert cloud.inference_headers == {
+        'Authorization': 'Bearer gateway', 'X-Swarm-Api-Key': 'worker',
+        'X-Swarm-Content-Type': 'image/jpeg',
+    }
+    assert 'gateway' not in repr(cloud)

@@ -77,7 +77,7 @@ class Bridge:
         try:
             response = await self.client.get(
                 self.settings.inference_url + '/v1/targets/active', timeout=2,
-                headers={'Authorization': f'Bearer {self.settings.inference_key}'})
+                headers=self.settings.inference_headers)
             if response.status_code == 404:
                 value = 'reference_unavailable' if state.get('targetVersion') else 'available'
             else:
@@ -133,7 +133,7 @@ class Bridge:
         params = dict(target_id='active', phone_id=header['streamId'], frame_id=str(header['seq']),
                       captured_at=captured_at_seconds(header['t']), similarity_threshold=state['threshold'])
         response = await self.client.post(self.settings.inference_url + '/v1/match', params=params, content=jpeg,
-                                         headers={'Authorization': f'Bearer {self.settings.inference_key}', 'Content-Type': 'image/jpeg'})
+                                         headers={**self.settings.inference_headers, 'Content-Type': 'image/jpeg'})
         if response.status_code in (409, 504):
             return
         if response.status_code == 429:

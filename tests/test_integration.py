@@ -91,9 +91,10 @@ class FakeWorker:
 
 
 @asynccontextmanager
-async def system(monkeypatch, worker_url, key='test-model-key'):
+async def system(monkeypatch, worker_url, key='test-model-key', baseten_key=''):
     hub = module.Hub()
-    settings = Settings(inference_url=worker_url, inference_key=key, bridge_key='test-bridge-key')
+    settings = Settings(inference_url=worker_url, inference_key=key, bridge_key='test-bridge-key',
+                        baseten_key=baseten_key)
     auth = Auth(settings)
     monkeypatch.setattr(module, 'hub', hub)
     monkeypatch.setattr(module, 'auth', auth)
@@ -105,7 +106,7 @@ async def system(monkeypatch, worker_url, key='test-model-key'):
     app.add_api_route('/api/detections', module.post_detections, methods=['POST'])
     async with server(app) as url, httpx.AsyncClient(base_url=url, timeout=5) as client:
         bridge = Bridge(Settings(inference_url=worker_url, inference_key=key,
-            hub_url=url, bridge_key='test-bridge-key'), client)
+            hub_url=url, bridge_key='test-bridge-key', baseten_key=baseten_key), client)
         task = asyncio.create_task(bridge.run())
         try:
             yield hub, bridge, client, task, url.replace('http:', 'ws:')
@@ -136,8 +137,8 @@ async def wait_active(bridge):
             await asyncio.sleep(.02)
 
 
-async def replay(monkeypatch, worker_url, reference, present, absent, box, key='test-model-key'):
-    async with system(monkeypatch, worker_url, key) as (hub, bridge, client, bridge_task, url):
+async def replay(monkeypatch, worker_url, reference, present, absent, box, key='test-model-key', baseten_key=''):
+    async with system(monkeypatch, worker_url, key, baseten_key) as (hub, bridge, client, bridge_task, url):
         registered = await client.put('/api/search/reference', params={'box': box}, content=reference)
         assert registered.status_code == 200, registered.text
         await wait_active(bridge)
@@ -237,7 +238,7 @@ def test_pretrained_phone_replay(monkeypatch):
         Path(os.environ['SWARM_REAL_REFERENCE']).read_bytes(),
         Path(os.environ['SWARM_REAL_PRESENT']).read_bytes(),
         Path(os.environ['SWARM_REAL_ABSENT']).read_bytes(), os.environ['SWARM_REAL_BOX'],
-        os.environ['SWARM_REAL_KEY']))
+        os.environ['SWARM_REAL_KEY'], os.getenv('SWARM_REAL_BASETEN_KEY', '')))
 
 
 def test_sim_replay_loads_real_images_as_jpeg(tmp_path):

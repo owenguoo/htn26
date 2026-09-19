@@ -118,3 +118,25 @@ def test_openapi_describes_image_upload_and_bearer_auth(client):
     operation = schema["paths"]["/v1/detect"]["post"]
     assert "image/jpeg" in operation["requestBody"]["content"]
     assert operation["security"] == [{"HTTPBearer": []}]
+
+
+def test_gateway_header_requires_the_worker_secret(client):
+    headers = {"Authorization": "Bearer gateway-key", "Content-Type": "image/jpeg"}
+    assert request(client, headers=headers).status_code == 401
+    headers["X-Swarm-Api-Key"] = "wrong-worker-key"
+    assert request(client, headers=headers).status_code == 401
+    headers["X-Swarm-Api-Key"] = "test-key-with-16-chars"
+    assert request(client, headers=headers).status_code == 200
+
+
+def test_gateway_preserves_image_type_when_proxy_rewrites_content_type(client):
+    headers = {
+        "Authorization": "Bearer gateway-key",
+        "X-Swarm-Api-Key": "test-key-with-16-chars",
+        "Content-Type": "application/json",
+        "X-Swarm-Content-Type": "image/jpeg",
+    }
+    assert request(client, headers=headers).status_code == 200
+    assert request(client, headers=headers, content=b"not an image").status_code == 422
+    headers["X-Swarm-Content-Type"] = "text/plain"
+    assert request(client, headers=headers).status_code == 415

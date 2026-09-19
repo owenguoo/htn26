@@ -244,7 +244,7 @@ SAM 3 uses Transformers' `Sam3Model` and `Sam3Processor`; no research-repository
 
 ## Cloud GPU deployment
 
-This project includes deployment files but does not provision a paid cloud machine.
+Deploy the hosted worker with the [Baseten CLI instructions](../../docs/baseten.md), or use the generic Docker setup below.
 Use an NVIDIA Linux GPU host with a compatible driver and NVIDIA Container Toolkit.
 The locked Linux PyTorch build supplies CUDA libraries; confirm driver compatibility on the selected host.
 Check actual available memory before raising batch size or running multiple services.
