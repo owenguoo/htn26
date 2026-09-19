@@ -35,7 +35,7 @@ public struct VenueMarker: Sendable, Codable, Equatable {
         guard position.count == 3, quaternion.count == 4 else { return nil }
         return Pose(position: SIMD3<Float>(position[0], position[1], position[2]),
                     orientation: simd_quatf(ix: quaternion[0], iy: quaternion[1],
-                                            iz: quaternion[2], r: quaternion[3]).normalized)
+                                            iz: quaternion[2], r: quaternion[3]).unitOrIdentity)
     }
 }
 

@@ -35,14 +35,21 @@ public actor MockPoseProvider: PoseProvider {
         public var injections: [Int: [Injection]]
         /// Emits the recording's own marker events.
         public var emitRecordedMarkers: Bool
+        /// Emits one event and then waits for `advance()`. Without this the
+        /// producer runs ahead of the consumer, so a correction applied on
+        /// sighting N would not reach samples N+1 onward — which is exactly the
+        /// behaviour a drift-correction test is trying to measure.
+        public var lockstep: Bool
 
         public init(playbackRate: Double? = nil, loops: Int = 1, maxDuration: Double? = nil,
-                    injections: [Int: [Injection]] = [:], emitRecordedMarkers: Bool = true) {
+                    injections: [Int: [Injection]] = [:], emitRecordedMarkers: Bool = true,
+                    lockstep: Bool = false) {
             self.playbackRate = playbackRate
             self.loops = max(1, loops)
             self.maxDuration = maxDuration
             self.injections = injections
             self.emitRecordedMarkers = emitRecordedMarkers
+            self.lockstep = lockstep
         }
 
         public static let immediate = Configuration()
@@ -55,6 +62,8 @@ public actor MockPoseProvider: PoseProvider {
     private var originOffset: Pose = .identity
     private var motionAccumulator: Float = 0
     private var lastPosition: SIMD3<Float>?
+    private var advanceWaiter: CheckedContinuation<Void, Never>?
+    private var advancePending = false
     public private(set) var emittedPoseCount = 0
 
     public init(trajectory: Trajectory, configuration: Configuration = .immediate) {
@@ -86,8 +95,33 @@ public actor MockPoseProvider: PoseProvider {
     /// `session.setWorldOrigin(relativeTransform:)`. A replay cannot re-origin a
     /// live session, so it re-origins its own output instead — which is exactly
     /// the observable effect ARKit produces.
+    ///
+    /// Composes rather than replaces, because ARKit expresses each
+    /// `relativeTransform` in the frame that is current at the time of the call,
+    /// not in the recording's original frame.
     public func setWorldOrigin(relativeTransform: simd_float4x4) async {
-        originOffset = Pose(matrix: relativeTransform).inverse
+        originOffset = Pose(matrix: relativeTransform).inverse * originOffset
+    }
+
+    /// Releases the next event in lockstep mode. Harmless when lockstep is off.
+    public func advance() {
+        if let waiter = advanceWaiter {
+            advanceWaiter = nil
+            waiter.resume()
+        } else {
+            advancePending = true
+        }
+    }
+
+    private func waitForAdvance() async {
+        guard configuration.lockstep else { return }
+        if advancePending {
+            advancePending = false
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            advanceWaiter = continuation
+        }
     }
 
     public func consumeMotionSinceLastQuery() async -> Float {
@@ -137,12 +171,17 @@ public actor MockPoseProvider: PoseProvider {
                         let event = trajectory.markerEvents[markerIndex]
                         markerIndex += 1
                         guard let matrix = Trajectory.matrix(from: event.transform) else { continue }
+                        // A marker is reported in whatever frame is current, so
+                        // the origin offset applies to sightings exactly as it
+                        // applies to poses.
+                        let observed = originOffset * Pose(matrix: matrix)
                         continuation.yield(.marker(MarkerSighting(
                             markerID: event.markerID,
-                            observedTransform: matrix,
+                            observedTransform: observed.matrix,
                             deviceTimestamp: event.t + loopOffset,
                             isUpdate: event.isUpdate,
                             estimatedPhysicalWidth: event.estimatedPhysicalWidth)))
+                        await waitForAdvance()
                     }
                 }
 
@@ -164,6 +203,7 @@ public actor MockPoseProvider: PoseProvider {
                     quality: qualityOverride ?? sample.quality,
                     intrinsics: trajectory.intrinsics)))
                 emittedPoseCount += 1
+                await waitForAdvance()
 
                 if let rate = configuration.playbackRate, rate > 0, index + 1 < trajectory.samples.count {
                     let step = trajectory.samples[index + 1].t - sample.t

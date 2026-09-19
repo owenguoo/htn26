@@ -70,7 +70,7 @@ public struct Pose: Sendable, Equatable {
     /// Composition: `a * b` applies `b` first, then `a` — matching matrix order.
     public static func * (a: Pose, b: Pose) -> Pose {
         Pose(position: a.position + a.orientation.act(b.position),
-             orientation: (a.orientation * b.orientation).normalized)
+             orientation: (a.orientation * b.orientation).unitOrIdentity)
     }
 
     public func transform(point: SIMD3<Float>) -> SIMD3<Float> {
@@ -82,7 +82,7 @@ public enum Geometry {
     /// Extracts a unit quaternion from a transform whose rotation block may have
     /// drifted off the orthonormal manifold, and whose scale may not be 1.
     public static func orientation(of matrix: simd_float4x4) -> simd_quatf {
-        simd_quatf(orthonormalRotation(of: matrix)).normalized
+        simd_quatf(orthonormalRotation(of: matrix)).unitOrIdentity
     }
 
     /// Gram-Schmidt on the upper-left 3x3. Returns identity for a degenerate
@@ -108,7 +108,7 @@ public enum Geometry {
 
     /// Absolute angle in radians between two orientations, always in [0, π].
     public static func angle(between a: simd_quatf, and b: simd_quatf) -> Float {
-        let dot = abs(simd_dot(a.normalized.vector, b.normalized.vector))
+        let dot = abs(simd_dot(a.unitOrIdentity.vector, b.unitOrIdentity.vector))
         return 2 * acos(min(1, max(-1, dot)))
     }
 
@@ -127,7 +127,7 @@ public enum Geometry {
 
     /// Shortest-arc interpolation. `t` is clamped to [0, 1].
     public static func slerp(_ a: simd_quatf, _ b: simd_quatf, _ t: Float) -> simd_quatf {
-        simd_slerp(a.normalized, b.normalized, min(1, max(0, t))).normalized
+        simd_slerp(a.unitOrIdentity, b.unitOrIdentity, min(1, max(0, t))).unitOrIdentity
     }
 
     /// Signed horizontal bearing from where the camera is looking to a venue-frame
@@ -163,7 +163,10 @@ public enum Geometry {
 
 extension simd_quatf {
     /// `simd_normalize` on a zero quaternion yields NaN; fall back to identity.
-    var normalized: simd_quatf {
+    ///
+    /// Named distinctly from simd's own `normalized` so the two never compete
+    /// for overload resolution once the module is imported `@testable`.
+    var unitOrIdentity: simd_quatf {
         let length = simd_length(vector)
         guard length > 1e-9 else { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
         return simd_quatf(vector: vector / length)

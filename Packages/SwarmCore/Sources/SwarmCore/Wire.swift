@@ -373,7 +373,7 @@ extension Pose {
     public var wirePosition: [Float] { [position.x, position.y, position.z] }
     /// Ordered x, y, z, w to match the server.
     public var wireQuaternion: [Float] {
-        let q = orientation.normalized
+        let q = orientation.unitOrIdentity
         return [q.imag.x, q.imag.y, q.imag.z, q.real]
     }
 }

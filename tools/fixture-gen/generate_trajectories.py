@@ -35,7 +35,7 @@ import os
 import random
 
 FPS = 60.0
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 FIXTURES = os.path.join(REPO, "Fixtures")
 
 # ---------------------------------------------------------------- linear algebra

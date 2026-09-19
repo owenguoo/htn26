@@ -35,10 +35,10 @@ public enum Calibration {
         guard poses.count > 1 else { return first }
         var position = SIMD3<Float>.zero
         var quaternionSum = SIMD4<Float>.zero
-        let reference = first.orientation.normalized.vector
+        let reference = first.orientation.unitOrIdentity.vector
         for pose in poses {
             position += pose.position
-            let v = pose.orientation.normalized.vector
+            let v = pose.orientation.unitOrIdentity.vector
             quaternionSum += simd_dot(v, reference) < 0 ? -v : v
         }
         position /= Float(poses.count)
@@ -103,7 +103,7 @@ public enum Calibration {
             position *= maxMeters / distance
             clamped = true
         }
-        var orientation = correction.orientation.normalized
+        var orientation = correction.orientation.unitOrIdentity
         let angle = Geometry.angle(between: orientation, and: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))
         if angle > maxRadians, angle > 1e-6 {
             orientation = Geometry.slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), orientation, maxRadians / angle)
