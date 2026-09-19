@@ -1,6 +1,6 @@
 """Real network boundaries, with an optional independently running pretrained worker."""
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
 import io
 import json
 import os
@@ -18,7 +18,7 @@ from websockets.asyncio.client import connect
 from swarm import hub as module
 from swarm.control import Auth, Settings, install_routes
 from swarm.inference import Bridge
-from swarm.protocol import now_ms, pack
+from swarm.protocol import now_ms, pack, unpack
 
 
 def jpeg(color='white'):
@@ -28,9 +28,10 @@ def jpeg(color='white'):
 
 
 @asynccontextmanager
-async def server(app):
+async def server(app, port=0):
     sock = socket.socket()
-    sock.bind(('127.0.0.1', 0))
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(('127.0.0.1', port))
     port = sock.getsockname()[1]
     instance = uvicorn.Server(uvicorn.Config(app, log_level='error', lifespan='off', ws='websockets-sansio'))
     task = asyncio.create_task(instance.serve(sockets=[sock]))
@@ -141,8 +142,13 @@ async def replay(monkeypatch, worker_url, reference, present, absent, box, key='
         registered = await client.put('/api/search/reference', params={'box': box}, content=reference)
         assert registered.status_code == 200, registered.text
         await wait_active(bridge)
-        async with connect(url + '/ws/phone') as phone, connect(url + '/ws/dashboard?role=console') as console:
+        headers = {'Cookie': f'{Auth.cookie}={client.cookies[Auth.cookie]}'}
+        async with connect(url + '/ws/phone') as phone, connect(url + '/ws/dashboard?role=console',
+                additional_headers=headers, origin=url.replace('ws:', 'http:')) as console:
             welcome = await join(phone, 'replay')
+            await console.send(json.dumps(dict(type='hide', phoneId='replay', hidden=True)))
+            await receive_json(console, lambda m: m.get('type') == 'state' and
+                any(p['id'] == 'replay' and p['hidden'] for p in m.get('phones', [])))
             results = []
             ages = []
             for seq, frame in enumerate((present, absent)):
@@ -154,6 +160,16 @@ async def replay(monkeypatch, worker_url, reference, present, absent, box, key='
                 assert 0 <= age < 1500
                 ages.append(round(age, 2))
                 results.append(result)
+                async with asyncio.timeout(5):
+                    async for raw in console:
+                        if isinstance(raw, bytes):
+                            header, image = unpack(raw)
+                            assert header['phoneId'] == 'replay' and header['seq'] == seq
+                            assert header['streamId'] == welcome['streamId']
+                            assert image == frame
+                            break
+                    else:
+                        pytest.fail('Console closed before receiving the hidden phone frame')
                 state = await receive_json(console, lambda m: m.get('type') == 'state' and
                     any(s.get('seq') == seq for s in m.get('search', {}).get('sightings', []))) if result['boxes'] else None
                 if result['boxes']:
@@ -164,6 +180,12 @@ async def replay(monkeypatch, worker_url, reference, present, absent, box, key='
         async with connect(url + '/ws/phone') as phone:
             reconnected = await join(phone, 'replay')
             assert reconnected['streamId'] != welcome['streamId']
+            await phone.send(pack(dict(type='frame', seq=0, tCapture=now_ms()), present))
+            result = await receive_json(phone, lambda m: m.get('cmd') == 'detections' and m.get('seq') == 0)
+            assert result['phoneId'] == 'replay' and result['streamId'] == reconnected['streamId']
+            assert result['searchRevision'] == registered.json()['searchRevision']
+            assert result['boxes'] and result['boxes'][0]['similarity'] >= .7
+            assert 0 <= now_ms() - result['t'] < 1500
         print(dict(acceptedAgeMs=ages, similarities=[[b['similarity'] for b in r['boxes']] for r in results]))
 
 
@@ -233,7 +255,12 @@ def test_sim_replay_loads_real_images_as_jpeg(tmp_path):
 def test_idle_paused_bridge_failure_and_reference_recovery(monkeypatch):
     async def run():
         worker = FakeWorker()
-        async with server(worker.app) as worker_url, system(monkeypatch, worker_url) as (hub, bridge, client, task, url):
+        async with AsyncExitStack() as listeners:
+            worker_url = await listeners.enter_async_context(server(worker.app))
+            await recovery(listeners, worker, worker_url)
+
+    async def recovery(listeners, worker, worker_url):
+        async with system(monkeypatch, worker_url) as (hub, bridge, client, task, url):
             async def status(value, timeout=5):
                 async with asyncio.timeout(timeout):
                     while True:
@@ -249,6 +276,13 @@ def test_idle_paused_bridge_failure_and_reference_recovery(monkeypatch):
             hub.phase = 'found'
             await asyncio.sleep(11)
             assert (await client.get('/api/search')).json()['status'] == 'available'
+            await listeners.aclose()
+            with pytest.raises(httpx.ConnectError):
+                await client.get(worker_url + '/v1/targets/active')
+            await status('unavailable')
+            restarted_url = await listeners.enter_async_context(server(worker.app, httpx.URL(worker_url).port))
+            assert restarted_url == worker_url
+            await status('available')
             worker.key = 'rotated-key'
             await status('unavailable')
             worker.key = 'test-model-key'

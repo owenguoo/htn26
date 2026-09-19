@@ -364,9 +364,9 @@ async def test_detect_and_match_phone_ids_cannot_replace_each_other():
 
 def test_authenticated_reference_health():
     with TestClient(app()) as client:
-        assert client.get('/v1/targets/alice').status_code == 401
-        assert client.get('/v1/targets/alice', headers=HEADERS).status_code == 404
-        version = client.put('/v1/targets/alice', content=png(), headers=HEADERS).json()
-        assert client.get('/v1/targets/alice', headers=HEADERS).json() == version
+        assert client.get("/v1/targets/alice").status_code == 401
+        assert client.get("/v1/targets/alice", headers=HEADERS).status_code == 404
+        version = client.put("/v1/targets/alice", content=png(), headers=HEADERS).json()
+        assert client.get("/v1/targets/alice", headers=HEADERS).json() == version
         client.app.state.worker.closed = True
-        assert client.get('/v1/targets/alice', headers=HEADERS).status_code == 503
+        assert client.get("/v1/targets/alice", headers=HEADERS).status_code == 503
