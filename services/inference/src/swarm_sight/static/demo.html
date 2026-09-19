@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Swarm Sight · Camera lab</title>
+    <link rel="stylesheet" href="/demo/assets/demo.css" />
+    <script src="/demo/assets/demo.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <a class="brand" href="/demo"><span class="mark">◉</span> SWARM SIGHT</a
+        ><span class="tag">CAMERA LAB</span>
+      </header>
+      <div class="intro">
+        <span class="eyebrow">PERSON SEARCH / LIVE TEST</span>
+        <h1>One reference.<br /><span>Find the person.</span></h1>
+        <p>
+          Choose a reference photo, point your camera, and test appearance
+          matching in real time.
+        </p>
+      </div>
+      <section id="login-panel" class="panel login">
+        <h2>Connect to the demo</h2>
+        <p>Enter the access code from the computer running Swarm Sight.</p>
+        <form id="login-form">
+          <label for="code">Access code</label>
+          <div class="inline">
+            <input
+              id="code"
+              type="password"
+              autocomplete="current-password"
+              required
+              maxlength="128"
+            /><button type="submit">Connect <span>↗</span></button>
+          </div>
+        </form>
+        <p id="login-status" role="status"></p>
+      </section>
+      <div id="workspace" hidden>
+        <div class="toolbar">
+          <span class="connection"><i></i> Connected to YOLOE + OSNet</span
+          ><span>Camera stays off until you start</span>
+        </div>
+        <div class="layout">
+          <section class="panel reference-panel">
+            <div class="section-heading">
+              <span class="step">01</span>
+              <h2>Who are we looking for?</h2>
+            </div>
+            <p>
+              Use a clear photo showing the person's clothing and body. If there
+              are several people, choose one below.
+            </p>
+            <label class="upload" for="reference-file"
+              ><span class="upload-icon">＋</span
+              ><strong>Choose a reference photo</strong
+              ><span>JPEG, PNG, or a photo your browser can open</span
+              ><input id="reference-file" type="file" accept="image/*"
+            /></label>
+            <canvas
+              id="reference-preview"
+              hidden
+              aria-label="Reference photo with numbered people"
+            ></canvas>
+            <div
+              id="person-choices"
+              class="choices"
+              aria-label="Choose the reference person"
+            ></div>
+            <p id="reference-status" class="status" role="status">
+              No reference selected.
+            </p>
+            <button id="clear-reference" class="secondary" hidden>
+              Clear reference
+            </button>
+            <div class="settings">
+              <label for="threshold"
+                >Match threshold
+                <output id="threshold-value">0.70</output></label
+              ><input
+                id="threshold"
+                type="range"
+                min="0.3"
+                max="0.95"
+                step="0.01"
+                value="0.7"
+              />
+              <p>
+                Higher is stricter. Similarity is not an identity probability.
+              </p>
+              <label for="camera-facing">Camera</label
+              ><select id="camera-facing">
+                <option value="environment">Back camera</option>
+                <option value="user">Front camera</option>
+              </select>
+            </div>
+          </section>
+          <section class="panel camera-panel">
+            <div class="section-heading">
+              <span class="step">02</span>
+              <h2>Look around</h2>
+              <span id="live-pill" class="pill">CAMERA OFF</span>
+            </div>
+            <div class="viewfinder">
+              <video id="video" autoplay muted playsinline hidden></video
+              ><canvas
+                id="overlay"
+                hidden
+                aria-label="Person detection overlay"
+              ></canvas>
+              <div id="camera-placeholder">
+                <span class="view-icon">◎</span>
+                <h3>Your view, with a little vision.</h3>
+                <p>
+                  Start the camera to detect people.<br />Add a reference to
+                  search for a match.
+                </p>
+              </div>
+            </div>
+            <div class="camera-controls">
+              <button id="start-camera">Start camera <span>↗</span></button
+              ><button id="stop-camera" class="secondary" disabled>Stop</button
+              ><span class="capture-note">Up to 2 frames / second</span>
+            </div>
+            <p id="camera-status" class="status" role="status">
+              Ready when you are.
+            </p>
+            <div class="metrics">
+              <div>
+                <span>People detected</span><strong id="people-count">–</strong>
+              </div>
+              <div>
+                <span>Best similarity</span><strong id="best-score">–</strong>
+              </div>
+              <div><span>Round trip</span><strong id="latency">–</strong></div>
+            </div>
+            <details>
+              <summary>Latest analyzed frame</summary>
+              <p>
+                Boxes on live video can lag as people move. This snapshot shows
+                the exact frame used for the latest result.
+              </p>
+              <canvas
+                id="result-frame"
+                aria-label="Latest analyzed frame"
+              ></canvas>
+            </details>
+          </section>
+        </div>
+        <footer>
+          <span
+            ><i class="legend"></i> Likely match
+            <i class="legend other"></i> Other person</span
+          >
+          <p>
+            Appearance matching, not facial recognition. Similar outfits and
+            changed clothing can confuse it. Frames are processed in memory and
+            are not saved by this demo.
+          </p>
+        </footer>
+      </div>
+    </main>
+  </body>
+</html>

@@ -51,3 +51,13 @@ edge, `+y` goes toward the back. Heading is degrees, `0` = facing the stage, clo
 Room size lives in `room.json`.
 
 Frames are held in memory only (latest per phone) and never written to disk.
+
+## Inference service
+
+The YOLOE and OSNet inference service is an isolated Python 3.12 project under `services/inference/` and listens on port 8001 by default.
+Its model dependencies stay outside the hub environment.
+
+```bash
+uv sync --project services/inference --extra yolo --extra reid
+uv run --project services/inference --no-sync swarm-sight serve
+```
