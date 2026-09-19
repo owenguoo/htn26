@@ -1,3 +1,4 @@
+import { frameKey, freshSighting, scoreLabel } from '/web/inference-ui.js';
 import { makeView, drawRoom, drawCone } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
@@ -10,6 +11,10 @@ let room = null;
 let st = null;               // latest hub state
 const phones = new Map();    // id → summary
 const thumbs = new Map();    // id → object URL
+const sourceFrames = new Map();
+let snapshotAt = 0;
+let drawReference = null;
+let searchBusy = false;
 let dragPos = null;          // candidate position while dragging
 let lastDragSend = 0;
 
@@ -24,6 +29,7 @@ function connect() {
 }
 
 function setConn(live) {
+  if (!live) { st = null; clearSourceFrames(); renderSearch(); renderAnalysis(); }
   $('#connDot').classList.toggle('live', live);
   $('#connText').textContent = live ? 'Live' : 'Reconnecting';
 }
@@ -48,6 +54,7 @@ function onJson(msg) {
     spotlight(msg);
   } else if (msg.type === 'state') {
     st = msg;
+    snapshotAt = performance.now();
     phones.clear();
     for (const p of msg.phones) phones.set(p.id, p);
     for (const id of [...thumbs.keys()]) if (!phones.has(id)) { URL.revokeObjectURL(thumbs.get(id)); thumbs.delete(id); }
@@ -57,8 +64,19 @@ function onJson(msg) {
 
 function onFrame(buf) {
   const n = new DataView(buf).getUint32(0);
-  const { phoneId } = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n)));
+  const { phoneId } = header;
   const url = URL.createObjectURL(new Blob([new Uint8Array(buf, 4 + n)], { type: 'image/jpeg' }));
+  if (phoneId === viewing) {
+    const key = frameKey(header);
+    if (sourceFrames.has(key)) URL.revokeObjectURL(sourceFrames.get(key).url);
+    sourceFrames.set(key, { ...header, bytes: buf.byteLength, url: URL.createObjectURL(new Blob([new Uint8Array(buf, 4 + n)], {type: 'image/jpeg'})) });
+    while (sourceFrames.size > 24 || [...sourceFrames.values()].reduce((n, frame) => n + frame.bytes, 0) > 8_000_000) {
+      const first = sourceFrames.keys().next().value;
+      URL.revokeObjectURL(sourceFrames.get(first).url);
+      sourceFrames.delete(first);
+    }
+  }
   if (thumbs.has(phoneId)) URL.revokeObjectURL(thumbs.get(phoneId));
   thumbs.set(phoneId, url);
   const img = document.querySelector(`img[data-thumb="${CSS.escape(phoneId)}"]`);
@@ -69,6 +87,7 @@ function onFrame(buf) {
 // ---------------------------------------------------------------- render
 function render() {
   renderViewer();
+  renderSearch();
   renderPhases();
   renderMetrics();
   renderControls();
@@ -128,7 +147,9 @@ function renderControls() {
   const t = st.target;
   const s = $('#candStatus');
   s.classList.toggle('found', !!t?.foundBy);
-  if (!t) {
+  if (st.search?.mode === 'real') {
+    s.textContent = st.search.confirmation ? `Visual sighting confirmed · Phone ${st.search.confirmation.phoneId} · target location unknown` : 'Real visual search · target location unknown';
+  } else if (!t) {
     s.textContent = 'No candidate placed';
   } else if (t.foundBy) {
     const f = phones.get(t.foundBy);
@@ -148,6 +169,7 @@ function renderControls() {
   const m = st.mission || {};
   $('#mcModel').textContent = m.ready ? m.model : (m.why || '');
   renderAutonomy(m);
+  $('#candBtn').disabled = st.search?.mode === 'real';
   $('#candBtn').textContent = t ? 'Remove candidate' : 'Place candidate';
   $('#candBtn').classList.toggle('primary', !t);
 }
@@ -212,6 +234,7 @@ let viewing = null; // phone id shown large
 let showHud = (() => { try { return localStorage.getItem('swarm.hud') !== '0'; } catch { return true; } })();
 
 function openViewer(id) {
+  clearSourceFrames();
   viewing = id;
   $('#vImg').removeAttribute('src');
   $('#vNone').style.display = '';
@@ -224,6 +247,7 @@ function openViewer(id) {
 function closeViewer() {
   viewing = null;
   clearAlert();
+  clearSourceFrames();
   clearHud();
   $('#viewer').classList.remove('on');
   send({ type: 'focus', phoneId: null });
@@ -237,6 +261,7 @@ function stepViewer(d) {
 
 function renderViewer() {
   if (!viewing) return;
+  renderAnalysis();
   const p = phones.get(viewing);
   if (!p) { closeViewer(); return; }
   $('#vNum').textContent = `#${p.index}`;
@@ -661,6 +686,9 @@ function setResponders(d) {
   if (st?.target) send({ type: 'target', responders: respondersPref });
 }
 
+$('#joinBtn').addEventListener('click', (e) => { e.stopPropagation(); $('#joinPop').classList.toggle('on'); });
+document.addEventListener('click', (e) => { if (!e.target.closest('.joinWrap')) $('#joinPop').classList.remove('on'); });
+
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && e.target === $('#mcInput')) { e.target.blur(); return; }
   if (viewing && !e.target.closest?.('input, textarea')) {
@@ -954,3 +982,200 @@ function escapeHtml(s) {
 
 connect();
 requestAnimationFrame(draw);
+
+async function searchApi(path, options = {}) {
+  const response = await fetch(path, {credentials: 'same-origin', ...options});
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(typeof body.detail === 'string' ? body.detail : `Request failed (${response.status})`);
+  }
+  return body;
+}
+
+function renderSearch() {
+  $('#searchTools').disabled = searchBusy;
+  const search = st?.search;
+  $('#searchStatus').textContent = search ? `${search.mode === 'real' ? 'Real search' : 'Rehearsal'} · Worker: ${search.status.replaceAll('_', ' ')} · ${search.referenceAvailable ? 'Reference registered' : 'No reference'} · ${search.active ? 'Searching' : 'Paused'}` : 'Waiting for hub connection';
+  if (search && document.activeElement !== $('#threshold')) $('#threshold').value = search.threshold.toFixed(2);
+}
+
+async function searchAction(action) {
+  if (searchBusy) return;
+  searchBusy = true;
+  renderSearch();
+  try { await action(); } catch (error) { $('#searchMessage').textContent = error.message; }
+  finally { searchBusy = false; renderSearch(); }
+}
+
+function clearReferencePreview() {
+  drawReference = null;
+  $('#referencePreview').hidden = true;
+  $('#personChoices').replaceChildren();
+  $('#referenceFile').value = '';
+}
+$('#rehearsalMode').addEventListener('click', () => searchAction(async () => {
+  const result = await searchApi('/api/search/rehearsal', {method: 'POST'});
+  if (st) st.search = result;
+  clearReferencePreview();
+  $('#searchMessage').textContent = 'Rehearsal mode active. Place a mock candidate to rehearse.';
+}));
+
+$('#clearReference').addEventListener('click', () => searchAction(async () => {
+  await searchApi('/api/search/reference', {method: 'DELETE'});
+  clearReferencePreview();
+  if (st?.search) st.search.sightings = [];
+  clearSourceFrames();
+  $('#searchMessage').textContent = 'Reference cleared';
+}));
+$('#saveThreshold').addEventListener('click', () => {
+  const input = $('#threshold');
+  if (!input.reportValidity() || !input.value) return;
+  const threshold = Number(input.value);
+  searchAction(async () => {
+    await searchApi('/api/search/threshold', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({threshold})});
+    if (st?.search) st.search.sightings = [];
+    clearSourceFrames();
+    $('#searchMessage').textContent = `Threshold set to ${threshold.toFixed(2)}`;
+  });
+});
+
+function paintPeople(canvas, detections, selected = -1) {
+  const ctx = canvas.getContext('2d');
+  const scale = canvas.width / Math.max(1, canvas.getBoundingClientRect().width);
+  const size = 24 * scale;
+  ctx.lineWidth = 2 * scale;
+  ctx.font = `600 ${14 * scale}px system-ui`;
+  const markers = [];
+  detections.forEach((d, i) => {
+    const [x1, y1, x2, y2] = d.box;
+    ctx.strokeStyle = selected === i ? '#ff4d4d' : '#fff';
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    const origin = {x: Math.min(x1, canvas.width - size), y: Math.max(0, y1 - size)};
+    let position = origin;
+    const occupied = p => markers.some(m => Math.abs(m.x - p.x) < size && Math.abs(m.y - p.y) < size);
+    if (occupied(position)) {
+      let distance = Infinity;
+      for (let y = 0; y + size <= canvas.height; y += size + 4 * scale) {
+        for (let x = 0; x + size <= canvas.width; x += size + 4 * scale) {
+          const candidate = {x, y}, d = (x - origin.x) ** 2 + (y - origin.y) ** 2;
+          if (d < distance && !occupied(candidate)) { position = candidate; distance = d; }
+        }
+      }
+    }
+    markers.push({...position, x1, y1});
+  });
+  // Paint labels after all boxes so later box outlines cannot obscure earlier numbers.
+  markers.forEach(({x, y, x1, y1}, i) => {
+    ctx.strokeStyle = selected === i ? '#ff4d4d' : '#fff';
+    ctx.beginPath();
+    ctx.moveTo(x + size / 2, y + size / 2);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+  });
+  markers.forEach(({x, y}, i) => {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(x, y, size, size);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(String(i + 1), x + 6 * scale, y + 17 * scale);
+  });
+}
+$('#referenceFile').addEventListener('change', () => {
+  const file = $('#referenceFile').files[0];
+  if (!file) return;
+  searchAction(async () => {
+    drawReference = null;
+    $('#personChoices').replaceChildren();
+    $('#referencePreview').hidden = true;
+    $('#searchMessage').textContent = 'Finding people in the reference…';
+    if (file.size > 25_000_000) throw new Error('Choose a photo smaller than 25 MB.');
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    try { image.src = url; await image.decode(); } finally { URL.revokeObjectURL(url); }
+    const photo = document.createElement('canvas');
+    const scale = Math.min(1, 1280 / Math.max(image.naturalWidth, image.naturalHeight));
+    photo.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    photo.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    photo.getContext('2d').drawImage(image, 0, 0, photo.width, photo.height);
+    const blob = await new Promise((resolve, reject) => photo.toBlob(b => b ? resolve(b) : reject(new Error('Could not read image')), 'image/jpeg', .85));
+    const result = await searchApi('/api/search/reference/people', {method: 'POST', headers: {'Content-Type': 'image/jpeg'}, body: blob});
+    const preview = $('#referencePreview');
+    preview.width = photo.width; preview.height = photo.height; preview.hidden = false;
+    let selected = -1;
+    drawReference = () => {
+      preview.getContext('2d').drawImage(photo, 0, 0);
+      paintPeople(preview, result.detections, selected);
+    };
+    drawReference();
+    $('#searchMessage').textContent = result.detections.length ? 'Choose the numbered person to search for.' : 'No people detected. Try another photo.';
+    result.detections.forEach((person, index) => {
+      const button = document.createElement('button');
+      button.className = 'btn'; button.textContent = `Person ${index + 1}`;
+      button.addEventListener('click', () => searchAction(async () => {
+        await searchApi(`/api/search/reference?${new URLSearchParams({box: person.box.join(',')})}`, {method: 'PUT', headers: {'Content-Type': 'image/jpeg'}, body: blob});
+        if (st?.search) st.search.sightings = [];
+        clearSourceFrames();
+        selected = index;
+        drawReference();
+        $('#searchMessage').textContent = `Person ${index + 1} selected. Appearance similarity suggests likely sightings, not confirmed identity.`;
+      }));
+      $('#personChoices').append(button);
+    });
+  });
+});
+
+let analysisKey = null;
+function clearSourceFrames() {
+  for (const frame of sourceFrames.values()) URL.revokeObjectURL(frame.url);
+  sourceFrames.clear();
+  analysisKey = null;
+  $('#analyzedFrame').hidden = true;
+}
+function renderAnalysis() {
+  const canvas = $('#analyzedFrame');
+  const confirm = $('#confirmSighting');
+  confirm.hidden = true;
+  confirm.onclick = null;
+  const result = st?.search?.sightings?.find(s => s.phoneId === viewing && freshSighting(s, st.search, st.t, snapshotAt, performance.now()));
+  if (!result) {
+    analysisKey = null; canvas.hidden = true;
+    $('#analysisMeta').textContent = 'No current result';
+    return;
+  }
+  if (result.matched) {
+    const identity = {phoneId: result.phoneId, streamId: result.streamId, seq: result.seq, searchRevision: result.searchRevision};
+    confirm.hidden = false;
+    confirm.disabled = searchBusy;
+    confirm.onclick = () => searchAction(async () => {
+      const updated = await searchApi('/api/search/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(identity)});
+      if (st) st.search = updated;
+      $('#searchMessage').textContent = 'Visual sighting confirmed. Target location remains unknown.';
+      renderAnalysis();
+    });
+  }
+  const age = Math.max(0, Math.round(st.t - result.t + performance.now() - snapshotAt));
+  const scores = result.boxes.map(scoreLabel).join(' / ') || 'No people detected';
+  const frame = sourceFrames.get(frameKey(result));
+  $('#analysisMeta').textContent = `${result.matched ? 'Likely sighting' : 'No likely match'} · Phone ${result.phoneId} · Frame ${result.seq} · ${age} ms old · ${scores}${frame ? '' : ' · Exact preview unavailable'}`;
+  if (!frame) { analysisKey = null; canvas.hidden = true; return; }
+  const key = frameKey(result);
+  if (analysisKey === key) return;
+  analysisKey = key;
+  canvas.hidden = true;
+  const image = new Image();
+  image.onload = () => {
+    if (analysisKey !== key || !sourceFrames.has(key)) return;
+    canvas.width = result.width; canvas.height = result.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    ctx.lineWidth = 3;
+    for (const box of result.boxes) {
+      ctx.strokeStyle = box.similarity >= st.search.threshold ? '#ff4d4d' : '#fff';
+      ctx.strokeRect(box.x * canvas.width, box.y * canvas.height, box.w * canvas.width, box.h * canvas.height);
+    }
+    canvas.hidden = false;
+  };
+  image.src = frame.url;
+}
+setInterval(() => { if (viewing) renderAnalysis(); }, 100);
+new ResizeObserver(() => drawReference?.()).observe($('#referencePreview'));
+renderSearch();

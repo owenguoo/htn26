@@ -16,6 +16,7 @@ import math
 import random
 import ssl
 import time
+from pathlib import Path
 
 import websockets
 from PIL import Image, ImageDraw, ImageFont
@@ -46,7 +47,19 @@ def render(index: int, heading: float, color: str | None, bg: tuple[int, int, in
     return buf.getvalue()
 
 
-async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: ssl.SSLContext | None) -> None:
+def load_replay(paths: list[Path]) -> list[bytes]:
+    """Decode operator-supplied images once; retain the normal simulator by default."""
+    frames = []
+    for path in paths:
+        with Image.open(path) as image:
+            output = io.BytesIO()
+            image.convert('RGB').save(output, 'JPEG', quality=90)
+            frames.append(output.getvalue())
+    return frames
+
+
+async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: ssl.SSLContext | None,
+                     replay: list[bytes] | None = None, image_seconds: float = 3) -> None:
     pid = f"sim-{i:02d}"
     seat = {"x": round(rng.uniform(-8.5, 8.5), 2), "y": round(rng.uniform(3.5, 14), 2)}
     base = -math.degrees(math.atan2(seat["x"], seat["y"])) * 0.6  # roughly toward the stage
@@ -126,7 +139,8 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
                     while True:
                         hd = heading()
                         color = flash["color"] if time.time() < flash["until"] else None
-                        jpeg = await asyncio.to_thread(render, index, hd, color, bg)
+                        jpeg = (replay[int(time.monotonic() / image_seconds) % len(replay)] if replay
+                                else await asyncio.to_thread(render, index, hd, color, bg))
                         header = {"type": "frame", "seq": seq, "tCapture": now_ms(), "heading": hd,
                                   "pitch": 0, "calibrated": True}
                         await ws.send(pack(header, jpeg))
@@ -150,20 +164,26 @@ async def run(args: argparse.Namespace) -> None:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE  # self-signed dev cert
+    replay = load_replay(args.image)
     rng = random.Random(args.seed)
     print(f"Starting {args.n} fake phones → {args.url} at {args.fps} fps (Ctrl-C to stop)")
-    await asyncio.gather(*(fake_phone(i + 1, args.url, args.fps, random.Random(rng.random()), ssl_ctx)
+    await asyncio.gather(*(fake_phone(i + 1, args.url, args.fps, random.Random(rng.random()), ssl_ctx, replay, args.image_seconds)
                            for i in range(args.n)))
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Swarm Sight phone simulator")
+    ap = argparse.ArgumentParser(description="Beacon phone simulator")
     ap.add_argument("--n", type=int, default=20, help="number of fake phones")
     ap.add_argument("--fps", type=float, default=10)
     ap.add_argument("--url", default="ws://localhost:8000/ws/phone")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument('--image', type=Path, action='append', default=[], help='local image to replay; repeat for a sequence')
+    ap.add_argument('--image-seconds', type=float, default=3, help='seconds each replay image remains visible')
+    args = ap.parse_args()
+    if args.n < 1 or args.fps <= 0 or args.image_seconds <= 0:
+        ap.error('n, fps, and image-seconds must be positive')
     try:
-        asyncio.run(run(ap.parse_args()))
+        asyncio.run(run(args))
     except KeyboardInterrupt:
         pass
 

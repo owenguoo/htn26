@@ -1,0 +1,42 @@
+model_name: beacon-yoloe-osnet
+python_version: py312
+base_image:
+  image: python:3.12-slim-bookworm
+bundled_packages_dir: .
+# Keep the worker's locked dependencies separate from Baseten's proxy environment.
+build_commands:
+  - UV_PROJECT_ENVIRONMENT=/app/worker-env uv sync --project /packages --frozen --extra yolo --extra reid --no-dev --no-editable
+system_packages:
+  - git
+  - libgl1
+  - libglib2.0-0
+resources:
+  instance_type: L4:4x16
+runtime:
+  predict_concurrency: 8
+secrets:
+  beacon_worker_key: null
+environment_variables:
+  OMP_NUM_THREADS: "2"
+  MKL_NUM_THREADS: "2"
+  SWARM_BACKEND: yoloe
+  SWARM_ENABLE_REID: 'true'
+  SWARM_DEVICE: cuda:0
+  SWARM_MODEL: /app/data/yoloe-11s-seg.pt
+  SWARM_REID_MODEL: /app/data/osnet.pth
+  SWARM_MODEL_CACHE: /app/data
+  YOLO_CONFIG_DIR: /tmp/ultralytics
+  HF_HOME: /tmp/huggingface
+external_data:
+  - url: https://github.com/ultralytics/assets/releases/download/v8.3.0/yoloe-11s-seg.pt
+    local_data_path: yoloe-11s-seg.pt
+  - url: https://github.com/ultralytics/assets/releases/download/v8.3.0/mobileclip_blt.ts
+    local_data_path: mobileclip_blt.ts
+  - url: https://huggingface.co/kaiyangzhou/osnet/resolve/a5c5cc037c24235cda3b21085b93ad77c9616224/osnet_x1_0_msmt17_combineall_256x128_amsgrad_ep150_stp60_lr0.0015_b64_fb10_softmax_labelsmooth_flip_jitter.pth
+    local_data_path: osnet.pth
+docker_server:
+  start_command: /app/worker-env/bin/python -m beacon.baseten
+  server_port: 8001
+  predict_endpoint: /v1/detect
+  readiness_endpoint: /readyz
+  liveness_endpoint: /healthz

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Swarm Sight · Console</title>
+  <title>Beacon · Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -18,6 +18,7 @@
       --r: 10px;
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans);
       -webkit-font-smoothing: antialiased; }
     button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
@@ -50,6 +51,15 @@
     .btn:disabled { opacity: .4; cursor: default; }
     kbd { font: 11px var(--mono); color: var(--fg-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
 
+    .search-panel { margin: 20px 0 16px; }
+    .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .search-panel input { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
+    #referenceFile::file-selector-button { color: var(--fg); background: var(--bg-2); border: 0; border-radius: 4px; padding: 3px 8px; margin-right: 8px; }
+    #referencePreview { max-width: 100%; max-height: 280px; margin-top: 12px; }
+    #personChoices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    #searchMessage, #searchStatus { margin-top: 10px; color: var(--fg-2); font-size: 13px; }
+    .analysis { padding: 12px 16px; border-top: 1px solid var(--line); }
+    #analyzedFrame { max-width: 100%; max-height: 240px; display: block; margin-top: 10px; }
     /* phase stepper */
     .phases { display: flex; align-items: center; gap: 16px; padding: 24px 0 20px; }
     .steps { display: flex; border: 1px solid var(--line); border-radius: var(--r); padding: 4px; gap: 4px; background: var(--bg-1); }
@@ -215,14 +225,15 @@
     .viewer { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; padding: 32px;
       background: rgba(0,0,0,0.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
     .viewer.on { display: grid; }
-    .vbox { width: min(1040px, 100%); max-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
-      background: var(--bg); border: 1px solid var(--line-2); border-radius: 14px; overflow: hidden;
+    .vbox { width: min(1040px, 100%); max-height: 100%; display: flex; flex-direction: column;
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: 14px; overflow-x: hidden; overflow-y: auto;
       box-shadow: 0 30px 80px rgba(0,0,0,0.6); animation: vIn .18s ease-out; }
     @keyframes vIn { from { opacity: 0; transform: scale(.98); } }
     .vh { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-bottom: 1px solid var(--line); }
     .vh .num { font: 500 13px var(--mono); padding: 2px 8px; border-radius: 6px; background: var(--bg-3); }
-    .vh b { font-weight: 600; }
-    .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 360px; }
+    .vh { flex-shrink: 0; }
+    .vh b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 180px; flex-shrink: 0; }
     .vimg img { display: block; max-width: 100%; max-height: min(66vh, 720px); object-fit: contain; }
     .vimg .live { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px;
       font: 500 11px var(--mono); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); }
@@ -247,6 +258,9 @@
     .autoSw#visSw.on .switch { background: var(--fg); border-color: var(--fg); }
     .autoSw#visSw.on .switch::after { background: #000; }
     td .cap { font-size: 12px; color: var(--fg-2); max-width: 280px; white-space: normal; margin-top: 2px; }
+    .vhudnote { position: absolute; top: 12px; right: 12px; font: 500 11px var(--mono); padding: 3px 8px;
+      border-radius: 6px; background: rgba(0,0,0,0.6); color: var(--fg-2); }
+    .vhudnote.warn { color: #ffb703; }
     #vHud.on { background: var(--fg); color: #000; border-color: var(--fg); }
     #vHud.on kbd { color: #555; border-color: #999; }
     .vstats { display: grid; grid-template-columns: 1.5fr 1.6fr repeat(5, 1fr); border-top: 1px solid var(--line); }
@@ -256,6 +270,16 @@
     .vstats .v { font: 500 14px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .vfoot { font-size: 12px; color: var(--fg-3); }
 
+    .analysis, .vstats { flex-shrink: 0; }
+    #analysisMeta { overflow-wrap: anywhere; }
+    @media (max-width: 640px) {
+      .viewer { padding: 12px; }
+      .vh { gap: 6px; padding: 0 10px; }
+      .vh .vfoot, #vDevice, #vHide { display: none; }
+      .vstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .vstats div { border-bottom: 1px solid var(--line); }
+      .vimg img { max-height: 40vh; }
+    }
     /* activity */
     #log { max-height: 420px; overflow: auto; }
     .ev { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
@@ -271,6 +295,14 @@
       .metric:nth-child(n+4) { border-top: 1px solid var(--line); }
       .phases { flex-wrap: wrap; }
     }
+    .joinWrap { position: relative; }
+    .joinPop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; display: none; width: 260px; padding: 14px;
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      text-align: center; }
+    .joinPop.on { display: block; }
+    .joinPop img { width: 100%; background: #fff; border-radius: 8px; padding: 10px; }
+    .joinPop .mono { font-size: 12px; margin-top: 10px; word-break: break-all; }
+    .joinPop .hint { margin-top: 4px; }
   </style>
   <script type="importmap">
     { "imports": {
@@ -284,7 +316,7 @@
     <div class="bar">
       <div class="logo">
         <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 L18 17 H2 Z" fill="#ededed"/></svg>
-        Swarm Sight
+        Beacon
       </div>
       <span class="slash">/</span>
       <span class="muted">Console</span>
@@ -297,6 +329,19 @@
   </header>
 
   <main class="wrap">
+    <section class="card search-panel" aria-label="Person search">
+      <div class="card-h"><h2>Person reference</h2><span class="spacer"></span></div>
+      <div class="card-b">
+        <fieldset id="searchTools" style="border:0;padding:0;margin:0">
+          <div class="search-tools"><input aria-label="Upload reference" id="referenceFile" type="file" accept="image/*" style="max-width:240px">
+          <button class="btn" id="clearReference">Clear reference</button>
+          <button class="btn" id="rehearsalMode">Use rehearsal mode</button>
+          <label for="threshold">Similarity threshold</label><input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.70" style="width:80px"><button class="btn" id="saveThreshold">Apply</button></div>
+          <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
+        </fieldset>
+        <div id="searchStatus" role="status">Connecting to hub…</div><div id="searchMessage" role="status"></div>
+      </div>
+    </section>
     <section class="phases">
       <div class="steps" id="steps"></div>
       <span class="spacer"></span>
@@ -398,8 +443,9 @@
         <button class="btn sm" id="vClose">Close <kbd>Esc</kbd></button>
       </div>
       <div class="vimg"><img id="vImg" alt=""><canvas id="vHudCanvas"></canvas><div class="vnone" id="vNone">Waiting for video…</div>
-        <div class="live"><i></i>LIVE</div><div class="vsees" id="vSees"></div><div class="vcap" id="vCap"></div>
+        <div class="live"><i></i>LIVE</div><div class="vhudnote" id="vHudNote" hidden></div><div class="vsees" id="vSees"></div><div class="vcap" id="vCap"></div>
         <div class="valert" id="vAlert"></div></div>
+      <div class="analysis"><strong>Analyzed source frame</strong><div id="analysisMeta" class="muted">No current result</div><button class="btn" id="confirmSighting" hidden>Confirm visual sighting</button><canvas id="analyzedFrame" hidden></canvas></div>
       <div class="vstats">
         <div><div class="k">Doing</div><div class="v" id="vTask"></div></div>
         <div><div class="k">Position</div><div class="v" id="vPos"></div></div>

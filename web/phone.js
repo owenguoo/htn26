@@ -1,3 +1,4 @@
+import { acceptDetection, scoreLabel } from '/web/inference-ui.js';
 import { loadRoom, makeView, drawRoom, drawCone } from '/web/room.js';
 import { startSlam, cameraForward, slamDebug } from '/web/slam.js';
 
@@ -29,6 +30,7 @@ const state = {
   guide: null,  // current search assignment from the planner
   world: null,  // shared picture from the hub: other phones, coverage, pings, progress
   pings: new Map(),  // id → {x, y, label, until}
+  detection: {streamId: null, revision: null, seq: -1, captures: new Map()},
   dets: null,   // detection boxes to draw: {boxes, until}
   audio: null,
   // SLAM mode: raw = latest tracker pose; origin = pose at calibration (your spot, facing the stage)
@@ -140,6 +142,7 @@ function connect() {
   state.ws = ws;
 
   ws.onopen = () => {
+    if (state.ws !== ws) return;
     state.retry = 0;
     ws.send(JSON.stringify({
       type: 'hello', phoneId: state.phoneId, name: state.name, seat: state.seat,
@@ -148,11 +151,13 @@ function connect() {
     }));
   };
   ws.onmessage = (ev) => {
-    if (typeof ev.data !== 'string') return;
+    if (state.ws !== ws || typeof ev.data !== 'string') return;
     const msg = JSON.parse(ev.data);
     if (msg.type === 'ping') {
       ws.send(JSON.stringify({ type: 'pong', ts: msg.ts, tp: Date.now() }));
     } else if (msg.type === 'welcome') {
+      state.dets = null;
+      state.detection = {streamId: msg.streamId, revision: null, seq: -1, captures: new Map()};
       state.connected = true;
       hud.on = false;          // a fresh connection starts un-viewed:
       setCaptureRate(FPS);     // the hub re-sends these if a console is watching
@@ -172,8 +177,10 @@ function connect() {
     }
   };
   ws.onclose = () => {
-    state.connected = false;
     if (state.ws !== ws) return;
+    state.connected = false;
+    state.dets = null;
+    state.detection.captures.clear();
     const delay = Math.min(500 * 2 ** state.retry++, 5000);
     setTimeout(connect, delay);
   };
@@ -224,16 +231,21 @@ function sendCapture() {
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const header = {
-    type: 'frame', seq: state.seq++, tCapture: Date.now(),
+    type: 'frame', seq: state.seq++, tCapture: Date.now(), width: cap.width, height: cap.height,
     scanKeyframe: captureIsScan,
     heading: currentHeading(), pitch: state.pitch, calibrated: state.calYaw !== null,
     orientation: state.ori,
   };
   if (captureIsScan) lastScanCapture = header.tCapture;
+  const captured = performance.now();
+  state.detection.captures.set(header.seq, captured);
+  for (const [seq, at] of state.detection.captures) {
+    if (captured - at > 1500) state.detection.captures.delete(seq);
+  }
   encodingFrame = true;
   cap.toBlob(async (blob) => {
     try {
-      if (!blob || ws.readyState !== WebSocket.OPEN) return;
+      if (!blob || state.ws !== ws || !state.connected || ws.readyState !== WebSocket.OPEN) return;
       const bytes = await blob.arrayBuffer();
       if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 256 * 1024) return;
       ws.send(pack(header, bytes));
@@ -546,6 +558,7 @@ function hexA(hex, a) {
 // The operator console moves everyone through lobby → calibrate → search → found → end.
 let phase = null;
 function setPhase(next) {
+  if (next !== 'search') state.dets = null;
   phase = next;
   renderPhase();
 }
@@ -627,8 +640,9 @@ function onCommand(msg) {
     beep(660, 0.12);
     return;
   }
-  if (msg.cmd === 'detections') {
-    state.dets = { boxes: msg.boxes || [], until: Date.now() + (msg.ttlMs || 1500) };
+  if (msg.cmd === 'detections' || msg.cmd === 'rehearsal_detections') {
+    const result = acceptDetection(state.detection, {...msg, rehearsal: msg.cmd === 'rehearsal_detections'}, performance.now());
+    if (result || msg.clear) state.dets = result;
     return;
   }
   if (msg.cmd === 'flash') {
@@ -953,7 +967,7 @@ setInterval(() => {
     card: card.classList.contains('on') ? { title: $('#phaseTitle').textContent, text: $('#phaseText').textContent } : null,
     ar: hud.ar,
     screen: hud.screen,
-    dets: state.dets && state.dets.until > Date.now() ? state.dets.boxes : null,
+    dets: state.dets && state.dets.until > performance.now() ? state.dets.boxes : null,
   });
 }, 200);
 
@@ -968,20 +982,23 @@ function drawAR() {
   ctx.clearRect(0, 0, W, H);
 
   // detection boxes from the model
-  if (state.dets && state.dets.until > Date.now()) {
+  if (state.dets && state.dets.until > performance.now()) {
     ctx.lineWidth = 3;
     ctx.font = '700 13px system-ui';
     for (const b of state.dets.boxes) {
       const [x0, y0] = frameToScreen(b.x, b.y, W, H);
       const [x1, y1] = frameToScreen(b.x + b.w, b.y + b.h, W, H);
-      ctx.strokeStyle = '#ff5d73';
+      const likely = state.dets.rehearsal || b.similarity >= state.dets.threshold;
+      ctx.strokeStyle = likely ? '#ff5d73' : '#fff';
       ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
-      const label = [b.label, b.score != null ? `${Math.round(b.score * 100)}%` : null].filter(Boolean).join(' ');
+      const label = state.dets.rehearsal
+        ? `Rehearsal · confidence ${(b.score * 100).toFixed(0)}%`
+        : `${likely ? 'Likely · ' : ''}${scoreLabel(b)}`;
       if (label) {
         const tw = ctx.measureText(label).width + 10;
-        ctx.fillStyle = '#ff5d73';
+        ctx.fillStyle = ctx.strokeStyle;
         ctx.fillRect(x0, y0 - 20, tw, 20);
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = '#000';
         ctx.fillText(label, x0 + 5, y0 - 6);
       }
     }

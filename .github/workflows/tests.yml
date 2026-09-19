@@ -1,0 +1,66 @@
+name: Tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: Download and run pretrained YOLOE and OSNet tests
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  hub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: uv sync --frozen
+      - run: uv run python -m pytest tests -q
+      - run: node --test tests/browser-inference.test.cjs
+      - run: uv run python -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
+  inference:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/inference
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - run: uv sync --frozen
+      - run: uv run python -m pytest -m 'not model' -q
+      - run: uv run ruff check src tests
+  pretrained-models:
+    if: github.event_name == 'workflow_dispatch' && inputs.models
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/inference
+    env:
+      SWARM_TEST_MODELS: yoloe
+      SWARM_TEST_REID: '1'
+      SWARM_TEST_DEVICE: cpu
+      HF_HOME: ${{ github.workspace }}/services/inference/.cache/huggingface
+      SWARM_MODEL_CACHE: ${{ github.workspace }}/services/inference/.cache/models
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: services/inference/.cache
+          key: pretrained-${{ runner.os }}-${{ hashFiles('services/inference/uv.lock', 'services/inference/src/beacon/osnet.py') }}
+      - run: uv sync --frozen --extra yolo --extra reid
+      - run: mkdir -p artifacts && curl --fail --location https://ultralytics.com/images/bus.jpg --output artifacts/bus.jpg
+      - run: uv run --no-sync python -m pytest -m model -q

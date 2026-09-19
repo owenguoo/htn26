@@ -44,7 +44,7 @@ export async function startSlam(canvas, { scale = 'absolute', onUpdate, onRender
     XR8.GlTextureRenderer.pipelineModule(),
     XR8.XrController.pipelineModule(),
     {
-      name: 'swarm-sight',
+      name: 'beacon',
       onUpdate: ({ processCpuResult }) => {
         const reality = processCpuResult?.reality;
         if (!reality) return;

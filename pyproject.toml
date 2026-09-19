@@ -1,14 +1,22 @@
 [project]
-name = "swarm-sight"
+name = "beacon"
 version = "0.1.0"
 description = "Hub + dashboard that turns audience phones into one shared camera network"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
-    "websockets>=12",
+    "websockets>=14",
     "pillow>=10.1",
     "segno>=1.6",
     "openai>=3.16.2",
     "opencv-python-headless>=4.10,<5",
+    "pydantic>=2",
+    "httpx>=0.28.1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
 ]

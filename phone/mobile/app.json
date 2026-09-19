@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "Beacon",
+    "slug": "beacon",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.beacon.Beacon",
+      "supportsTablet": false,
+      "requireFullScreen": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Beacon tracks where this phone is and streams what it sees to the search dashboard.",
+        "NSLocalNetworkUsageDescription": "Beacon connects to the search hub on this Wi-Fi network.",
+        "NSBonjourServices": [
+          "_beacon._tcp"
+        ],
+        "NSMotionUsageDescription": "Motion tells Beacon whether you moved while camera tracking was lost.",
+        "NSMicrophoneUsageDescription": "Beacon listens while you hold the voice button so you can say what the team is looking for. Speech goes to the search hub to set that target and is discarded once it has been read; Beacon never identifies anyone by voice or face.",
+        "UIRequiredDeviceCapabilities": [
+          "arm64",
+          "arkit"
+        ],
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-dev-client",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Beacon tracks where this phone is and streams what it sees to the search dashboard.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ],
+      "./plugins/withBeacon"
+    ],
+    "scheme": "beacon",
+    "newArchEnabled": true,
+    "platforms": [
+      "ios"
+    ]
+  }
+}

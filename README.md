@@ -1,4 +1,4 @@
-# Swarm Sight
+# Beacon
 
 Audience phones stream their cameras into one hub. The operator console shows every live feed,
 a floor plan (2D, or 3D over the live VGGT scan) with each phone's position and view cone, and
@@ -46,9 +46,10 @@ pattern instead of the camera (for laptops without a webcam).
 | Endpoint | Direction | Payload |
 |---|---|---|
 | `ws /ws/phone` | phone ↔ hub | JSON `hello`, `orient`, `seat`, `pong`; binary frames; hub sends `welcome`, `ping`, `command` |
-| `ws /ws/frames?fps=5` | hub → inference / positioning | binary: each phone's latest frame + `{phoneId, seq, t, pose}` header |
-| `ws /ws/console` | hub ↔ console | `hello`, `state` at 10 Hz, binary thumbnails; accepts `command` |
-| `POST /api/pose` | positioning → hub | `{phoneId, x, y, heading?, confidence?, source?}`; overrides the seat for 5 s |
+| `ws /ws/frames?fps=5` | hub → inference / positioning | bridge bearer required; latest JPEG + versioned frame identity and captured pose (see inference guide) |
+| `ws /ws/console` | hub ↔ dashboard | `hello`, `state` at 10 Hz, binary thumbnails; accepts `command` |
+| `POST /api/pose` | positioning → hub | bridge bearer required; `{phoneId, x, y, heading?, confidence?, source?}`; overrides the seat for 5 s |
+| `POST /api/detections` | inference → hub | bridge bearer required; versioned source frame, reference, timing, and normalized scored boxes (see inference guide) |
 | `GET /api/state` | anyone | current snapshot of all phones |
 
 Binary frame format: `[uint32 big-endian header length][JSON header][JPEG]`. See `swarm/protocol.py`.
@@ -58,3 +59,23 @@ edge, `+y` goes toward the back. Heading is degrees, `0` = facing the stage, clo
 Room size lives in `room.json`.
 
 Frames are held in memory only (latest per phone) and never written to disk.
+
+## Inference service
+
+Person search uses three processes: the hub, lightweight bridge, and isolated Python 3.12 YOLOE + OSNet worker.
+For the hosted GPU worker, see [Baseten deployment](docs/baseten.md).
+Follow [deployment and verification](docs/inference.md) to configure the matching worker keys, cache, and CPU/GPU settings.
+After that setup, run these in separate terminals from the repository root:
+
+```bash
+HF_HOME="$PWD/.cache/huggingface" SWARM_MODEL_CACHE="$PWD/.cache/models" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 uv run --project services/inference --no-sync beacon serve --host 127.0.0.1 --port 8001
+uv run python -m swarm.hub
+uv run python -m swarm.inference
+```
+
+Open `/console`, authenticate, upload a reference and select one person.
+Likely matches carry separate detection scores and appearance similarities.
+Operator confirmation establishes a visual sighting with unknown target position, without responder dispatch.
+Use the explicit rehearsal control for simulated targets.
+The 0.70 default is a test threshold, not calibrated identity confidence.
+Physical-phone accuracy and cloud-GPU capacity remain unverified; reproducible acceptance steps are in the deployment guide.

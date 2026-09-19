@@ -1,4 +1,4 @@
-"""Swarm Sight hub: phone sessions, frame routing, and live state for the operator console.
+"""Beacon hub: phone sessions, frame routing, and live state for the dashboard.
 
 Run:  uv run python -m swarm.hub [--public-url https://xyz.trycloudflare.com]
 """
@@ -20,15 +20,19 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from PIL import Image, UnidentifiedImageError
+
 import segno
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .detection import FrameSnapshot, SearchState, DetectionResult
+from .control import Settings, Auth, install_routes, load_env
 from .coverage import Coverage
 from .planner import Planner
-from .sightings import FOUND_CONF, POSSIBLE_CONF, MockDetector, Sightings
+from .sightings import FOUND_CONF, PERSON_HEIGHT_M, POSSIBLE_CONF, MockDetector, Sightings
 from .target import Target
 from .vision import Vision
 from .mapper import Mapper
@@ -48,6 +52,7 @@ EXTERNAL_POSE_TTL = 5000  # a pose from the positioning service overrides the se
 REAP_AFTER_MS = 30000    # forget disconnected phones after this long
 PHASES = ("lobby", "calibrate", "search", "found", "end")  # show flow, driven from /console
 SEARCH_PHASES = ("search", "found")  # coverage and candidate detection only run in these
+REAL_NEAR_MISS = 0.15   # similarity this far below the match threshold still hints (heatmap only)
 PING_TTL_MS = 12000
 MESSAGE_TTL_MS = 8000
 WORLD_HZ = 2             # how often phones get the shared picture (mini-map, progress)
@@ -85,12 +90,18 @@ class Phone:
     debug: dict | None = None        # latest diagnostics the phone reported
     hud: dict | None = None          # what's on the phone's screen, sent while it's expanded in a console
     build: str = ""                  # version of the page the phone is running (see build_id)
+    hidden: bool = False             # legacy feed visibility; console still sees all phones
+    native: bool = False             # a native app, not the web page: never "old page, reload"
     audio: bytearray = field(default_factory=bytearray)  # current utterance (PCM), until transcribed
     audio_at: float = 0              # when the last audio chunk arrived
     captions: deque = field(default_factory=lambda: deque(maxlen=6))  # {"text", "t"}: what they said
     searched_cells: int = 0          # coverage cells this phone was first to look at
     tilted_since: float | None = None  # when it started pointing at the floor/ceiling
     # latest frame (latest wins, never queued)
+    stream_id: str = ""
+    frame_pose: dict | None = None
+    frame_width: int = 0
+    frame_height: int = 0
     frame: bytes | None = None
     frame_ori: dict | None = None    # device orientation (alpha, beta, gamma) when that frame was taken
     frame_seq: int = -1
@@ -129,14 +140,16 @@ class Phone:
     def summary(self, now: float) -> dict:
         return {
             "id": self.id, "index": self.index, "name": self.name, "color": self.color,
-            "sim": self.sim, "device": self.device, "connected": self.connected,
+            "sim": self.sim, "device": self.device, "native": self.native, "connected": self.connected,
             "pose": self.pose(now), "pitch": self.pitch, "calibrated": self.calibrated,
             "fps": round(self.fps(now), 1), "kbps": round(self.kbps(now)),
             "latencyMs": None if self.latency_ms is None else round(self.latency_ms),
             "stale": self.frame is None or now - self.frame_at > STALE_MS,
             "frames": self.frames_total,
             "debug": self.debug,
-            "oldPage": self.build != build_id(),
+            "hidden": self.hidden,
+            # Only a browser phone runs "the page"; a native client has its own versioning.
+            "oldPage": not self.native and self.build != build_id(),
             "hud": self.hud if self.hud and now - self.hud["t"] < 2000 else None,
             "speaking": now - self.audio_at < 700,
             "caption": (self.captions[-1] | {"ageMs": round(now - self.captions[-1]["t"])})
@@ -156,16 +169,18 @@ class Phone:
 
 class Hub:
     def __init__(self) -> None:
+        self.search = SearchState()
         self.phones: dict[str, Phone] = {}
         self.next_index = 1
         self.join_url = ""
         self.coverage = Coverage(ROOM)
         self.planner = Planner(ROOM, self.coverage)
-        self.target = Target(ROOM, self.planner.note)
+        self.target = Target(ROOM, self.planner.note, lambda: self.search.mode == "rehearsal")
         self.sightings = Sightings(ROOM)        # detections placed in the room and merged
         self.mock_detector = MockDetector(ROOM)  # reports the operator's hidden candidate in rehearsals
         # "search" by default so the hub works without an operator; the show starts at "lobby"
         self.phase = "search"
+        self._phase_generation = 0
         self.phase_started = now_ms()
         self.looking_for = ""               # what searchers should look for, shown on phones
         self.pings: list[dict] = []         # {id, x, y, label, t, phones: set | None}
@@ -188,14 +203,21 @@ class Hub:
             phone = Phone(id=pid, index=self.next_index)
             self.next_index += 1
             self.phones[pid] = phone
-        elif phone.ws is not None and phone.ws is not ws:
-            # same phone reconnected (refresh, second tab): drop the old socket
-            old = phone.ws
-            phone.ws = None
-            try:
-                await old.close()
-            except Exception:
-                pass
+        old = phone.ws
+        # Install ownership before awaiting closure so overlapping reconnects keep arrival order.
+        phone.stream_id = str(uuid.uuid4())
+        phone.frame = None
+        phone.frame_seq = -1
+        phone.frame_t = phone.frame_at = 0
+        phone.frame_pose = None
+        phone.scan_frame = None
+        phone.scan_candidates.clear()
+        phone.frame_width = phone.frame_height = 0
+        phone.clock_offset = None
+        phone.best_rtt = math.inf
+        phone.latency_ms = None
+        phone.arrivals.clear()
+        self.search.connect(phone.id, phone.stream_id)
         phone.ws = ws
         phone.connected = True
         phone.last_seen = now_ms()
@@ -203,14 +225,21 @@ class Hub:
         phone.device = "sim" if phone.sim else _device(str(hello.get("ua") or ""))
         phone.name = str(hello.get("name") or "")[:24]
         phone.build = str(hello.get("build") or "")
+        phone.native = bool(hello.get("native"))
         if isinstance(hello.get("seat"), dict):
             phone.seat = _seat(hello["seat"])
+        if old is not None and old is not ws:
+            try:
+                await old.close()
+            except Exception:
+                pass
         return phone
 
     def disconnect(self, phone: Phone, ws: WebSocket) -> None:
         if phone.ws is ws:
             phone.ws = None
             phone.connected = False
+            self.search.disconnect(phone.id, phone.stream_id)
             phone.last_seen = now_ms()
 
     async def reaper(self) -> None:
@@ -234,6 +263,29 @@ class Hub:
             if len(phone.audio) >= VOICE_MAX_S * VOICE_RATE * 2:
                 self.end_utterance(phone)
             return
+        try:
+            seq = header.get("seq", phone.frame_seq + 1)
+            if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq <= 2**53 - 1 or seq <= phone.frame_seq:
+                return
+            for key in ("tCapture", "heading", "pitch"):
+                if header.get(key) is not None and (isinstance(header[key], bool) or not isinstance(header[key], (int, float))
+                                                    or not math.isfinite(header[key])):
+                    return
+            # Reading image headers avoids pixel decoding on the hub event loop.
+            with Image.open(io.BytesIO(jpeg)) as image:
+                if image.format != "JPEG":
+                    return
+                width, height = image.size
+                if image.getexif().get(274) in (5, 6, 7, 8):
+                    width, height = height, width
+            if not 0 < width <= 16384 or not 0 < height <= 16384:
+                return
+            if any(key in header and (type(header[key]) is not int or header[key] != value)
+                   for key, value in (("width", width), ("height", height))):
+                return
+        except (ValueError, TypeError, OSError, UnidentifiedImageError, Image.DecompressionBombError):
+            return
+        now = now_ms()
         phone.arrivals.append((now, len(buf)))
         t_phone = header.get("tCapture")
         if t_phone is not None and phone.clock_offset is not None:
@@ -243,13 +295,23 @@ class Hub:
         else:
             phone.frame_t = now
         self._apply_orientation(phone, header)
+        phone.frame_pose = phone.pose(now)
+        if phone.frame_pose is not None and header.get("heading") is not None:
+            phone.frame_pose["heading"] = phone.heading
+        phone.frame_width, phone.frame_height = width, height
         phone.frame = jpeg
         phone.frame_ori = header.get("orientation") if isinstance(header.get("orientation"), dict) else None
-        phone.frame_seq = int(header.get("seq", phone.frame_seq + 1))
+        phone.frame_seq = seq
         phone.frame_at = now
         phone.frames_total += 1
-        if header.get("scanKeyframe") and self.mapper and self.mapper.enabled:
-            pose = phone.pose(now)
+        self.search.expire(now)
+        self.search.record_frame(FrameSnapshot(phone.id, phone.stream_id, seq, phone.frame_t,
+                                               width, height, phone.frame_pose))
+        # Native Swift clients send ordinary JPEG frames, not browser scanKeyframes.
+        # Promote at most one per second with its receive-time pose snapshot.
+        native_due = phone.native and (phone.scan_frame is None or now - phone.scan_frame["at"] >= 1000)
+        if (header.get("scanKeyframe") or native_due) and self.mapper and self.mapper.enabled:
+            pose = phone.frame_pose
             phone.scan_frame = {"jpeg": jpeg, "pose": dict(pose) if pose else None, "pitch": phone.pitch,
                                 "orientation": phone.frame_ori, "at": now}
             phone.scan_candidates.append(phone.scan_frame)
@@ -336,8 +398,10 @@ class Hub:
             if searching:
                 for pid, n in self.coverage.update(viewers).items():
                     self.phones[pid].searched_cells += n
-                if self.target.pos and not self.target.found_by:  # rehearsal: mock model sees the mock candidate
+                if self.search.mode == "rehearsal" and self.target.pos and not self.target.found_by:  # rehearsal: mock model sees the mock candidate
                     for pid, (x, y, heading, pitch) in viewers.items():
+                        if self.search.mode != "rehearsal" or not self.target.pos or self.phase not in SEARCH_PHASES:
+                            break
                         boxes = self.mock_detector.detect(x, y, heading, pitch, self.target.pos)
                         if boxes:
                             await self.ingest_detections(self.phones[pid], boxes)
@@ -370,10 +434,22 @@ class Hub:
             await asyncio.sleep(1 / hz)
 
     async def ingest_detections(self, phone: Phone, boxes: list[dict], pose: dict | None = None) -> None:
-        """Detections for one phone's frame, from the real model (POST /api/detections) or the mock:
-        draw them on that phone, and while searching, turn them into sightings and heatmap evidence."""
-        await phone.send({"type": "command", "cmd": "detections", "boxes": boxes, "ttlMs": 1500})
-        if self.phase not in SEARCH_PHASES or self.target.found_by:
+        """Draw rehearsal detections and add their simulated positions to the heatmap."""
+        if self.search.mode != "rehearsal":
+            return
+        stream_id, seq, revision = phone.stream_id, phone.frame_seq, self.search.revision
+        async with phone.send_lock:
+            if (self.search.mode != "rehearsal" or phone.stream_id != stream_id
+                    or self.search.revision != revision):
+                return
+            if phone.ws:
+                try:
+                    await phone.ws.send_json({"type": "command", "cmd": "rehearsal_detections", "boxes": boxes,
+                                              "streamId": stream_id, "seq": seq, "searchRevision": revision,
+                                              "ttlMs": 1500})
+                except (RuntimeError, WebSocketDisconnect):
+                    pass
+        if self.search.mode != "rehearsal" or self.phase not in SEARCH_PHASES or self.target.found_by:
             return
         pose = pose or phone.pose(now_ms())  # vision passes the pose its (older) frame was taken at
         if not pose:
@@ -410,7 +486,8 @@ class Hub:
             self.mission.trigger()  # speech can be a request ("I need help here"): look right away
 
     def check_sightings(self, viewers: dict, now: float) -> list[tuple[str, dict]]:
-        """Announce new possible sightings; confirm the find once one is confident enough."""
+        """Announce new possible sightings; in rehearsals, confirm the find once one is confident enough.
+        A real search never finds on its own: the operator confirms (see /api/search/confirm)."""
         if self.target.found_by:
             return []
         for s in self.sightings.items:
@@ -422,6 +499,8 @@ class Hub:
                                   first.id if first else None)
                 if self.mission:
                     self.mission.trigger()  # a sighting to double-check is exactly what autonomy is for
+        if self.search.mode != "rehearsal":
+            return []
         best = self.sightings.best()
         if not best or self.sightings.confidence(best) < FOUND_CONF:
             return []
@@ -434,14 +513,68 @@ class Hub:
         mass = {name: sum(prob[i] for i, _, _ in cells) for name, cells in self.planner.sector_cells.items()}
         return [{"sector": s, "share": round(m, 3)} for s, m in sorted(mass.items(), key=lambda kv: -kv[1])[:n]]
 
+    def real_evidence(self, accepted) -> int:
+        """A real detection result as search evidence: people who look like the reference raise the
+        probability where they stand and can become possible sightings; near misses nudge the heatmap
+        (worth another look); everyone else is someone else. Placed from the pose the phone had when the
+        frame was taken. Evidence only: it never confirms a find or claims a position (the operator does)."""
+        pose = accepted.pose
+        if self.search.mode != "real" or self.phase != "search" or not pose or pose.get("heading") is None:
+            return 0
+        threshold = self.search.threshold
+        boxes = []
+        for b in accepted.result.boxes:
+            if b.similarity >= threshold:  # a match: 0.55 at the threshold, up to 0.95
+                score = 0.55 + 0.4 * min(1.0, (b.similarity - threshold) / max(1 - threshold, 0.05))
+            elif b.similarity >= threshold - REAL_NEAR_MISS:  # close: a faint hint, heatmap only
+                score = 0.1 + 0.25 * (b.similarity - (threshold - REAL_NEAR_MISS)) / REAL_NEAR_MISS
+            else:
+                continue
+            score *= 0.6 + 0.4 * b.detectionScore  # a shaky detection counts for less
+            boxes.append({"x": b.x, "y": b.y, "w": b.w, "h": b.h, "score": round(score, 3), "heightM": PERSON_HEIGHT_M})
+        placed = self.sightings.ingest(accepted.result.phoneId, pose, boxes, now_ms() / 1000)
+        for x, y, score in placed:
+            self.coverage.boost(x, y, score)
+        if placed and self.mission:
+            self.mission.trigger()
+        return len(placed)
+
     def new_search(self) -> None:
         self.sightings.reset()
 
-    async def set_phase(self, phase: str) -> None:
+    async def enter_real_search(self) -> None:
+        self.search.mode = "real"
+        self.target.remove()
+        self.new_search()
+        # Simulated evidence must not bias a real person's search map.
+        self.coverage.prob = [1 / len(self.coverage.prob)] * len(self.coverage.prob)
+        self.mission_complete = False
+        for pid, cmd in self.target.tick({}, now_ms()):
+            if pid in self.phones:
+                await self.phones[pid].send({"type": "command", **cmd})
+
+    async def clear_detection_overlays(self) -> None:
+        revision = self.search.revision
+        async def clear(phone: Phone) -> None:
+            async with phone.send_lock:
+                if self.search.revision == revision and phone.ws:
+                    try:
+                        await phone.ws.send_json({'type': 'command', 'cmd': 'detections', 'boxes': [],
+                                                  'searchRevision': revision, 'clear': True, 'ttlMs': 0})
+                    except (RuntimeError, WebSocketDisconnect):
+                        pass
+        await asyncio.gather(*(clear(phone) for phone in self.phones.values()))
+
+    async def set_phase(self, phase: str, *, confirmed_visual: bool = False) -> bool:
         """Re-selecting the current phase re-applies its effects (e.g. turns the planner back on)."""
         if phase not in PHASES:
-            return
-        if phase != self.phase:
+            return False
+        self._phase_generation += 1
+        generation = self._phase_generation
+        changed = phase != self.phase
+        if changed:
+            # The audit keeps its original revision while live callbacks are invalidated.
+            self.search.reset(preserve_confirmation=confirmed_visual and phase == "found")
             self.phase, self.phase_started = phase, now_ms()
             self.planner.note(f"Phase → {phase}")
             if self.mission:
@@ -450,7 +583,25 @@ class Hub:
             self.planner.enabled = True
         elif phase in ("lobby", "calibrate", "end"):
             self.planner.enabled = False
-        await asyncio.gather(*(p.send({"type": "phase", "phase": phase}) for p in self.phones.values()))
+
+        def current() -> bool:
+            return generation == self._phase_generation
+
+        async def publish(phone: Phone) -> None:
+            # Recheck after the send lock: another transition can overtake a waiting sender.
+            async with phone.send_lock:
+                if current() and phone.ws:
+                    try:
+                        await phone.ws.send_json({"type": "phase", "phase": phase})
+                    except (RuntimeError, WebSocketDisconnect):
+                        pass
+
+        if changed:
+            await self.clear_detection_overlays()
+        if not current():
+            return False
+        await asyncio.gather(*(publish(phone) for phone in self.phones.values()))
+        return current()
 
     # ---- operator actions (console + Mission Control) --------------------------
     def phones_by_index(self, indexes: list[int] | None) -> list[Phone]:
@@ -607,7 +758,7 @@ class Hub:
             cov = self.coverage.snapshot()
             cell_m2 = self.coverage.cell ** 2
             ranked = sorted(live, key=lambda p: -p.searched_cells)
-            found = self.target.fix if self.target.found_by else None
+            found = self.target.fix if self.search.mode == "rehearsal" and self.target.found_by else None
             pings = self.active_pings(now)
             base = {
                 "type": "world", "phase": self.phase, "phones": others,
@@ -632,6 +783,7 @@ class Hub:
     # ---- outbound ----------------------------------------------------------
     def state(self) -> dict:
         now = now_ms()
+        self.search.expire(now)
         phones = sorted(self.phones.values(), key=lambda p: p.index)
         cell_m2 = self.coverage.cell ** 2
         return {"type": "state", "t": now,
@@ -641,6 +793,7 @@ class Hub:
                 "coverage": self.coverage.snapshot(), "planner": self.planner.snapshot(),
                 "target": self.target.snapshot(now),
                 "phase": self.phase, "phaseStartedAt": self.phase_started,
+                "search": self.search_state() if hasattr(self, "search_state") else {},
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
                 "sightings": self.sightings.snapshot(), "likely": self.likely_sectors(),
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
@@ -675,7 +828,11 @@ def _seat(seat: dict) -> dict | None:
 
 
 hub = Hub()
-app = FastAPI(title="Swarm Sight hub")
+app = FastAPI(title="Beacon hub")
+load_env()
+settings = Settings()
+auth = Auth(settings)
+install_routes(app, hub, auth)
 
 
 @app.middleware("http")
@@ -693,12 +850,13 @@ class FrameSubscriber:
     Latest-wins: if the socket is slow, intermediate frames are skipped, never queued.
     """
 
-    def __init__(self, ws: WebSocket, fps: float, with_state: bool) -> None:
+    def __init__(self, ws: WebSocket, fps: float, with_state: bool, skip_hidden: bool = False) -> None:
         self.ws = ws
+        self.skip_hidden = skip_hidden
         self.focus: str | None = None   # phone shown large in the console: gets frames faster
         self.min_interval = 1000 / max(fps, 0.1)
         self.with_state = with_state
-        self.sent_seq: dict[str, int] = {}
+        self.sent_seq: dict[str, tuple[str, int]] = {}
         self.sent_at: dict[str, float] = {}
         self.lock = asyncio.Lock()
 
@@ -714,17 +872,20 @@ class FrameSubscriber:
                 last_state = now
                 await self.send_json(hub.state())
             for p in list(hub.phones.values()):
-                if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq:
+                if p.frame is None or self.sent_seq.get(p.id) == (p.stream_id, p.frame_seq) or (self.skip_hidden and p.hidden):
                     continue
                 interval = FOCUS_INTERVAL_MS if p.id == self.focus else self.min_interval
                 # 25% slack: frames arrive with jitter, and a strict check would skip every other one
                 if now - self.sent_at.get(p.id, 0) < interval * 0.75:
                     continue
-                self.sent_seq[p.id] = p.frame_seq
+                self.sent_seq[p.id] = (p.stream_id, p.frame_seq)
                 self.sent_at[p.id] = now
-                header = {"phoneId": p.id, "seq": p.frame_seq, "t": p.frame_t, "pose": p.pose(now)}
+                header = {"phoneId": p.id, "seq": p.frame_seq, "t": p.frame_t, "pose": p.frame_pose,
+                          "streamId": p.stream_id, "width": p.frame_width, "height": p.frame_height,
+                          "searchRevision": hub.search.revision}
+                packet = pack(header, p.frame)
                 async with self.lock:
-                    await self.ws.send_bytes(pack(header, p.frame))
+                    await self.ws.send_bytes(packet)
             await asyncio.sleep(0.015)
 
 
@@ -736,8 +897,10 @@ async def ws_phone(ws: WebSocket) -> None:
     try:
         hello = await ws.receive_json()
         phone = await hub.register(hello, ws)
-        await phone.send({
-            "type": "welcome", "phoneId": phone.id, "index": phone.index,
+        if phone.ws is not ws:
+            return
+        await ws.send_json({
+            "type": "welcome", "phoneId": phone.id, "index": phone.index, "streamId": phone.stream_id,
             "color": phone.color, "room": ROOM, "phase": hub.phase,
         })
         if phone.id in hub.boosted:  # a console is watching it: a reconnected phone forgot, so tell it again
@@ -747,6 +910,8 @@ async def ws_phone(ws: WebSocket) -> None:
         while True:
             msg = await ws.receive()
             if msg["type"] == "websocket.disconnect":
+                break
+            if phone.ws is not ws:
                 break
             phone.last_seen = now_ms()
             if msg.get("bytes") is not None:
@@ -772,9 +937,9 @@ async def _ping_loop(phone: Phone, ws: WebSocket) -> None:
 
 
 async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: dict | None,
-) -> None:
+                            skip_hidden: bool = False) -> None:
     await ws.accept()
-    sub = FrameSubscriber(ws, fps=fps, with_state=with_state)
+    sub = FrameSubscriber(ws, fps=fps, with_state=with_state, skip_hidden=skip_hidden)
     if hello:
         await sub.send_json(hello)
     if with_state:
@@ -783,8 +948,15 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
     try:
         while True:
             msg = await ws.receive_json()
+            if not auth.same_origin(ws):
+                await sub.send_json({"error": "same-origin request required"})
+                continue
             if msg.get("type") == "command":
                 await hub.command(str(msg.get("target", "all")), msg.get("cmd") or {})
+            elif msg.get("type") == "hide":
+                phone = hub.phones.get(str(msg.get("phoneId")))
+                if phone:
+                    phone.hidden = bool(msg.get("hidden"))
             elif msg.get("type") == "reset_coverage":
                 hub.coverage.reset()
                 hub.planner.reset()
@@ -792,6 +964,9 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
             elif msg.get("type") == "planner":
                 hub.planner.enabled = bool(msg.get("enabled"))
             elif msg.get("type") == "target":
+                if hub.search.mode != "rehearsal":
+                    await sub.send_json({"error": "mock target requires explicit rehearsal mode"})
+                    continue
                 if msg.get("remove"):
                     hub.target.remove()
                     hub.new_search()
@@ -831,16 +1006,25 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
             await hub.update_boost()
 
 
+@app.websocket("/ws/dashboard")
 @app.websocket("/ws/console")
 async def ws_console(ws: WebSocket) -> None:
     """Operator console: state, pushed events and feed thumbnails."""
     fps = float(ws.query_params.get("thumb_fps", 10))
-    await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url})
+    console = (ws.url.path == "/ws/console" or ws.query_params.get("role") == "console") and auth.same_origin(ws)
+    await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url},
+                            skip_hidden=not console)
+
+
+ws_dashboard = ws_console  # preserve upstream clients/tests using the former endpoint name
 
 
 @app.websocket("/ws/frames")
 async def ws_frames(ws: WebSocket) -> None:
     """For inference/positioning teammates: every phone's latest frame + pose, up to `fps` per phone."""
+    if not auth.bridge(ws) and not auth.same_origin(ws):
+        await ws.close(code=1008)
+        return
     fps = float(ws.query_params.get("fps", 5))
     await _serve_subscriber(ws, fps, False, None)
 
@@ -856,27 +1040,32 @@ def get_state() -> dict:
 
 
 @app.post("/api/pose")
-def post_pose(body: dict) -> dict:
+def post_pose(body: dict, request: Request) -> dict:
     """Stub for the positioning service: {phoneId, x, y, heading?, confidence?, source?}."""
+    auth.require_bridge(request)
     return {"ok": hub.set_external_pose(body)}
 
 
 @app.post("/api/detections")
-async def post_detections(body: dict) -> dict:
-    """From the detection model, for one phone's frame:
-    {phoneId, boxes: [{x, y, w, h, label?, score}]} with x/y/w/h as 0..1 fractions of the frame and
-    score as the model's confidence (0..1) that this is the search target. Boxes are drawn on the
-    phone; while searching they also become sightings (>= 0.4 possible, >= 0.8 found) and nudge
-    the probability heatmap (>= 0.1)."""
-    phone = hub.phones.get(str(body.get("phoneId")))
-    if not phone:
-        return {"ok": False, "error": "unknown phoneId"}
-    boxes = [
-        {k: b[k] for k in ("x", "y", "w", "h", "label", "score") if k in b}
-        for b in body.get("boxes", []) if all(k in b for k in ("x", "y", "w", "h"))
-    ][:20]
-    await hub.ingest_detections(phone, boxes)
-    return {"ok": True, "boxes": len(boxes)}
+async def post_detections(body: dict, request: Request) -> dict:
+    auth.require_bridge(request)
+    if hub.phase != 'search' or not hub.search.accept_result(body, now_ms=now_ms()):
+        raise HTTPException(409, 'obsolete or invalid detection')
+    result = DetectionResult.model_validate(body)
+    phone = hub.phones.get(result.phoneId)
+    if phone:
+        async with phone.send_lock:
+            if (result.searchRevision != hub.search.revision or hub.phase != 'search'
+                    or hub.search.streams.get(result.phoneId) != result.streamId
+                    or now_ms() - result.t > 1500
+                    or hub.search.latest.get(result.phoneId) is None
+                    or hub.search.latest[result.phoneId].result.seq != result.seq):
+                raise HTTPException(409, 'search changed')
+            if phone.ws:
+                await phone.ws.send_json({'type': 'command', 'cmd': 'detections', **result.model_dump(), 'threshold': hub.search.threshold, 'ttlMs': 1500})
+    accepted = hub.search.latest.get(result.phoneId)
+    evidence = hub.real_evidence(accepted) if accepted and accepted.result.seq == result.seq else 0
+    return {'ok': True, 'boxes': len(result.boxes), 'evidence': evidence}
 
 
 @app.get("/api/qr.svg")
@@ -913,8 +1102,6 @@ def phone_page() -> HTMLResponse:
     return _page("phone.html")
 
 
-
-
 @app.get("/console")
 def console_page() -> HTMLResponse:
     return _page("console.html")
@@ -941,16 +1128,6 @@ def lan_ip() -> str:
         return "127.0.0.1"
 
 
-def load_env(path: Path = ROOT / ".env") -> None:
-    """Minimal .env reader (KEY=VALUE lines); real environment variables win."""
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
 
 def main() -> None:
     load_env()
@@ -958,7 +1135,7 @@ def main() -> None:
     hub.mission = MissionControl(hub, ROOM)
     hub.vision = Vision(hub, hub.mission)
     hub.mapper = Mapper(hub, ROOM, WEB / "models" / "live")
-    ap = argparse.ArgumentParser(description="Swarm Sight hub")
+    ap = argparse.ArgumentParser(description="Beacon hub")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8000, help="plain HTTP (console, simulator, tunnel)")
     ap.add_argument("--https-port", type=int, default=8443, help="HTTPS for phones on the LAN (needs certs/)")
@@ -976,7 +1153,7 @@ def main() -> None:
         configs.append(uvicorn.Config(app, host=args.host, port=args.https_port, log_level="warning",
                                       lifespan="off", ssl_certfile=str(cert), ssl_keyfile=str(key)))
 
-    print("\n  Swarm Sight hub")
+    print("\n  Beacon hub")
     print(f"  Console:     http://localhost:{args.port}/console")
     print(f"  Phones join: {hub.join_url}")
     if not has_tls and not args.public_url:

@@ -6,11 +6,12 @@ phones make up the rest of the team and get live directions to the sighting unti
 ARRIVE_M. The whole team then stays with the candidate: nothing else steers them.
 
 For rehearsals the operator can also place a hidden mock candidate (pos). The mock detector
-reports it when cameras see it; the real detection model needs no placed candidate at all.
+reports it when cameras see it. Real visual searches use operator-confirmed evidence with unknown position.
 """
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 
 from .protocol import now_ms
 
@@ -19,7 +20,8 @@ GUIDE_EVERY_MS = 200
 
 
 class Target:
-    def __init__(self, room: dict, note) -> None:
+    def __init__(self, room: dict, note, enabled: Callable[[], bool] = lambda: True) -> None:
+        self.enabled = enabled
         self.note = note  # log callback: note(text, phone_id)
         self.pos: tuple[float, float] | None = None  # hidden mock candidate (rehearsals only)
         self.responders_wanted = 3
@@ -36,7 +38,9 @@ class Target:
         self.last_guide = 0.0
 
     def place(self, x: float, y: float) -> bool:
-        """Place or move the mock candidate. Returns True if this starts a new search."""
+        if not self.enabled():
+            self.remove()
+            return False
         fresh = self.pos is None or self.found_by is not None
         self.pos = (x, y)
         if fresh:
@@ -51,15 +55,17 @@ class Target:
 
     def busy(self) -> set[str]:
         """The find team (finder + responders, arrived or not): nothing else may steer them."""
-        return set(self.responders)
+        return set(self.responders) if self.enabled() else set()
 
     def complete(self) -> bool:
         """Found, and the whole find team is with the candidate: the search is over."""
-        return bool(self.found_by and self.responders and all(r["arrived"] for r in self.responders.values()))
+        return bool(self.enabled() and self.found_by and self.responders and all(r["arrived"] for r in self.responders.values()))
 
     def confirm(self, finder: str, x: float, y: float, confidence: float,
                 viewers: dict, now: float) -> list[tuple[str, dict]]:
         """A sighting reached the found threshold: form the find team and start guiding it in."""
+        if not self.enabled():
+            return []
         self.found_by, self.found_at, self.fix, self.confidence = finder, now, (x, y), confidence
         secs = (now - self.search_started) / 1000
         self.note(f"FOUND the candidate ({round(confidence * 100)}% sure) after {secs:.1f}s", finder)
@@ -76,6 +82,8 @@ class Target:
         return out
 
     def tick(self, viewers: dict[str, tuple[float, float, float, float | None]], now: float) -> list[tuple[str, dict]]:
+        if not self.enabled():
+            self.remove()
         out: list[tuple[str, dict]] = [(pid, {"cmd": "guide", "clear": True}) for pid in self.pending_clear]
         self.pending_clear = []
         if not self.found_by or now - self.last_guide < GUIDE_EVERY_MS:
@@ -100,7 +108,7 @@ class Target:
         return out
 
     def snapshot(self, now: float) -> dict | None:
-        if self.pos is None and not self.found_by:
+        if not self.enabled() or (self.pos is None and not self.found_by):
             return None
         return {
             "x": self.pos[0] if self.pos else None, "y": self.pos[1] if self.pos else None,

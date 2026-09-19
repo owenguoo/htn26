@@ -1,0 +1,1 @@
+{"type":"command","cmd":"detections","boxes":[{"x":0.1,"y":0.2,"w":0.3,"h":0.4,"label":"backpack","score":0.91},{"x":0.5,"y":0.5,"w":0.1,"h":0.1}],"ttlMs":1500}

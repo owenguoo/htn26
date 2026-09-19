@@ -1,0 +1,109 @@
+{
+  "id": "hth-main-hall",
+  "name": "Hack the North \u2014 main hall (placeholder)",
+  "note": "Loaded at runtime, never compiled in. Replace every number here with tape-measured values on the day; changing venue must need no rebuild.",
+  "hubURL": "http://10.120.4.246:8000/",
+  "room": {
+    "originX": 0.0,
+    "originY": 0.0,
+    "yawDegrees": 0.0
+  },
+  "markers": [
+    {
+      "id": "marker-primary",
+      "physicalWidth": 0.18,
+      "physicalHeight": 0.2546,
+      "position": [
+        0.0,
+        1.6,
+        0.0
+      ],
+      "quaternion": [
+        0.707107,
+        0.0,
+        0.0,
+        0.707107
+      ],
+      "isPrimary": true,
+      "note": "SYNTHETIC placeholder. Measure the printed marker with a tape and re-measure its position relative to the primary marker on the day."
+    },
+    {
+      "id": "marker-stage-left",
+      "physicalWidth": 0.15,
+      "physicalHeight": 0.2121,
+      "position": [
+        -1.42,
+        1.585,
+        0.01
+      ],
+      "quaternion": [
+        0.707107,
+        0.0,
+        0.0,
+        0.707107
+      ],
+      "isPrimary": false,
+      "note": "SYNTHETIC placeholder. Measure the printed marker with a tape and re-measure its position relative to the primary marker on the day."
+    },
+    {
+      "id": "marker-east",
+      "physicalWidth": 0.15,
+      "physicalHeight": 0.2121,
+      "position": [
+        4.98,
+        1.55,
+        3.02
+      ],
+      "quaternion": [
+        0.5,
+        -0.5,
+        0.5,
+        0.5
+      ],
+      "isPrimary": false,
+      "note": "SYNTHETIC placeholder. Measure the printed marker with a tape and re-measure its position relative to the primary marker on the day."
+    },
+    {
+      "id": "marker-west",
+      "physicalWidth": 0.15,
+      "physicalHeight": 0.2121,
+      "position": [
+        -5.01,
+        1.52,
+        3.05
+      ],
+      "quaternion": [
+        -0.5,
+        -0.5,
+        0.5,
+        -0.5
+      ],
+      "isPrimary": false,
+      "note": "SYNTHETIC placeholder. Measure the printed marker with a tape and re-measure its position relative to the primary marker on the day."
+    },
+    {
+      "id": "marker-rear",
+      "physicalWidth": 0.18,
+      "physicalHeight": 0.2546,
+      "position": [
+        0.02,
+        1.58,
+        7.95
+      ],
+      "quaternion": [
+        0.0,
+        -0.707107,
+        0.707107,
+        -0.0
+      ],
+      "isPrimary": false,
+      "note": "SYNTHETIC placeholder. Measure the printed marker with a tape and re-measure its position relative to the primary marker on the day."
+    }
+  ],
+  "thresholds": {
+    "rejectPositionMeters": 1.5,
+    "rejectRotationDegrees": 25.0,
+    "maxStepMeters": 0.25,
+    "maxStepDegrees": 5.0
+  }
+}

@@ -32,7 +32,7 @@ STEERING = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "ca
 AUTONOMY_TOOLS = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "cancel_look",
                   "message_phones", "ping", "set_planner", "set_responders", "show_feed")
 
-SYSTEM = """You are Mission Control for Swarm Sight, a live search run by an audience whose phone cameras
+SYSTEM = """You are Mission Control for Beacon, a live search run by an audience whose phone cameras
 are coordinated from a central console. The operator gives you short commands during a live show.
 
 Act immediately by calling tools. Do not ask clarifying questions: pick the most reasonable reading of
@@ -125,7 +125,7 @@ TOOLS = [
 ]
 
 
-AUTONOMY_SYSTEM = """You are the autonomy layer of Mission Control for Swarm Sight, a live search run by an
+AUTONOMY_SYSTEM = """You are the autonomy layer of Mission Control for Beacon, a live search run by an
 audience whose phone cameras are coordinated centrally. Every few seconds you review the current state and
 signals and recommend actions that clearly improve the search or fix a problem.
 
@@ -411,7 +411,7 @@ class MissionControl:
             if p:
                 speech.append({"index": p.index, "text": cap["text"],
                                "x": pose["x"] if pose else None, "y": pose["y"] if pose else None})
-        best = None if hub.target.found_by else hub.sightings.best()
+        best = hub.sightings.best() if hub.search.mode == "rehearsal" and not hub.target.found_by else None
         sighting = ({"x": best["x"], "y": best["y"], "confidence": round(hub.sightings.confidence(best), 2)}
                     if best and hub.sightings.confidence(best) >= 0.4 else None)
         seen = [{"index": hub.phones[pid].index, "sees": v["sees"], "urgent": v["reason"] if v["urgent"] else None,
@@ -565,7 +565,7 @@ class MissionControl:
         likely = hub.likely_sectors(4)
         out.append("- most likely sectors (share of probability): "
                    + ", ".join(f"{s['sector']} {round(s['share'] * 100)}%" for s in likely))
-        if not hub.target.found_by:
+        if hub.search.mode == "rehearsal" and not hub.target.found_by:
             for sg in sorted(hub.sightings.items, key=hub.sightings.confidence, reverse=True)[:3]:
                 conf = hub.sightings.confidence(sg)
                 if conf < 0.4:
@@ -595,7 +595,7 @@ class MissionControl:
         if left and max(left.values()) <= 0.15:
             out.append("- the whole room has been searched: don't recommend more coverage moves")
         t = hub.target
-        if t.found_by and t.found_at:
+        if hub.search.mode == "rehearsal" and t.found_by and t.found_at:
             late = [f"#{hub.phones[pid].index}" for pid, r in t.responders.items()
                     if not r["arrived"] and pid in hub.phones]
             since = round((now - t.found_at) / 1000)
@@ -620,6 +620,8 @@ class MissionControl:
     # ---- tools → hub -----------------------------------------------------------------
     async def execute(self, name: str, a: dict) -> str:
         hub = self.hub
+        if hub.search.mode == 'real' and name in ('place_candidate', 'remove_candidate', 'set_responders'):
+            raise ValueError('mock candidate controls require explicit rehearsal mode')
         if name == "set_phase":
             await hub.set_phase(a["phase"])
             return f"phase is now {hub.phase}"
@@ -689,6 +691,9 @@ class MissionControl:
         cols = string.ascii_uppercase[:pl.cols]
         lines = [
             "CURRENT STATE",
+            "VISUAL SEARCH " + json.dumps(hub.search.visual_context(now)),
+            "Visual evidence does not establish map position. Observer pose is not target position. "
+            "Never dispatch responders to visual sightings without a separate known target position.",
             f"phase: {hub.phase} | planner: {'on' if pl.enabled else 'off'} | "
             f"area searched: {round(hub.coverage.snapshot()['searched'] * 100)}%"
             + (f" | looking for: {hub.looking_for}" if hub.looking_for else ""),
@@ -727,9 +732,9 @@ class MissionControl:
             job = pl.assignments.get(p.id)
             if job:
                 tags.append(f"searching {job['sector']}")
-            if t.found_by == p.id:
+            if hub.search.mode == "rehearsal" and t.found_by == p.id:
                 tags.append("found the candidate")
-            if p.id in t.responders:
+            if hub.search.mode == "rehearsal" and p.id in t.responders:
                 tags.append("arrived" if t.responders[p.id]["arrived"] else "responding")
             name = f" {p.name}" if p.name else ""
             lines.append(f"  #{p.index}{name} {where}" + (f" [{', '.join(tags)}]" if tags else ""))
@@ -740,12 +745,14 @@ class MissionControl:
             if seen and time.time() - seen["t"] < 10:
                 lines.append(f"    camera sees ({round(time.time() - seen['t'])}s ago): {seen['sees']}")
 
-        if t.found_by:
+        if hub.search.mode == "real":
+            lines.append("candidate: visual evidence only; target location unknown; no responder team")
+        elif t.found_by:
             finder = hub.phones.get(t.found_by)
             lines.append(f"candidate: FOUND at ({t.fix[0]:.1f}, {t.fix[1]:.1f}) by #{finder.index if finder else '?'} "
                          f"({round((t.confidence or 0) * 100)}% sure)")
         elif t.pos is None:
-            lines.append("candidate: not placed (real detections only)" if reveal_candidate
+            lines.append("candidate: no mock candidate placed" if reveal_candidate
                          else "candidate: location unknown (not found yet)")
         elif not reveal_candidate and not t.found_by:
             lines.append("candidate: somewhere in the room, location unknown (not found yet)")

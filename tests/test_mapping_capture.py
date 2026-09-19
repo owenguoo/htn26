@@ -108,11 +108,43 @@ class MappingCaptureTests(unittest.IsolatedAsyncioTestCase):
     async def test_preview_does_not_replace_scan_capture_pose(self):
         self.send_scan()
         self.phone.seat = {'x': 4, 'y': 5}
-        self.hub.on_frame(self.phone, pack({'type': 'frame', 'heading': 80}, b'preview'))
+        self.hub.on_frame(self.phone, pack({'type': 'frame', 'heading': 80}, view(texture(), 60)))
         await self.mapper.sample()
         f = self.mapper.keyframes[0]
         self.assertEqual(f['jpeg'], self.image)
         self.assertEqual((f['x'], f['y'], f['heading']), (1, 2, 20))
+
+    async def test_native_frames_without_scan_flag_are_buffered_with_arkit_pose(self):
+        self.phone.native = True
+        self.phone.seat = None
+        t = now_ms()
+        with patch('swarm.hub.now_ms', return_value=t):
+            self.hub.on_message(self.phone, {'type': 'slam', 'x': 3.0, 'y': 4.0,
+                                            'heading': 25., 'pitch': -10.})
+            self.hub.on_frame(self.phone, pack({'type': 'frame', 'seq': 1, 'width': 640,
+                'height': 480, 'heading': 25., 'pitch': -10.}, self.image))
+        self.assertEqual(len(self.phone.scan_candidates), 1)
+        captured = self.phone.scan_candidates[0]
+        self.assertEqual(captured['pose']['source'], 'slam')
+        self.assertEqual((captured['pose']['x'], captured['pose']['y']), (3., 4.))
+        with patch('swarm.hub.now_ms', return_value=t+100):
+            self.hub.on_frame(self.phone, pack({'type': 'frame', 'seq': 2}, self.image))
+        self.assertEqual(len(self.phone.scan_candidates), 1)
+        with patch('swarm.hub.now_ms', return_value=t+1100):
+            self.hub.on_message(self.phone, {'type': 'slam', 'x': 3.5, 'y': 4.5, 'heading': 30.})
+            self.hub.on_frame(self.phone, pack({'type': 'frame', 'seq': 3}, self.image))
+        self.assertEqual(len(self.phone.scan_candidates), 2)
+        self.assertEqual(captured['pose']['x'], 3.)
+        self.assertEqual(self.phone.scan_candidates[1]['pose']['x'], 3.5)
+
+    async def test_native_unaligned_frames_are_still_usable(self):
+        self.phone.native = True
+        self.phone.seat = None
+        self.hub.on_frame(self.phone, pack({'type': 'frame'}, self.image))
+        self.phone.scan_frame['at'] -= 1200
+        await self.mapper.sample()
+        self.assertEqual(len(self.mapper.keyframes), 1)
+        self.assertIsNone(self.mapper.keyframes[0]['x'])
 
     async def test_missing_pose_does_not_block_capture(self):
         self.phone.seat = None

@@ -132,3 +132,24 @@ full coverage of the original capture. Median selection time was 19.25 ms/frame,
 48.2 ms in this small archive. Real worker updates succeeded at 6 views (5.3 s round trip)
 and 7 views (6.2 s). These are individual replay measurements, not a crowded live-phone test
 or a latency guarantee at the 96-view archive limit.
+
+
+## Native Beacon client integration
+
+Integrated `origin/main` at `074f89a` (native ARKit/Swift app, latest hub frame identity,
+reconnect handling, and inference controls) into the quality branch. Reconstruction and
+visual selection remain on this branch.
+
+The native client announces `native: true` and sends ordinary JPEG frame packets plus
+separate `slam` pose messages. It does not send the browser-only `scanKeyframe` flag.
+The hub now samples native frames into the same short candidate buffers at up to 1 Hz,
+retaining the hub pose snapshot and frame heading. This uses the pose available when the
+frame arrives, not a newly introduced capture-synchronized 6DoF protocol. Native JPEG
+resolution/quality remain controlled by the app (the shared default is a 960px long edge
+at quality 0.6). Reconnecting clears old capture buffers and stream identity.
+
+ARKit tracks within a local coordinate frame. The Swift client sends room-relative `slam`
+positions only when room alignment exists and the pose is not stale. Until then, images
+can still build the visual map, but there is no registered phone marker. Use the native
+app's seat/facing-stage calibration or its shared marker alignment, rather than assuming
+independent ARKit origins coincide. Browser-only capture hints are not automatically native UI.
