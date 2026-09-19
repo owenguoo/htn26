@@ -493,8 +493,19 @@ public actor Transport {
 /// under `swift test` on macOS.
 public final class URLSessionWebSocketChannel: WebSocketChannel {
     private let task: URLSessionWebSocketTask
+    /// The session that owns `task`, held for exactly as long as the task is.
+    ///
+    /// A `URLSession` owns its tasks; a task does not own its session. Letting
+    /// the session go out of scope after handing back the task tears the task
+    /// down a few milliseconds later, and the symptom is not "you forgot to
+    /// retain something" — it is `NSURLErrorNetworkConnectionLost` (-1005) on a
+    /// socket the server never saw, which reads exactly like a hub that is down
+    /// or a Wi-Fi that dropped. The phone then sits on "Lost the hub. Check the
+    /// Wi-Fi" while the hub is healthy and answering everyone else.
+    private let session: URLSession
 
-    public init(task: URLSessionWebSocketTask) {
+    public init(session: URLSession, task: URLSessionWebSocketTask) {
+        self.session = session
         self.task = task
         task.resume()
     }
@@ -537,6 +548,9 @@ public final class URLSessionWebSocketChannel: WebSocketChannel {
 
     public func close() async {
         task.cancel(with: .goingAway, reason: nil)
+        // Reconnects make a fresh session each time; without this the old ones
+        // accumulate for the life of the process.
+        session.invalidateAndCancel()
     }
 }
 
@@ -554,7 +568,7 @@ public struct URLSessionWebSocketChannelFactory: WebSocketChannelFactory {
 
     public func connect(to url: URL) async throws -> any WebSocketChannel {
         let session = URLSession(configuration: configuration)
-        let channel = URLSessionWebSocketChannel(task: session.webSocketTask(with: url))
+        let channel = URLSessionWebSocketChannel(session: session, task: session.webSocketTask(with: url))
         // Not connected until the handshake lands. Returning before that makes
         // every downstream connection indicator a lie.
         try await channel.waitUntilOpen()
