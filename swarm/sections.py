@@ -66,3 +66,38 @@ All shared references must agree, rather than silently accepting a fitted outlie
     return {'scale':scale,'rotateYDeg':math.degrees(theta),'offset':offset.tolist()}, {
         'method':'fixed shared-camera registration', 'residualM':round(rms,3),
         'views':len(pairs), 'referenceSpreadM':round(spread,3)}
+
+
+def register_joint(cameras, placed):
+    """Fit one replacement map with majority consensus, without stacking outliers.
+
+A changed depth estimate can move a few predicted cameras. Require at least 70%
+shared-camera agreement and retain the same bounded residual gate for that set.
+"""
+    from itertools import combinations
+    pairs = [(c, placed[c['id']]) for c in cameras if c['id'] in placed]
+    if len(pairs) < 5:
+        return register(cameras, placed)
+    p = np.array([c['position'] for c, _ in pairs], dtype=float)
+    q = np.array([v for _, v in pairs], dtype=float)
+    spread = float(np.sqrt(np.mean(np.sum((q[:, [0,2]]-q[:, [0,2]].mean(0))**2,axis=1))))
+    threshold = min(.2, max(.08, spread*.15))
+    candidates = list(combinations(range(len(pairs)), 3))
+    best = []
+    for slot in np.linspace(0, len(candidates)-1, min(96, len(candidates)), dtype=int):
+        subset = {pairs[i][0]['id']:pairs[i][1] for i in candidates[slot]}
+        try:
+            tf, _ = register(cameras, subset)
+        except ValueError:
+            continue
+        theta = math.radians(tf['rotateYDeg'])
+        rot = np.array([[math.cos(theta),0,math.sin(theta)],[0,1,0],[-math.sin(theta),0,math.cos(theta)]])
+        residual = np.linalg.norm(tf['scale']*(p@rot.T)+tf['offset']-q,axis=1)
+        inliers = np.flatnonzero(residual <= threshold).tolist()
+        if len(inliers) > len(best):
+            best = inliers
+    if len(best) < max(4, math.ceil(.7*len(pairs))):
+        raise ValueError('Joint map held: shared cameras lack 70% alignment agreement')
+    tf, meta = register(cameras, {pairs[i][0]['id']:pairs[i][1] for i in best})
+    meta.update(sharedViews=len(pairs), rejectedViews=len(pairs)-len(best))
+    return tf, meta

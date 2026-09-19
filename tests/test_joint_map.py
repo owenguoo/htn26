@@ -32,6 +32,17 @@ class JointMapTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(ids & set(old)), 20)
         self.assertTrue(ids - set(old))
 
+    def test_joint_alignment_requires_majority_consensus(self):
+        from swarm.sections import register_joint
+        cameras = [{'id':str(i), 'position':[i%4, 1, i//4]} for i in range(12)]
+        placed = {c['id']:list(c['position']) for c in cameras}
+        placed['11'] = [100, 20, 100]
+        tf, meta = register_joint(cameras, placed)
+        self.assertAlmostEqual(tf['scale'], 1)
+        self.assertEqual(meta['rejectedViews'], 1)
+        for i in range(6): placed[str(i)] = [i*13, i*7, i*i]
+        with self.assertRaises(ValueError): register_joint(cameras, placed)
+
     async def test_replaces_map_preserves_files_and_holds_failed_update(self):
         with tempfile.TemporaryDirectory() as directory:
             hub = Hub(); hub.phase = 'search'

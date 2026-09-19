@@ -21,7 +21,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from .sections import section_batch, register, SECTION_FRAMES, MAX_SECTIONS
+from .sections import section_batch, register, register_joint, SECTION_FRAMES, MAX_SECTIONS
 from .protocol import now_ms
 from .keyframes import VisualSelector, working_batch, MAX_ARCHIVE, MAX_BATCH, WINDOW_MS
 
@@ -347,7 +347,7 @@ class Mapper:
             try:
                 references = ({k: v for k, v in self.placed.items() if k in self.previous_batch}
                               if self.mode == "joint" else self.placed)
-                transform, alignment = register(meta["cameras"], references)
+                transform, alignment = (register_joint if self.mode == "joint" else register)(meta["cameras"], references)
             except ValueError as exc:
                 self.blocked_batch = signature
                 self.error = str(exc)
