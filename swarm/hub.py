@@ -308,8 +308,8 @@ class Hub:
         self.search.record_frame(FrameSnapshot(phone.id, phone.stream_id, seq, phone.frame_t,
                                                width, height, phone.frame_pose))
         # Native Swift clients send ordinary JPEG frames, not browser scanKeyframes.
-        # Promote at most one per second with its receive-time pose snapshot.
-        native_due = phone.native and (phone.scan_frame is None or now - phone.scan_frame["at"] >= 1000)
+        # Promote at most two per second with its receive-time pose snapshot.
+        native_due = phone.native and (phone.scan_frame is None or now - phone.scan_frame["at"] >= 450)
         if (header.get("scanKeyframe") or native_due) and self.mapper and self.mapper.enabled:
             pose = phone.frame_pose
             phone.scan_frame = {"jpeg": jpeg, "pose": dict(pose) if pose else None, "pitch": phone.pitch,

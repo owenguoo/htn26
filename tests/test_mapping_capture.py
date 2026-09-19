@@ -64,6 +64,55 @@ class VisualTests(unittest.TestCase):
         self.assertEqual(added, [])
         self.assertIn('mapped area', hints['c'])
 
+    def test_unconnected_view_is_recovered_when_bridge_arrives(self):
+        selector = VisualSelector()
+        panorama = np.concatenate([texture(2), texture(7), texture(12)], axis=1)
+        def crop(i, start):
+            return frame(i) | {'jpeg': jpeg(panorama[:, start:start+640])}
+        archive, _, _ = selector.choose({'a': [crop(0, 0)]}, [], set())
+        archive, added, _ = selector.choose({'a': [crop(1, 700)]}, archive, set())
+        self.assertEqual(added, [])
+        self.assertEqual(len(selector.staged), 1)
+        archive, added, _ = selector.choose({'a': [crop(2, 350)]}, archive, set())
+        self.assertEqual({k['id'] for k in added}, {'k1', 'k2'})
+        self.assertEqual(len(reachable(graph(archive), 'k0')), 3)
+        self.assertEqual(selector.status()['waitingForOverlap'], 0)
+
+    def test_window_keeps_multiple_distinct_angles(self):
+        selector = VisualSelector()
+        frames = [frame(i) | {'jpeg': view(texture(), shift)}
+                  for i, shift in enumerate([0, 50, 100])]
+        archive, added, _ = selector.choose({'a': frames}, [], set())
+        self.assertEqual(len(added), 3)
+        self.assertEqual(len(reachable(graph(archive), 'k0')), 3)
+
+    def test_unmatched_views_expire_and_explain_why(self):
+        selector = VisualSelector()
+        root = frame(0) | {'jpeg': jpeg(texture())}
+        other = frame(1) | {'jpeg': jpeg(texture(20))}
+        with patch('swarm.keyframes.time.monotonic', return_value=1):
+            archive, _, _ = selector.choose({'a': [root, other]}, [], set())
+        self.assertEqual(len(selector.staged), 1)
+        with patch('swarm.keyframes.time.monotonic', return_value=22):
+            archive, _, _ = selector.choose({}, archive, set())
+        self.assertEqual(len(archive), 1)
+        self.assertEqual(selector.status()['counts']['Expired without overlap'], 1)
+        self.assertFalse(selector.staged)
+
+    def test_unmatched_buffer_is_bounded(self):
+        selector = VisualSelector()
+        root = frame(0) | {'jpeg': jpeg(texture())}
+        archive, _, _ = selector.choose({'a': [root]}, [], set())
+        visual = archive[0]['_visual']
+        candidates = [frame(i) | {'jpeg': str(i).encode()} for i in range(1, 40)]
+        def describe(data):
+            return visual | {'hash': data.decode()}, None
+        with patch.object(selector, 'describe', side_effect=describe), patch.object(selector, 'compare', return_value=(0., False)):
+            archive, added, _ = selector.choose({'a': candidates}, archive, set())
+        self.assertEqual(len(selector.staged), 24)
+        self.assertEqual(added, [])
+        self.assertEqual(selector.status()['counts']['Overlap buffer full'], 15)
+
     def test_batch_is_connected_bounded_and_balanced(self):
         frames = [frame(0)] + [frame(i, 'a' if i < 40 else 'b', {'k0': .4}) for i in range(1, 60)]
         previous = [f'k{i}' for i in range(16)]
@@ -130,7 +179,7 @@ class MappingCaptureTests(unittest.IsolatedAsyncioTestCase):
         with patch('swarm.hub.now_ms', return_value=t+100):
             self.hub.on_frame(self.phone, pack({'type': 'frame', 'seq': 2}, self.image))
         self.assertEqual(len(self.phone.scan_candidates), 1)
-        with patch('swarm.hub.now_ms', return_value=t+1100):
+        with patch('swarm.hub.now_ms', return_value=t+500):
             self.hub.on_message(self.phone, {'type': 'slam', 'x': 3.5, 'y': 4.5, 'heading': 30.})
             self.hub.on_frame(self.phone, pack({'type': 'frame', 'seq': 3}, self.image))
         self.assertEqual(len(self.phone.scan_candidates), 2)

@@ -153,3 +153,17 @@ positions only when room alignment exists and the pose is not stale. Until then,
 can still build the visual map, but there is no registered phone marker. Use the native
 app's seat/facing-stage calibration or its shared marker alignment, rather than assuming
 independent ARKit origins coincide. Browser-only capture hints are not automatically native UI.
+
+### Live capture continuity
+
+Native JPEG candidates are sampled at up to 2 Hz. Every distinct eligible view
+in the bounded capture window is considered in capture order, preserving bridge
+angles during a sweep. Clear views without a map connection wait in memory for
+up to 20 seconds (24 images maximum) and are retried against newly accepted
+views. They enter reconstruction only after passing the existing geometric
+overlap checks. Held images are discarded on restart/reset.
+
+The console shows cumulative selection outcomes since hub restart/reset and
+current overlap-buffer occupancy. `/api/state` → `scan.selection` also contains
+the last 100 decisions, with phone IDs and timestamps. No rejected JPEGs are
+persisted. This improves capture continuity, not batch alignment or fusion.

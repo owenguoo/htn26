@@ -6,7 +6,8 @@ They are overlap evidence, not metric poses or a guarantee of static geometry.
 from __future__ import annotations
 
 import hashlib
-from collections import Counter
+from collections import Counter, deque
+import time
 
 import cv2
 import numpy as np
@@ -14,12 +15,26 @@ import numpy as np
 MAX_ARCHIVE = 96
 MAX_BATCH = 32
 WINDOW_MS = 2500
+MAX_STAGED = 24
+STAGED_SECONDS = 20
 
 
 class VisualSelector:
     def __init__(self):
         self.features = cv2.SIFT_create(nfeatures=900, contrastThreshold=.025)
         self.matcher = cv2.BFMatcher(cv2.NORM_L2)
+        self.staged = []
+        self.counts = Counter()
+        self.events = deque(maxlen=100)
+
+    def record(self, frame, outcome):
+        self.counts[outcome] += 1
+        self.events.append({"id": frame["id"], "phoneId": frame["pid"],
+                            "t": time.time(), "outcome": outcome})
+
+    def status(self):
+        return {"counts": dict(self.counts), "waitingForOverlap": len(self.staged),
+                "recent": list(self.events)}
 
     def describe(self, jpeg):
         # Match only resized grayscale copies; never send these copies to VGGT.
@@ -87,41 +102,65 @@ class VisualSelector:
                             if strength:
                                 k['links'][earlier['id']] = strength
         accepted, hints = [], {}
-        # Phones with fewer retained views choose first; at most one per phone/window.
-        counts = Counter(k['pid'] for k in archive)
-        for pid, candidates in sorted(groups.items(), key=lambda kv: counts[kv[0]]):
-            described = []
+        now = time.monotonic()
+        pool = []
+        for c in self.staged:
+            if now - c['_stagedAt'] > STAGED_SECONDS:
+                self.record(c, 'Expired without overlap')
+            else:
+                pool.append(c)
+        # Keep chronological bridge frames, not just the sharpest image of a sweep.
+        for candidates in groups.values():
             for candidate in candidates:
+                self.counts['Evaluated'] += 1
                 visual, reason = self.describe(candidate['jpeg'])
                 if visual is None:
-                    hints[pid] = reason
+                    hints[candidate['pid']] = reason
+                    self.record(candidate, reason)
+                elif any(c['_visual']['hash'] == visual['hash'] for c in pool):
+                    self.record(candidate, 'Duplicate')
                 else:
-                    described.append(candidate | {'_visual': visual})
-            described.sort(key=lambda c: c['_visual']['sharp'], reverse=True)
-            for c in described:
+                    pool.append(candidate | {'_visual': visual, '_stagedAt': now})
+        pool.sort(key=lambda c: c['t'])
+        while pool:
+            remaining = []
+            progress = False
+            for c in pool:
                 edges, duplicate = {}, False
                 for k in archive:
                     if k.get('_visual') is None:
                         continue
-                    strength, same = self.compare(c['_visual'], k['_visual'])
+                    comparisons = c.setdefault('_matches', {})
+                    if k['id'] not in comparisons:
+                        comparisons[k['id']] = self.compare(c['_visual'], k['_visual'])
+                    strength, same = comparisons[k['id']]
                     if strength:
                         edges[k['id']] = strength
                     duplicate |= same
                 if duplicate:
-                    hints[pid] = 'View already covered; move slowly to a new angle'
+                    hints[c['pid']] = 'View already covered; move slowly to a new angle'
+                    self.record(c, 'Duplicate')
                     continue
                 if archive and not edges:
-                    hints[pid] = 'Point toward a mapped area to connect this view'
+                    remaining.append(c)
+                    hints[c['pid']] = 'Holding view; sweep back toward a mapped area to connect it'
                     continue
                 c['links'] = edges
                 c['quality'] = round(c['_visual']['sharp'], 2)
                 archive.append(c)
                 accepted.append(c)
-                hints[pid] = 'Accepted new view'
+                hints[c['pid']] = 'Accepted new view'
+                progress = True
+            pool = remaining
+            if not progress:
                 break
-            else:
-                hints.setdefault(pid, 'Waiting for a clear view')
+        for c in pool[:-MAX_STAGED]:
+            self.record(c, 'Overlap buffer full')
+        self.staged = pool[-MAX_STAGED:]
         archive = trim_archive(archive, protected | {k['id'] for k in accepted})
+        kept = {k['id'] for k in archive}
+        for c in accepted:
+            self.record(c, 'Accepted' if c['id'] in kept else 'Archive full')
         return archive, accepted, hints
 
 

@@ -124,6 +124,7 @@ class Mapper:
         self.pending.clear()
         self.previous_batch.clear()
         self.selection_hints.clear()
+        self.selector = VisualSelector()
         self.sample_times.clear()
         self.pending_since = 0
         for p in self.hub.phones.values():
@@ -170,6 +171,7 @@ class Mapper:
                 "running": self.running, "keyframes": len(self.keyframes), "maxKeyframes": MAX_ARCHIVE,
                 "batchSize": self.batch_size, "maxBatch": MAX_BATCH,
                 "selectionMs": self.selection_ms,
+                "selection": self.selector.status(),
                 "selectionHints": {p.id: {"name": p.name or f"Phone {p.index}", "message": self.selection_hints[p.id]}
                                    for p in self.hub.phones.values() if p.connected and p.id in self.selection_hints},
                 "newSince": len(self.pending), "runAfter": RUN_AFTER_NEW, "error": self.error,
@@ -183,7 +185,7 @@ class Mapper:
         for p in list(self.hub.phones.values()):
             if not p.connected or (p.sim and not self.include_sims):
                 continue
-            if now - self.sample_times.get(p.id, 0) < 2000:
+            if now - self.sample_times.get(p.id, 0) < 450:
                 continue
             # Keep modern clients' sharp captures separate from preview traffic.
             candidates = [dict(c) for c in p.scan_candidates if now - c["at"] <= WINDOW_MS]
@@ -192,9 +194,6 @@ class Mapper:
                                "orientation": p.frame_ori, "at": p.frame_at}]
             if not candidates:
                 self.selection_hints[p.id] = 'Waiting for fresh camera frames'
-                continue
-            # Give the first modern frame time to gain a sharper alternative.
-            if p.scan_frame and len(candidates) == 1 and now - candidates[0]["at"] < 1000:
                 continue
             self.sample_times[p.id] = now
             p.scan_candidates.clear()

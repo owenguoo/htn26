@@ -143,6 +143,13 @@ function renderControls() {
         + (l ? ` · v${l.version} in ${l.seconds}s` : '');
     $('#scanSelection').textContent = sc.enabled ? Object.values(sc.selectionHints || {})
       .map(h => `${h.name}: ${h.message}`).join(' · ') : '';
+    if (sc.enabled && sc.selection) {
+      const counts = sc.selection.counts || {};
+      const rejected = Object.entries(counts).filter(([k]) => !['Evaluated', 'Accepted'].includes(k))
+        .map(([k, v]) => `${v} ${k.toLowerCase()}`).join(', ');
+      $('#scanSelection').textContent += ` · Since restart: ${counts.Accepted || 0}/${counts.Evaluated || 0} accepted`
+        + ` · ${sc.selection.waitingForOverlap} waiting for overlap` + (rejected ? ` · ${rejected}` : '');
+    }
   }
   const t = st.target;
   const s = $('#candStatus');
