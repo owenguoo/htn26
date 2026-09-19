@@ -15,7 +15,7 @@ import SwiftUI
 final class OperatorExpoView: ExpoView {
   let onRequestLeave = EventDispatcher()
 
-  var showDebug = true { didSet { render() } }
+  var showDebug = false { didSet { render() } }
   var showMiniMap = true { didSet { render() } }
 
   private let model = OperatorViewModel()

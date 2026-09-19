@@ -2,14 +2,31 @@ import SwiftUI
 import SwarmCore
 
 /// Room metres ↔ view points. x is 0 on the stage centre line; y is 0 at the
-/// stage wall, which is drawn at the top — the same way up as the dashboard.
+/// stage wall, which is drawn at the top — the same way up as the console.
+///
+/// Two modes. With no `focus` the whole room is fitted into the view, which is
+/// what the seat picker needs. With a `focus` the view is a fixed-size window
+/// of `metresAcross` centred on that point: the map scrolls under the operator
+/// instead of the operator walking off the edge of it. That matters more than
+/// it sounds — `room.json` is a nominal 20 × 15 m, and real rooms, seat-tap
+/// origins and drift all put people outside it.
 struct FloorPlanGeometry {
     let room: HubRoom
     let size: CGSize
+    var focus: (x: Double, y: Double)?
+    var metresAcross: Double = 12
 
-    private var scale: CGFloat { min(size.width / room.width, size.height / room.depth) }
+    private var scale: CGFloat {
+        focus == nil ? min(size.width / room.width, size.height / room.depth) : size.width / metresAcross
+    }
+
+    /// View position of room (−width/2, 0): the stage-left corner of the stage wall.
     private var origin: CGPoint {
-        CGPoint(x: (size.width - room.width * scale) / 2, y: (size.height - room.depth * scale) / 2)
+        if let focus {
+            return CGPoint(x: size.width / 2 - (focus.x + room.width / 2) * scale,
+                           y: size.height / 2 - focus.y * scale)
+        }
+        return CGPoint(x: (size.width - room.width * scale) / 2, y: (size.height - room.depth * scale) / 2)
     }
 
     func point(x: Double, y: Double) -> CGPoint {
@@ -24,6 +41,7 @@ struct FloorPlanGeometry {
 
     func length(_ metres: Double) -> CGFloat { metres * scale }
 
+    /// The room's outline, wherever that falls — partly or wholly off-view when following.
     var bounds: CGRect {
         CGRect(origin: origin, size: CGSize(width: room.width * scale, height: room.depth * scale))
     }
@@ -38,10 +56,18 @@ struct FloorPlanCanvas: View {
     let colorHex: String?
     let pings: [PingCue]
     var seat: HubSeat?
+    /// Keep `me` in the middle and scroll the room underneath.
+    var followsMe = false
 
     var body: some View {
         Canvas { context, size in
-            let plan = FloorPlanGeometry(room: room, size: size)
+            let plan = FloorPlanGeometry(room: room, size: size,
+                                         focus: followsMe ? me.map { ($0.x, $0.y) } : nil)
+            if followsMe {
+                // Outside the room is still somewhere: a visibly different floor,
+                // so walking past a wall reads as that and not as a broken map.
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black.opacity(0.35)))
+            }
             context.fill(Path(roundedRect: plan.bounds, cornerRadius: 4), with: .color(.black.opacity(0.55)))
 
             if let coverage = world?.coverage {
@@ -71,7 +97,9 @@ struct FloorPlanCanvas: View {
             }
             for ping in pings {
                 let p = plan.point(x: ping.x, y: ping.y)
-                context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)), with: .color(.cyan))
+                // The HUD's ping colour, so a ping is the same thing wherever it is drawn.
+                context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)),
+                             with: .color(Color(hex: "#ffd166") ?? .yellow))
             }
             if let candidate = world?.candidate {
                 let p = plan.point(x: candidate.x, y: candidate.y)
@@ -115,7 +143,9 @@ struct MiniMapView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            FloorPlanCanvas(room: room, world: world, me: me, colorHex: colorHex, pings: pings)
+            FloorPlanCanvas(room: room, world: world, me: me, colorHex: colorHex, pings: pings, followsMe: true)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.35), lineWidth: 1))
             if let searched = world?.searched {
                 Text("\(Int((searched * 100).rounded()))% searched"
                      + (world?.stats?.rank.map { " · rank \($0)" } ?? ""))

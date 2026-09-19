@@ -79,6 +79,83 @@ extension StatusPill {
     }
 }
 
+/// The one thing the operator is told about the phone's health: what is going
+/// on, in words, and what to do about it.
+///
+/// The pill used to read `LOST conf 1.00 fix 34s air 1 drop 0`. Every field was
+/// true and none of it told the person holding the phone what to do. This picks
+/// the single most important problem and says it plainly; the numbers live in
+/// Settings for whoever is debugging.
+public struct OperatorStatus: Sendable, Equatable {
+    public enum Level: String, Sendable, Equatable {
+        /// Nothing to do.
+        case ok
+        /// Working, but the operator can improve it.
+        case attention
+        /// Not working until something changes.
+        case problem
+    }
+
+    public var level: Level
+    public var title: String
+    /// What to do about it. nil when there is nothing to do.
+    public var hint: String?
+    /// Tapping the status should open the seat picker: the fix is to get located.
+    public var offersSeatPicker: Bool
+
+    public init(level: Level, title: String, hint: String? = nil, offersSeatPicker: Bool = false) {
+        self.level = level
+        self.title = title
+        self.hint = hint
+        self.offersSeatPicker = offersSeatPicker
+    }
+
+    static let locateHint = "Point at a marker, or tap here to set your spot"
+
+    /// Most important first: a phone that cannot reach the hub has no use for
+    /// being told its tracking is shaky.
+    public init(_ pill: StatusPill) {
+        switch pill.connection {
+        case .offline, .connecting:
+            self.init(level: .problem, title: "Connecting to the hub…", hint: "Check you're on the venue Wi-Fi")
+            return
+        case .reconnecting:
+            self.init(level: .problem, title: "Reconnecting…", hint: "Lost the hub. Check the Wi-Fi")
+            return
+        case .online:
+            break
+        }
+        switch pill.sessionState {
+        case .idle, .permissions:
+            self.init(level: .attention, title: "Starting the camera…")
+        case .recalibrating:
+            self.init(level: .attention, title: "Needs recalibrating", hint: Self.locateHint,
+                      offersSeatPicker: true)
+        case .lost:
+            self.init(level: .problem, title: "Tracking lost",
+                      hint: pill.alignment == .marker ? "Move slowly and point at a marker"
+                                                      : "Move slowly, somewhere with more to look at",
+                      offersSeatPicker: false)
+        case .calibrating where pill.alignment == .none:
+            self.init(level: .attention, title: "Not located yet", hint: Self.locateHint, offersSeatPicker: true)
+        case .degraded:
+            self.init(level: .attention, title: "Tracking is shaky", hint: "Slow down and keep the camera up")
+        case .calibrating, .tracking:
+            if pill.isStale {
+                self.init(level: .problem, title: "Camera has stopped updating")
+            } else if pill.alignment == .none {
+                self.init(level: .attention, title: "Not located yet", hint: Self.locateHint, offersSeatPicker: true)
+            } else if pill.thermalState >= .serious {
+                self.init(level: .attention, title: "Phone is hot", hint: "Sending fewer frames until it cools")
+            } else if pill.alignment == .marker, (pill.secondsSinceCorrection ?? 0) > 30 {
+                self.init(level: .attention, title: "Position may be drifting", hint: "Glance at any marker to re-lock")
+            } else {
+                self.init(level: .ok, title: pill.alignment == .seat ? "Tracking from your spot" : "Tracking")
+            }
+        }
+    }
+}
+
 public struct FlashCue: Sendable, Equatable {
     public var red: Float
     public var green: Float
@@ -208,12 +285,17 @@ public struct SoundCue: Sendable, Equatable {
 /// Everything the SwiftUI overlay renders, as plain data.
 public struct OverlayState: Sendable, Equatable {
     public var pill = StatusPill()
+    /// What the operator is actually shown. Derived from `pill`.
+    public var status: OperatorStatus { OperatorStatus(pill) }
     public var flash: FlashCue?
     public var arrow: ArrowCue?
     public var banner: GuideBannerCue?
     public var toast: ToastCue?
     public var detections: DetectionsCue?
     public var pings: [PingCue] = []
+    /// The hub's found candidate (`world.candidate`), located like a ping so it
+    /// can sit on the compass and float in the camera view. `id` is −1.
+    public var candidate: PingCue?
     /// "lobby", "calibrate", "search", "found", "end".
     public var phase: String?
     /// From `welcome`: "#3", and the colour the dashboard draws this phone in.
@@ -435,28 +517,39 @@ public struct OverlayModel: Sendable {
 
     private mutating func updatePings(pose: Pose?, roomPose: RoomPose?, alignment: RoomAlignment?,
                                       intrinsics: CameraIntrinsics?) {
-        for index in state.pings.indices {
-            var ping = state.pings[index]
-            ping.bearingRadians = nil
-            ping.distance = nil
-            ping.imagePoint = nil
-            if let pose, let roomPose, let alignment {
-                ping.distance = Float(hypot(ping.x - roomPose.x, ping.y - roomPose.y))
-                if let heading = roomPose.heading {
-                    let bearing = RoomMath.bearing(fromX: roomPose.x, y: roomPose.y, toX: ping.x, y: ping.y)
-                    ping.bearingRadians = Float(RoomMath.signedDiff(bearing, heading) * .pi / 180)
-                }
-                if let intrinsics {
-                    // A spot on the floor, in the same 3D frame the pose is in. The
-                    // venue origin is on the floor; a seat-tap frame's origin is
-                    // wherever ARKit started, so assume a phone held at chest height.
-                    let floor: Float = state.alignment == .marker ? 0 : pose.position.y - 1.4
-                    let point = alignment.unproject(x: ping.x, y: ping.y, height: floor)
-                    ping.imagePoint = Projection.project(venuePoint: point, camera: pose, intrinsics: intrinsics)
-                }
-            }
-            state.pings[index] = ping
+        state.candidate = state.world?.candidate.map {
+            PingCue(id: -1, x: $0.x, y: $0.y, label: "CANDIDATE", until: .infinity)
         }
+        for index in state.pings.indices {
+            state.pings[index] = located(state.pings[index], pose: pose, roomPose: roomPose,
+                                         alignment: alignment, intrinsics: intrinsics)
+        }
+        state.candidate = state.candidate.map {
+            located($0, pose: pose, roomPose: roomPose, alignment: alignment, intrinsics: intrinsics)
+        }
+    }
+
+    private func located(_ cue: PingCue, pose: Pose?, roomPose: RoomPose?, alignment: RoomAlignment?,
+                         intrinsics: CameraIntrinsics?) -> PingCue {
+        var ping = cue
+        ping.bearingRadians = nil
+        ping.distance = nil
+        ping.imagePoint = nil
+        guard let pose, let roomPose, let alignment else { return ping }
+        ping.distance = Float(hypot(ping.x - roomPose.x, ping.y - roomPose.y))
+        if let heading = roomPose.heading {
+            let bearing = RoomMath.bearing(fromX: roomPose.x, y: roomPose.y, toX: ping.x, y: ping.y)
+            ping.bearingRadians = Float(RoomMath.signedDiff(bearing, heading) * .pi / 180)
+        }
+        if let intrinsics {
+            // A spot on the floor, in the same 3D frame the pose is in. The
+            // venue origin is on the floor; a seat-tap frame's origin is wherever
+            // ARKit started, so assume a phone held at chest height.
+            let floor: Float = state.alignment == .marker ? 0 : pose.position.y - 1.4
+            let point = alignment.unproject(x: ping.x, y: ping.y, height: floor)
+            ping.imagePoint = Projection.project(venuePoint: point, camera: pose, intrinsics: intrinsics)
+        }
+        return ping
     }
 
     static func bannerText(kind: String, label: String?, text: String?, distance: Double?) -> String {

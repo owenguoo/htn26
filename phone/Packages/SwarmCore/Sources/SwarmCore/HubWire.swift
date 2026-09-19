@@ -76,6 +76,10 @@ public struct HubHello: Sendable, Equatable, Codable {
     public var ua: String
     public var sim: Bool
     public var build: String
+    /// Tells the hub this is an app, not its web page. Without it the console
+    /// badges the phone "Old page · reload": the hub compares `build` with a
+    /// hash of the web files, which an app can never equal.
+    public var native = true
 
     public init(phoneId: String, name: String, seat: HubSeat? = nil,
                 ua: String = "SwarmSight (iPhone; ARKit)", sim: Bool = false, build: String = "") {

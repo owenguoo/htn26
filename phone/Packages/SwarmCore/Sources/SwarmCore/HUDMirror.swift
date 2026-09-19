@@ -85,9 +85,14 @@ public enum PhaseCardText {
 }
 
 public enum HUDMirror {
-    static let guideColor = "#b8f35a"
+    // The web phone's palette (`web/phone.js`), so a native phone and a browser
+    // phone look the same on the console and to each other.
+    static let stageColor = "#4cc9f0"
     static let alertColor = "#ff5d73"
-    static let pingColor = "#4cc9f0"
+    static let onTargetColor = "#7ae582"
+    static let directedColor = "#4cc9f0"
+    static let turnColor = "#ffb703"
+    static let pingColor = "#ffd166"
 
     /// - Parameters:
     ///   - captureWidth/captureHeight: the sensor-orientation capture the
@@ -95,17 +100,30 @@ public enum HUDMirror {
     ///   - screenAspect: the display's width ÷ height, portrait.
     public static func make(from overlay: OverlayState, captureWidth: Int, captureHeight: Int,
                             screenAspect: Double) -> HubHUDMirror {
+        let responding = overlay.banner?.kind == "respond"
+
+        // Same markers, same order, same colours as `drawCompass` in phone.js.
         var markers: [HubHUDMirror.Compass.Marker] = []
-        if let arrow = overlay.arrow {
-            markers.append(.init(off: Double(arrow.bearingRadians) * 180 / .pi,
-                                 label: (arrow.label ?? "TARGET").uppercased(),
-                                 color: overlay.banner?.kind == "respond" ? alertColor : guideColor,
-                                 big: true))
+        if let heading = overlay.roomPose?.heading {
+            markers.append(.init(off: RoomMath.signedDiff(0, heading), label: "STAGE", color: stageColor, big: false))
         }
-        for ping in overlay.pings {
-            guard let bearing = ping.bearingRadians else { continue }
-            markers.append(.init(off: Double(bearing) * 180 / .pi, label: ping.label, color: pingColor,
-                                 big: false))
+        if let arrow = overlay.arrow {
+            let off = Double(arrow.bearingRadians) * 180 / .pi
+            let kind = overlay.banner?.kind ?? "search"
+            let label = responding
+                ? "CANDIDATE" + (arrow.distance.map { String(format: " %.1fm", $0) } ?? "")
+                : (arrow.label ?? "TARGET")
+            let color = responding ? alertColor
+                : abs(off) < 16 ? onTargetColor
+                : (kind == "look" || kind == "go") ? directedColor : turnColor
+            markers.append(.init(off: off, label: label, color: color, big: true))
+        }
+        let targets = overlay.pings.map { ($0, "◆ " + $0.label, pingColor) }
+            + (responding ? [] : (overlay.candidate.map { [($0, "CANDIDATE", alertColor)] } ?? []))
+        for (cue, label, color) in targets {
+            guard let bearing = cue.bearingRadians else { continue }
+            let metres = cue.distance.map { String(format: " %.0fm", $0) } ?? ""
+            markers.append(.init(off: Double(bearing) * 180 / .pi, label: label + metres, color: color, big: false))
         }
         let compass = overlay.roomPose?.heading.map {
             HubHUDMirror.Compass(center: $0, abs: false, markers: markers)
@@ -125,25 +143,26 @@ public enum HUDMirror {
                 : nil
         }
 
-        let ar: [HubHUDMirror.ARMarker] = overlay.pings.compactMap { ping in
-            guard let point = ping.imagePoint,
+        let floating = overlay.pings.map { ($0, $0.label, pingColor) }
+            + (overlay.candidate.map { [($0, "CANDIDATE", alertColor)] } ?? [])
+        let ar: [HubHUDMirror.ARMarker] = floating.compactMap { cue, label, color in
+            guard let point = cue.imagePoint,
                   let fraction = uprightFraction(ofCapturePoint: point, captureWidth: captureWidth,
                                                  captureHeight: captureHeight),
                   (0...1).contains(fraction.x), (0...1).contains(fraction.y) else { return nil }
-            let distance = Double(ping.distance ?? 3)
+            let distance = Double(cue.distance ?? 3)
             // Same sizing as phone.js: nearer is bigger, clamped, over a ~844 pt screen.
             let radius = max(9, min(22, 60 / max(distance, 1))) / 844
             return .init(x: fraction.x, y: fraction.y, r: radius,
-                         label: String(format: "%@ · %.1f m", ping.label, distance), color: pingColor)
+                         label: String(format: "%@ · %.1f m", label, distance), color: color)
         }
 
         return HubHUDMirror(compass: compass, banner: banner, lookingFor: lookingFor,
-                            toast: overlay.toast?.text, card: card, ar: ar,
+                            toast: overlay.toast.map { "📣 " + $0.text }, card: card, ar: ar,
                             screen: visibleFrame(captureWidth: captureWidth, captureHeight: captureHeight,
                                                  screenAspect: screenAspect),
                             dets: overlay.detections?.boxes)
     }
-
     /// A pixel in the landscape capture → 0…1 in the upright frame the hub has.
     /// The encoder rotates 90° clockwise: (x, y) in W×H lands at (H − y, x) in H×W.
     static func uprightFraction(ofCapturePoint point: CGPoint, captureWidth: Int,

@@ -29,7 +29,7 @@ export default function Settings() {
     <Host style={{ flex: 1 }}>
       <List>
         <ListItem trailing={<Switch value={showDebug} onValueChange={(on) => setPreference('showDebug', on)} />}>
-          Status pill and marker outlines
+          Marker outlines (calibration check)
         </ListItem>
         <ListItem trailing={<Switch value={showMiniMap} onValueChange={(on) => setPreference('showMiniMap', on)} />}>
           Mini-map

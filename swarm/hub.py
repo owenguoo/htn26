@@ -88,6 +88,7 @@ class Phone:
     hidden: bool = False             # operator hid this feed from the projector
     hud: dict | None = None          # what's on the phone's screen, sent while it's expanded in a console
     build: str = ""                  # version of the page the phone is running (see build_id)
+    native: bool = False             # a native app, not the web page: never "old page, reload"
     audio: bytearray = field(default_factory=bytearray)  # current utterance (PCM), until transcribed
     audio_at: float = 0              # when the last audio chunk arrived
     captions: deque = field(default_factory=lambda: deque(maxlen=6))  # {"text", "t"}: what they said
@@ -141,7 +142,8 @@ class Phone:
             "frames": self.frames_total,
             "debug": self.debug,
             "hidden": self.hidden,
-            "oldPage": self.build != build_id(),
+            # Only a browser phone runs "the page"; a native client has its own versioning.
+            "oldPage": not self.native and self.build != build_id(),
             "hud": self.hud if self.hud and now - self.hud["t"] < 2000 else None,
             "speaking": now - self.audio_at < 700,
             "caption": (self.captions[-1] | {"ageMs": round(now - self.captions[-1]["t"])})
@@ -213,6 +215,7 @@ class Hub:
         phone.device = "sim" if phone.sim else _device(str(hello.get("ua") or ""))
         phone.name = str(hello.get("name") or "")[:24]
         phone.build = str(hello.get("build") or "")
+        phone.native = bool(hello.get("native"))
         if isinstance(hello.get("seat"), dict):
             phone.seat = _seat(hello["seat"])
         if old is not None and old is not ws:

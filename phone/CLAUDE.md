@@ -94,6 +94,16 @@ resumable from the last green commit.
   which the hub exposes verbatim in `/api/state`.
 - Alignment is `none → seat → marker`. Unaligned, the phone sends `orient` with
   pitch only — never a position or heading from ARKit's arbitrary start frame.
+- **One HUD, two renderers.** The phone draws its HUD from the same
+  `HubHUDMirror` value it sends the console, using `web/console.js` `drawHud`'s
+  geometry (`UnifiedHUDView.swift`). Add a HUD element by adding it to the
+  mirror; never draw something on the phone the console cannot.
+- **Status is one plain sentence** (`OperatorStatus`, tested): the most
+  important problem and what to do. No `conf/fix/air/drop` on screen — those
+  are in Settings. The mini-map follows the operator; it never lets the dot
+  walk off the edge.
+- The hello carries `native: true`; the hub skips its "old page, reload" check
+  for native clients.
 - **HUD mirror:** while a console has the phone expanded the hub sends
   `cmd: hud` and the phone answers `type: hud` at 5 Hz (`HUDMirror.swift`), in
   upright-frame fractions. A reconnect starts un-viewed.

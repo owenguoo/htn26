@@ -20,6 +20,8 @@ trap cleanup EXIT
 swift build --package-path phone/Packages/SwarmCore --product swarm-replay >/dev/null
 REPLAY="$(swift build --package-path phone/Packages/SwarmCore --show-bin-path)/swarm-replay"
 
+# A known operator code, so the injector can sign in the way the console does.
+export SWARM_OPERATOR_CODE="e2e-operator-code"
 uv run python -m swarm.hub --port "$PORT" --https-port 0 >"$LOGS/hub.log" 2>&1 &
 PIDS+=($!)
 for _ in $(seq 1 40); do curl -sf "localhost:$PORT/api/room" >/dev/null && break; sleep 0.25; done

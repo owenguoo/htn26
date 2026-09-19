@@ -39,9 +39,14 @@ struct HUDMirrorTests {
         let compass = try #require(hud.compass)
         #expect(isClose(compass.center, 90, within: 1e-3))
         #expect(!compass.abs, "ARKit runs .gravity: this is a room heading, never true north")
-        let marker = try #require(compass.markers.first)
+        // Same set and order as drawCompass in phone.js: STAGE first, then the guide.
+        let stage = try #require(compass.markers.first)
+        #expect(stage.label == "STAGE" && isClose(stage.off, -90, within: 1e-3),
+                "facing heading 90, the stage (heading 0) is 90° to the left")
+        let marker = try #require(compass.markers.first { $0.big })
         #expect(isClose(marker.off, 40, within: 1e-2))
-        #expect(marker.label == "B2" && marker.big)
+        #expect(marker.label == "b2", "the hub's own sector text, untouched")
+        #expect(marker.color == HUDMirror.turnColor)
         #expect(hud.banner == .init(text: "Turn right 40°", tone: "warn"))
     }
 
@@ -52,7 +57,14 @@ struct HUDMirrorTests {
         let alert = overlay { $0.apply(.guideTurn(sector: "CANDIDATE", delta: 10, onTarget: false, text: nil,
                                                   kind: "respond", distance: 4), heading: 90, now: 0) }
         #expect(mirror(alert).banner?.tone == "alert")
-        #expect(mirror(alert).compass?.markers.first?.color == HUDMirror.alertColor)
+        let candidate = mirror(alert).compass?.markers.first { $0.big }
+        #expect(candidate?.color == HUDMirror.alertColor)
+        #expect(candidate?.label == "CANDIDATE 4.0m")
+        // Within 16° of the target the marker goes green, as on the web phone.
+        #expect(mirror(ok).compass?.markers.first { $0.big }?.color == HUDMirror.onTargetColor)
+        let look = overlay { $0.apply(.guideHeading(kind: "look", sector: "door", heading: 200, distance: nil,
+                                                    untilMs: 20_000), heading: nil, now: 0) }
+        #expect(mirror(look).compass?.markers.first { $0.big }?.color == HUDMirror.directedColor)
     }
 
     /// A ping dead ahead on the floor: centre of the frame horizontally, below
@@ -66,7 +78,8 @@ struct HUDMirrorTests {
         #expect(isClose(marker.x, 0.5, within: 0.01))
         #expect(marker.y > 0.5 && marker.y < 1)
         #expect(marker.label == "Check here · 3.0 m")
-        #expect(hud.compass?.markers.contains { $0.label == "Check here" && abs($0.off) < 0.5 } == true)
+        #expect(hud.compass?.markers.contains { $0.label == "◆ Check here 3m" && abs($0.off) < 0.5 } == true)
+        #expect(marker.color == HUDMirror.pingColor)
     }
 
     @Test func aPingBehindIsOnTheCompassButNotInTheARLayer() {
@@ -74,7 +87,8 @@ struct HUDMirrorTests {
                                        heading: nil, now: 0) }, heading: 90)
         let hud = mirror(state)
         #expect(hud.ar.isEmpty)
-        #expect(isClose(abs(hud.compass?.markers.first?.off ?? 0), 180, within: 1e-3))
+        let ping = hud.compass?.markers.first { $0.label.hasPrefix("◆") }
+        #expect(isClose(abs(ping?.off ?? 0), 180, within: 1e-3))
     }
 
     @Test func aTallPhoneShowsTheCentreStripOfA3By4Frame() throws {
@@ -100,7 +114,7 @@ struct HUDMirrorTests {
                                     ttlMs: 1500), heading: nil, now: 0)
         }
         let hud = mirror(searching)
-        #expect(hud.toast == "Spread out")
+        #expect(hud.toast == "📣 Spread out", "prefixed exactly as phone.js shows it")
         #expect(hud.dets?.first?.label == "bag")
         #expect(hud.lookingFor == "red backpack")
         #expect(hud.card == nil)
@@ -120,8 +134,37 @@ struct HUDMirrorTests {
         let onWire = DeliveredMessage(try message.encoded())
         #expect(!onWire.isBinary)
         #expect(onWire.type == "hud")
-        #expect(onWire.json["toast"] as? String == "hi")
+        #expect(onWire.json["toast"] as? String == "📣 hi")
         #expect((onWire.json["screen"] as? [Double])?.count == 4)
         #expect((onWire.json["compass"] as? [String: Any])?["abs"] as? Bool == false)
+    }
+
+    /// The hub's found candidate floats in the camera view and sits on the
+    /// compass — unless the phone is already being steered to it, when the guide
+    /// marker *is* the candidate and a second one would be noise.
+    @Test func theCandidateIsShownOnceNotTwice() throws {
+        guard case .world(var world)? = HubInbound.decode(
+            try Data(contentsOf: Fixtures.url("hub-messages/world.json"))) else { return }
+        world.pings = []
+        world.candidate = .init(x: 3, y: 5)
+        let idle = mirror(overlay { $0.apply(world, now: 0) })
+        #expect(idle.compass?.markers.contains { $0.label == "CANDIDATE 3m" && $0.color == HUDMirror.alertColor } == true)
+        #expect(idle.ar.contains { $0.label == "CANDIDATE · 3.0 m" })
+
+        let responding = mirror(overlay { model in
+            model.apply(world, now: 0)
+            model.apply(.guideTurn(sector: "CANDIDATE", delta: 0, onTarget: false, text: nil, kind: "respond",
+                                   distance: 3), heading: 90, now: 0)
+        })
+        #expect(responding.compass?.markers.filter { $0.label.hasPrefix("CANDIDATE") }.count == 1)
+        #expect(responding.ar.contains { $0.label.hasPrefix("CANDIDATE") }, "still floats in the view")
+    }
+
+    /// The phone draws its own HUD from the same value it sends the console.
+    @Test func everyOverlayFrameCarriesTheMirrorItWouldSend() {
+        let state = overlay { $0.apply(.message(text: "hi", ttlMs: 8000), heading: nil, now: 0) }
+        let frame = OverlayFrame(overlay: state)
+        #expect(frame.hud.toast == "📣 hi")
+        #expect(frame.hud == mirror(state))
     }
 }

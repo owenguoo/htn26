@@ -9,9 +9,15 @@ public struct OverlayFrame: Sendable, Equatable {
     public var markerProjections: [Projection.MarkerProjection]
     public var captureWidth: Int
     public var captureHeight: Int
+    /// The HUD, exactly as it is sent to the operator console. The phone draws
+    /// its own screen from this same value, so what the operator holding the
+    /// phone sees and what the console overlays on the feed cannot drift apart.
+    public var hud: HubHUDMirror
 
     public init(overlay: OverlayState = OverlayState(), markerProjections: [Projection.MarkerProjection] = [],
-                captureWidth: Int = 1_920, captureHeight: Int = 1_440) {
+                captureWidth: Int = 1_920, captureHeight: Int = 1_440, hud: HubHUDMirror? = nil) {
+        self.hud = hud ?? HUDMirror.make(from: overlay, captureWidth: captureWidth,
+                                         captureHeight: captureHeight, screenAspect: 393.0 / 852.0)
         self.overlay = overlay
         self.markerProjections = markerProjections
         self.captureWidth = captureWidth
@@ -316,8 +322,12 @@ public actor SwarmClient {
         return clockAnchor.map { dependencies.uptime() - $0 }
     }
 
+    /// Re-anchored on every pose, not just the first. A replay paces itself with
+    /// sleeps, and sleeps only ever overshoot, so a recording played for minutes
+    /// falls steadily behind the wall clock. Anchored once, that lag eventually
+    /// passes the 5 s staleness limit and a perfectly healthy replay reads LOST.
     private func anchorClock(to poseTimestamp: Double) {
-        guard configuration.anchorsClockToPoses, clockAnchor == nil else { return }
+        guard configuration.anchorsClockToPoses else { return }
         clockAnchor = dependencies.uptime() - poseTimestamp
     }
 
@@ -501,9 +511,11 @@ public actor SwarmClient {
                 projections = Projection.visibleMarkers(in: configuration.venue, camera: pose,
                                                         intrinsics: intrinsics)
             }
+            let width = latestIntrinsics?.imageWidth ?? 1_920, height = latestIntrinsics?.imageHeight ?? 1_440
             latestFrame = OverlayFrame(overlay: model.state, markerProjections: projections,
-                                       captureWidth: latestIntrinsics?.imageWidth ?? 1_920,
-                                       captureHeight: latestIntrinsics?.imageHeight ?? 1_440)
+                                       captureWidth: width, captureHeight: height,
+                                       hud: HUDMirror.make(from: model.state, captureWidth: width,
+                                                           captureHeight: height, screenAspect: screenAspect))
             frameContinuation?.yield(latestFrame)
             try? await Task.sleep(nanoseconds: 33_000_000)
         }
@@ -513,10 +525,8 @@ public actor SwarmClient {
     private func runHUDMirror() async {
         while !Task.isCancelled {
             if hudRequested {
-                await transport.send(.hud(HUDMirror.make(from: latestFrame.overlay,
-                                                         captureWidth: latestFrame.captureWidth,
-                                                         captureHeight: latestFrame.captureHeight,
-                                                         screenAspect: screenAspect)))
+                // The very value the phone's own screen was drawn from this tick.
+                await transport.send(.hud(latestFrame.hud))
             }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }

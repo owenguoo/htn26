@@ -3,6 +3,11 @@ import SwarmCore
 
 /// The whole operator interface: camera, guidance, and whatever the hub says.
 ///
+/// The HUD proper — compass tape, banner, toast, floating markers, detection
+/// boxes — is drawn from `frame.hud`, the same value sent to the operator
+/// console, so phone and console show the same thing. What is phone-only sits
+/// around it: the identity badge, the status pill, the mini-map, the seat picker.
+///
 /// Everything it draws comes from `OverlayModel` in SwarmCore, so the decisions
 /// — which way to point, when an arrow is stale, when to stop showing a flash —
 /// are all tested. This file only turns that data into pixels.
@@ -14,7 +19,7 @@ public struct OperatorView: View {
 
     @State private var isPickingSeat = false
 
-    public init(model: OperatorViewModel, showDebug: Bool = true, showMiniMap: Bool = true,
+    public init(model: OperatorViewModel, showDebug: Bool = false, showMiniMap: Bool = true,
                 onRequestLeave: (() -> Void)? = nil) {
         self.model = model
         self.showDebug = showDebug
@@ -38,22 +43,17 @@ public struct OperatorView: View {
             }
 
             if showDebug {
+                // Off unless asked for in Settings: a calibration check, not
+                // something to look through while searching.
                 // Where the venue thinks the markers are. If these outlines sit
                 // on the printed markers and stay there as you walk, calibration
                 // is good; if they slide off, that is the drift.
                 MarkerOverlayView(projections: model.frame.markerProjections, captureSize: captureSize)
             }
 
-            if let detections = overlay.detections {
-                DetectionBoxesView(boxes: detections.boxes, captureSize: captureSize)
-            }
-            PingMarkersView(pings: overlay.pings, captureSize: captureSize)
-
-            if let arrow = overlay.arrow {
-                // A scrim, so white chevrons stay legible over a bright room.
-                Color.black.opacity(0.25).ignoresSafeArea().allowsHitTesting(false)
-                ArrowView(arrow: arrow)
-            }
+            // Boxes and floating diamonds, in frame coordinates — the same ones
+            // the console draws over the feed.
+            HUDFrameLayerView(hud: model.frame.hud, captureSize: captureSize)
 
             chrome
 
@@ -78,8 +78,6 @@ public struct OperatorView: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: overlay.flash)
-        .animation(.easeOut(duration: 0.08), value: overlay.arrow)
-        .animation(.easeOut(duration: 0.2), value: overlay.toast)
         .animation(.easeOut(duration: 0.2), value: overlay.phase)
         .preferredColorScheme(.dark)
         .background(GeometryReader { geometry in
@@ -94,9 +92,14 @@ public struct OperatorView: View {
 
     private var chrome: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 8) {
+            // Compass first, full width, where the console draws it. Then what
+            // the hub is telling this operator, then how the phone itself is doing.
+            HUDStackView(hud: model.frame.hud)
+            HStack(alignment: .top, spacing: 8) {
                 IdentityBadge(index: overlay.index, colorHex: overlay.colorHex)
-                Spacer(minLength: 0)
+                OperatorStatusView(status: overlay.status,
+                                   onTap: overlay.status.offersSeatPicker ? { isPickingSeat = true } : nil)
+                if overlay.status.hint == nil { Spacer(minLength: 0) }
                 if let onRequestLeave {
                     Button(action: onRequestLeave) {
                         Image(systemName: "xmark")
@@ -107,30 +110,17 @@ public struct OperatorView: View {
                     .accessibilityLabel("Leave")
                 }
             }
-            if showDebug {
-                // Its own row: the pill is fixed-size by design, and sharing a
-                // row pushed the badge and the leave button off the screen.
-                StatusPillView(pill: overlay.pill)
-            }
-            if let banner = overlay.banner {
-                GuideBannerView(banner: banner)
-            }
-            if overlay.alignment == .none, overlay.phase.map(PhaseCardView.covers) != true {
-                AlignmentHintView(onPickSeat: { isPickingSeat = true })
-            }
             Spacer()
             HStack(alignment: .bottom) {
                 if showMiniMap, let room = overlay.room {
                     MiniMapView(room: room, world: overlay.world, me: overlay.roomPose,
                                 colorHex: overlay.colorHex, pings: overlay.pings)
-                        .frame(width: 132, height: 132 * room.depth / max(1, room.width))
+                        // A fixed window that follows the operator, not the room's
+                        // own aspect: the dot stays centred however far they walk.
+                        .frame(width: 132, height: 150)
                         .onTapGesture { isPickingSeat = true }
                 }
                 Spacer(minLength: 0)
-            }
-            if let toast = overlay.toast {
-                ToastView(toast: toast)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .padding(.horizontal, 12)
@@ -173,21 +163,6 @@ struct ReplayBackdrop: View {
             .foregroundStyle(.secondary)
         }
         .ignoresSafeArea()
-    }
-}
-
-struct AlignmentHintView: View {
-    let onPickSeat: () -> Void
-
-    var body: some View {
-        Button(action: onPickSeat) {
-            Label("Point at a marker, or tap to set your spot", systemImage: "scope")
-                .font(.footnote.weight(.semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.orange.opacity(0.9), in: Capsule())
-                .foregroundStyle(.black)
-        }
     }
 }
 
