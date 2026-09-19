@@ -76,6 +76,10 @@ public struct HubHello: Sendable, Equatable, Codable {
     public var ua: String
     public var sim: Bool
     public var build: String
+    /// Tells the hub this is an app, not its web page. Without it the console
+    /// badges the phone "Old page · reload": the hub compares `build` with a
+    /// hash of the web files, which an app can never equal.
+    public var native = true
 
     public init(phoneId: String, name: String, seat: HubSeat? = nil,
                 ua: String = "SwarmSight (iPhone; ARKit)", sim: Bool = false, build: String = "") {
@@ -192,6 +196,27 @@ public struct HubFrameHeader: Sendable, Equatable, Codable {
     }
 }
 
+/// Header of a binary audio message. Mirrors `sendVoice()` in `phone.js`.
+///
+/// The hub reads none of it (`hub.py` `on_frame` appends the payload and assumes
+/// 16 kHz), but the web client sends all three and so does this: divergence from
+/// the reference client is the exact thing this file exists to prevent, and a
+/// later hub may well start reading `seq` to spot a gap.
+public struct HubAudioHeader: Sendable, Equatable, Codable {
+    public var type = "audio"
+    /// This phone's own counter, independent of the frame sequence.
+    public var seq: UInt64
+    public var rate: Int
+    /// Phone epoch milliseconds at capture.
+    public var tCapture: Double
+
+    public init(seq: UInt64, rate: Int = VoiceGate.rate, tCapture: Double) {
+        self.seq = seq
+        self.rate = rate
+        self.tCapture = tCapture
+    }
+}
+
 public enum HubOutbound: Sendable, Equatable {
     case hello(HubHello)
     /// Phone-side world tracking, already in room metres. The hub treats it as
@@ -207,11 +232,19 @@ public enum HubOutbound: Sendable, Equatable {
     case frame(HubFrameHeader, jpeg: Data)
     /// What is on screen, for a console that has this phone expanded.
     case hud(HubHUDMirror)
+    /// One chunk of 16 kHz mono Int16 little-endian PCM.
+    case audio(HubAudioHeader, pcm: Data)
+    /// The utterance is over. The hub assembles everything since the last one
+    /// into a WAV and transcribes it.
+    case audioEnd
 
     /// Which transport lane this rides in.
     public enum Lane: Sendable, Equatable, Hashable, CaseIterable {
         /// Never dropped, FIFO.
         case control
+        /// Never dropped either, but rotated with the perishable lanes rather
+        /// than sent ahead of them. See `Transport`.
+        case audio
         /// Latest-wins. A stale one is worse than none.
         case slam, frame, debug, hud
     }
@@ -223,6 +256,11 @@ public enum HubOutbound: Sendable, Equatable {
         case .frame: .frame
         case .debug: .debug
         case .hud: .hud
+        // `audioEnd` rides the audio lane, not the control lane, and that is
+        // load-bearing: control is drained ahead of everything else, so an
+        // `audio_end` sent as control would overtake the chunks still queued
+        // behind it and cut the utterance short at the hub.
+        case .audio, .audioEnd: .audio
         }
     }
 
@@ -237,10 +275,12 @@ public enum HubOutbound: Sendable, Equatable {
         case .pong: "pong"
         case .frame: "frame"
         case .hud: "hud"
+        case .audio: "audio"
+        case .audioEnd: "audio_end"
         }
     }
 
-    /// What goes on the socket. Everything is text except frames.
+    /// What goes on the socket. Everything is text except frames and audio.
     public func encoded() throws -> SocketFrame {
         let encoder = HubWire.makeEncoder()
         switch self {
@@ -264,6 +304,10 @@ public enum HubOutbound: Sendable, Equatable {
             return .text(try Self.string(encoder.encode(Tagged(type: "hud", body: mirror))))
         case .frame(let header, let jpeg):
             return .binary(try HubFrame.pack(header: header, jpeg: jpeg))
+        case .audio(let header, let pcm):
+            return .binary(try HubFrame.pack(headerJSON: encoder.encode(header), payload: pcm))
+        case .audioEnd:
+            return .text(try Self.string(encoder.encode(AudioEndMessage())))
         }
     }
 
@@ -289,6 +333,9 @@ public enum HubOutbound: Sendable, Equatable {
     private struct NameMessage: Encodable {
         var type = "name"
         var name: String
+    }
+    private struct AudioEndMessage: Encodable {
+        var type = "audio_end"
     }
     private struct PongMessage: Encodable {
         var type = "pong"
@@ -348,6 +395,13 @@ public enum HubFrame {
 // MARK: - Hub → phone
 
 public struct HubWelcome: Sendable, Equatable, Decodable {
+    /// The hub's identifier for *this* run of this phone's camera stream
+    /// (`hub.py` `ws_phone`, sent in every `welcome`). It changes when the phone
+    /// reconnects, and `swarm/detection.py` stamps it into every result. It is
+    /// the key a detection-freshness gate matches on: a box carrying the
+    /// previous stream's id describes a frame from before the reconnect and must
+    /// not be drawn over the live camera. Decoded here so that gate has
+    /// something to compare against.
     public var streamId: String? = nil
     public var phoneId: String
     public var index: Int
@@ -410,18 +464,33 @@ public struct HubDetectionBox: Sendable, Equatable, Codable {
     public var w: Double
     public var h: Double
     public var label: String?
+    /// How sure the detector is that this is a person at all, 0…1.
+    /// **The hub's name for it is `detectionScore`** (`swarm/detection.py` `Box`),
+    /// which this type used to spell `score`. Nothing matched, so every box
+    /// arrived with a nil confidence and rendered as a bare "person" tag.
+    public var detectionScore: Double?
+    /// Appearance-embedding similarity to the search target, −1…1. Compared
+    /// against the `threshold` on the command to decide "likely" from "maybe".
+    public var similarity: Double?
+    /// Kept only because a box round-trips through `HubHUDMirror.dets` to the
+    /// console, and an older hub or a hand-written fixture may still spell it
+    /// this way. The hub as it stands never sends it.
     public var score: Double?
-    public var detectionScore: Double? = nil
-    public var similarity: Double? = nil
 
-    public init(x: Double, y: Double, w: Double, h: Double, label: String? = nil, score: Double? = nil) {
+    public init(x: Double, y: Double, w: Double, h: Double, label: String? = nil,
+                detectionScore: Double? = nil, similarity: Double? = nil, score: Double? = nil) {
         self.x = x
         self.y = y
         self.w = w
         self.h = h
         self.label = label
+        self.detectionScore = detectionScore
+        self.similarity = similarity
         self.score = score
     }
+
+    /// The confidence to show, whichever spelling arrived.
+    public var confidence: Double? { detectionScore ?? score }
 }
 
 public struct HubDetectionContext: Sendable, Equatable {

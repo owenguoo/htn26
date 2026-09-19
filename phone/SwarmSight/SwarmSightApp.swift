@@ -8,12 +8,12 @@ import SwarmCore
 struct SwarmSightApp: App {
     var body: some Scene {
         WindowGroup {
+            // No `.preferredColorScheme(.dark)`. The operator screen is dark
+            // because it is drawn over a camera feed and says so itself, with
+            // `.cameraChrome()`; pinning the whole window also pinned the join
+            // form, which is an ordinary iOS form and should follow the phone.
+            // Status bar likewise: hidden over the camera, present over a form.
             RootView()
-                // The overlay is the whole interface: an operator holds the
-                // phone up and sweeps. Nothing here should ever be read at arm's
-                // length in a dark room.
-                .preferredColorScheme(.dark)
-                .statusBarHidden()
         }
     }
 }

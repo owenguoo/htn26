@@ -13,9 +13,11 @@ import SwiftUI
 // React's), that the idle timer stays off while it is up, and that backgrounding
 // and returning leaves the preview running and the session in `recalibrating`.
 final class OperatorExpoView: ExpoView {
-  let onRequestLeave = EventDispatcher()
+  /// The gear lives in the camera chrome inside SwiftUI. A React button
+  /// floating over this view has to guess at a SwiftUI layout it cannot see.
+  let onRequestSettings = EventDispatcher()
 
-  var showDebug = true { didSet { render() } }
+  var showDebug = false { didSet { render() } }
   var showMiniMap = true { didSet { render() } }
 
   private let model = OperatorViewModel()
@@ -24,13 +26,16 @@ final class OperatorExpoView: ExpoView {
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     clipsToBounds = true
+    // Behind the camera preview, so it stays black in light mode too: a white
+    // frame flashing between mount and the first captured frame reads as a
+    // crash. `ThemeController` deliberately does not reach this.
     backgroundColor = .black
     render()
   }
 
   private func makeRoot() -> OperatorView {
     OperatorView(model: model, showDebug: showDebug, showMiniMap: showMiniMap,
-                 onRequestLeave: { [weak self] in self?.onRequestLeave([:]) })
+                 onRequestSettings: { [weak self] in self?.onRequestSettings([:]) })
   }
 
   private func render() {

@@ -118,7 +118,7 @@ struct OverlayTests {
         let first = try #require(model.state.arrow)
         #expect(isClose(first.bearingRadians, 40 * .pi / 180, within: 1e-3))
         #expect(first.bearingRadians > 0, "turn right must be a positive, clockwise arrow")
-        #expect(model.state.banner?.text == "Turn right 40°")
+        #expect(model.state.banner?.text == "Turn right 40° →")
 
         tick(&model, pose: facing(30), now: 0.2)
         #expect(isClose(try #require(model.state.arrow).bearingRadians, 20 * .pi / 180, within: 1e-3))
@@ -168,7 +168,7 @@ struct OverlayTests {
         let arrow = try #require(model.state.arrow)
         #expect(isClose(arrow.bearingRadians, 45 * .pi / 180, within: 1e-3))
         #expect(arrow.distance == 6.1)
-        #expect(model.state.banner?.text == "Walk to door · 6.1 m")
+        #expect(model.state.banner?.text == "Turn right 45° → · walk to door · 6.1 m")
         tick(&model, pose: facing(90), now: 10.1)
         #expect(model.state.arrow == nil)
     }
@@ -181,7 +181,7 @@ struct OverlayTests {
                     heading: 0, now: 0)
         tick(&model, pose: facing(0), now: 1)
         #expect(model.state.arrow == nil)
-        #expect(model.state.banner?.text == "Look north · 10° N")
+        #expect(model.state.banner?.text == "Face north (no compass on this phone)")
     }
 
     @Test func theArrowDisappearsWhenThePoseGoesStaleButTheBannerStays() {
@@ -192,7 +192,9 @@ struct OverlayTests {
         #expect(model.state.arrow != nil)
         tick(&model, pose: facing(90), now: 2, stale: true)
         #expect(model.state.arrow == nil, "an arrow from a pose we do not trust points at nothing")
-        #expect(model.state.banner != nil)
+        // The directive is still live, so it still says what was asked for —
+        // just nothing about which way to turn.
+        #expect(model.state.banner?.text == "Face stage")
         tick(&model, pose: facing(90), now: 3, alignment: nil)
         #expect(model.state.arrow == nil, "unaligned: no room heading, no arrow")
     }
@@ -208,19 +210,31 @@ struct OverlayTests {
         #expect(model.state.arrow == nil)
     }
 
-    @Test func comingOnTargetFiresOneHapticNotOnePerRefresh() {
+    /// The haptic follows the *live* offset, not the hub's stale `onTarget`, so
+    /// it fires the moment the banner goes green rather than up to 200 ms later.
+    @Test func comingOnTargetFiresOneHapticNotOnePerFrame() {
         var model = OverlayModel()
-        func guide(_ onTarget: Bool) -> HubCommand {
-            .guideTurn(sector: "A1", delta: 5, onTarget: onTarget, text: nil, kind: "search", distance: nil)
-        }
-        model.apply(guide(false), heading: 0, now: 0)
-        do { let cue = model.consumeHaptic(); #expect(cue == nil) }
-        model.apply(guide(true), heading: 0, now: 0.2)
+        // Target at room heading 50; the operator starts facing 0, 50° off.
+        model.apply(.guideTurn(sector: "A1", delta: 50, onTarget: false, text: nil, kind: "search",
+                               distance: nil), heading: 0, now: 0)
+        tick(&model, pose: facing(0), now: 0.1)
+        do { let cue = model.consumeHaptic(); #expect(cue == nil, "50° off is not on target") }
+
+        tick(&model, pose: facing(40), now: 0.2)
         do { let cue = model.consumeHaptic(); #expect(cue?.pattern == "onTarget") }
-        model.apply(guide(true), heading: 0, now: 0.4)
+        // Still on target, a frame later. One arrival, one buzz.
+        tick(&model, pose: facing(45), now: 0.233)
         do { let cue = model.consumeHaptic(); #expect(cue == nil) }
-        model.apply(guide(false), heading: 0, now: 0.6)
-        model.apply(guide(true), heading: 0, now: 0.8)
+
+        // Drifting back out by less than the release band must not re-arm it:
+        // a 90 s `go` would otherwise buzz on every wobble across 16°.
+        tick(&model, pose: facing(31), now: 0.3)
+        tick(&model, pose: facing(40), now: 0.4)
+        do { let cue = model.consumeHaptic(); #expect(cue == nil, "wobbling over the line re-armed it") }
+
+        // Properly turning away and back is a new arrival.
+        tick(&model, pose: facing(10), now: 0.5)
+        tick(&model, pose: facing(50), now: 0.6)
         do { let cue = model.consumeHaptic(); #expect(cue?.pattern == "onTarget") }
     }
 

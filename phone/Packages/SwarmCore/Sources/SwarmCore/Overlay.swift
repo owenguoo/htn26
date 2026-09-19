@@ -79,6 +79,83 @@ extension StatusPill {
     }
 }
 
+/// The one thing the operator is told about the phone's health: what is going
+/// on, in words, and what to do about it.
+///
+/// The pill used to read `LOST conf 1.00 fix 34s air 1 drop 0`. Every field was
+/// true and none of it told the person holding the phone what to do. This picks
+/// the single most important problem and says it plainly; the numbers live in
+/// Settings for whoever is debugging.
+public struct OperatorStatus: Sendable, Equatable {
+    public enum Level: String, Sendable, Equatable {
+        /// Nothing to do.
+        case ok
+        /// Working, but the operator can improve it.
+        case attention
+        /// Not working until something changes.
+        case problem
+    }
+
+    public var level: Level
+    public var title: String
+    /// What to do about it. nil when there is nothing to do.
+    public var hint: String?
+    /// Tapping the status should open the seat picker: the fix is to get located.
+    public var offersSeatPicker: Bool
+
+    public init(level: Level, title: String, hint: String? = nil, offersSeatPicker: Bool = false) {
+        self.level = level
+        self.title = title
+        self.hint = hint
+        self.offersSeatPicker = offersSeatPicker
+    }
+
+    static let locateHint = "Point at a marker, or tap here to set your spot"
+
+    /// Most important first: a phone that cannot reach the hub has no use for
+    /// being told its tracking is shaky.
+    public init(_ pill: StatusPill) {
+        switch pill.connection {
+        case .offline, .connecting:
+            self.init(level: .problem, title: "Connecting to the hub…", hint: "Check you're on the venue Wi-Fi")
+            return
+        case .reconnecting:
+            self.init(level: .problem, title: "Reconnecting…")
+            return
+        case .online:
+            break
+        }
+        switch pill.sessionState {
+        case .idle, .permissions:
+            self.init(level: .attention, title: "Starting the camera…")
+        case .recalibrating:
+            self.init(level: .attention, title: "Needs recalibrating", hint: Self.locateHint,
+                      offersSeatPicker: true)
+        case .lost:
+            self.init(level: .problem, title: "Tracking lost",
+                      hint: pill.alignment == .marker ? "Move slowly and point at a marker"
+                                                      : "Move slowly, somewhere with more to look at",
+                      offersSeatPicker: false)
+        case .calibrating where pill.alignment == .none:
+            self.init(level: .attention, title: "Not located yet", hint: Self.locateHint, offersSeatPicker: true)
+        case .degraded:
+            self.init(level: .attention, title: "Tracking is shaky", hint: "Slow down and keep the camera up")
+        case .calibrating, .tracking:
+            if pill.isStale {
+                self.init(level: .problem, title: "Camera has stopped updating")
+            } else if pill.alignment == .none {
+                self.init(level: .attention, title: "Not located yet", hint: Self.locateHint, offersSeatPicker: true)
+            } else if pill.thermalState >= .serious {
+                self.init(level: .attention, title: "Phone is hot", hint: "Sending fewer frames until it cools")
+            } else if pill.alignment == .marker, (pill.secondsSinceCorrection ?? 0) > 30 {
+                self.init(level: .attention, title: "Position may be drifting", hint: "Glance at any marker to re-lock")
+            } else {
+                self.init(level: .ok, title: pill.alignment == .seat ? "Tracking from your spot" : "Tracking")
+            }
+        }
+    }
+}
+
 public struct FlashCue: Sendable, Equatable {
     public var red: Float
     public var green: Float
@@ -95,6 +172,104 @@ public struct FlashCue: Sendable, Equatable {
         self.text = text
         self.until = until
     }
+}
+
+/// The angles that decide "you are facing it" and "your phone is pointed at the
+/// floor".
+///
+/// These existed three times with three different values, which meant the arrow,
+/// the banner and the console's marker colour could each disagree about whether
+/// the operator was on target — the arrow said yes, the pill stayed orange, and
+/// nobody could tell which was lying:
+///
+/// - the hub: `abs(delta) < half_fov * 0.6` (`swarm/planner.py`), which at
+///   `room.json`'s `cameraFovDeg: 55` is **16.5°**;
+/// - `ArrowCue.isOnTarget`: `0.35` rad, which is **20.05°**;
+/// - `HUDMirror`'s marker colour: **16°**, copied from `web/phone.js:723`.
+///
+/// **16° wins.** It is the web client's number, and matching the web client's
+/// feel is the goal; it is already what the console is told, so the phone and the
+/// console agree by construction; and it is within half a degree of the hub's own
+/// 16.5°, so the banner goes green essentially when the hub also thinks so. The
+/// 20.05° was the outlier — four degrees looser than everything else, for no
+/// reason anyone recorded.
+public enum GuideThresholds {
+    public static let onTargetDegrees: Double = 16
+    public static let onTargetRadians = Float(onTargetDegrees * .pi / 180)
+
+    /// Past this the phone is pointed at the floor or the ceiling and is
+    /// searching nothing. `web/phone.js:773` and `swarm/planner.py`'s
+    /// `MAX_PITCH` agree on 65.
+    public static let tiltedPitchDegrees: Double = 65
+
+    /// How far back out the operator must swing before "on target" can fire
+    /// again. Without it a `go` guide lasting 90 s buzzes every time someone
+    /// drifts a degree across the boundary and back.
+    public static let onTargetReleaseDegrees: Double = 22
+
+    /// How far the phone may be pointed off the target's height before the
+    /// operator is told to raise or lower it.
+    ///
+    /// 20° is wide on purpose. Nobody holds a phone to better than a few degrees
+    /// while walking, and a cue that appears and vanishes as someone breathes is
+    /// noise the operator learns to ignore. Below it, a target 6 m away is still
+    /// comfortably inside a 55° lens.
+    public static let elevationDeadZoneDegrees: Double = 20
+
+    /// Once the cue is up it stays up until the error falls to here — a plain
+    /// 20° test would flicker at exactly the angle someone is trying to hold.
+    public static let elevationReleaseDegrees: Double = 12
+}
+
+/// Where a target sits vertically, given only how far away it is on the floor.
+///
+/// **Nothing in `swarm/` supplies an elevation.** The hub's whole world model is
+/// a 2D floor plan: `planner.py`, `target.py` and `mission.py` deal in `(x, y)`
+/// and a bearing, and the only pitch-aware string anywhere in the system is
+/// "Hold your phone up". So a "look up / look down" cue has to be derived here,
+/// and it is derived from the two constants `web/phone.js` `project()` uses to
+/// place its AR diamonds (`phone.js:809-810`) — the same assumed geometry, so
+/// the phone's cue and the browser's diamonds put a target in the same place.
+public enum TargetGeometry {
+    /// A phone held up at chest height.
+    public static let cameraHeightMetres: Double = 1.3
+    /// Roughly a seated person, or a tabletop.
+    public static let targetHeightMetres: Double = 1.0
+
+    /// Radians above the horizon, from the camera to a target `distance` metres
+    /// away across the floor. Negative, because the assumed target is below the
+    /// assumed camera — the closer you are, the further below.
+    ///
+    /// The 0.3 m floor on the distance is the web's, and it matters: without it
+    /// a target underfoot gives ±90° and the cue swings wildly as someone walks
+    /// the last stride.
+    public static func elevationRadians(horizontalDistance distance: Double) -> Double {
+        atan2(targetHeightMetres - cameraHeightMetres, max(distance, 0.3))
+    }
+}
+
+/// Raise or lower the phone. The vertical half of a directional cue, which
+/// neither the hub nor the web client has ever had.
+public struct ElevationCue: Sendable, Equatable {
+    /// Where the target sits, radians above the horizon. Also what goes in
+    /// `ArrowCue.elevationRadians`.
+    public var targetRadians: Float
+    /// How far the operator must tilt the phone, in degrees.
+    /// **Positive means raise it**: the target is above where the camera points.
+    public var neededDegrees: Double
+
+    public init(targetRadians: Float, neededDegrees: Double) {
+        self.targetRadians = targetRadians
+        self.neededDegrees = neededDegrees
+    }
+
+    public var isUp: Bool { neededDegrees > 0 }
+    private var whole: Int { Int(abs(neededDegrees).rounded()) }
+
+    /// "Look up 34°" — the leading form, where a turn instruction would go.
+    public var text: String { "Look \(isUp ? "up" : "down") \(whole)°" }
+    /// "look up 34°" — the trailing form, mid-sentence.
+    public var phrase: String { "look \(isUp ? "up" : "down") \(whole)°" }
 }
 
 public struct ArrowCue: Sendable, Equatable {
@@ -118,20 +293,40 @@ public struct ArrowCue: Sendable, Equatable {
 
     /// Whether the target is already in front of the operator, within the usable
     /// part of the lens. The arrow can then say "here" rather than "turn".
-    public var isOnTarget: Bool { abs(bearingRadians) < 0.35 }
+    public var isOnTarget: Bool { abs(bearingRadians) < GuideThresholds.onTargetRadians }
 }
 
-/// The line of text that goes with a guide: "Turn left 42°", "door · 6.1 m".
+/// The line of text that goes with a guide: "← Turn left 42°",
+/// "↑ Walk to door · 6.1 m".
 public struct GuideBannerCue: Sendable, Equatable {
     /// "search", "respond", "look" or "go".
     public var kind: String
     public var text: String
+    /// Geometrically on target: the offset is inside
+    /// `GuideThresholds.onTargetDegrees`. Not the same thing as "show it green"
+    /// — see `tone`.
     public var onTarget: Bool
+    /// Pointed at the floor or the ceiling. Only `search` cares.
+    public var tilted: Bool
 
-    public init(kind: String, text: String, onTarget: Bool) {
+    public init(kind: String, text: String, onTarget: Bool, tilted: Bool = false) {
         self.kind = kind
         self.text = text
         self.onTarget = onTarget
+        self.tilted = tilted
+    }
+
+    /// The console's three pill colours, decided exactly as
+    /// `updateGuideBanner` in `web/phone.js` decides its CSS classes.
+    public var tone: String {
+        // Walking to a confirmed candidate is always the loud one.
+        if kind == "respond" { return "alert" }
+        // The web never greens a `go`: the operator is pointed the right way but
+        // has not arrived, and green would say they had. The hub sends its own
+        // green "You're there ✓" flash for that.
+        if kind == "go" { return "warn" }
+        if kind == "search" && tilted { return "warn" }
+        return onTarget ? "ok" : "warn"
     }
 }
 
@@ -210,12 +405,22 @@ public struct SoundCue: Sendable, Equatable {
 /// Everything the SwiftUI overlay renders, as plain data.
 public struct OverlayState: Sendable, Equatable {
     public var pill = StatusPill()
+    /// What the operator is actually shown. Derived from `pill`.
+    public var status: OperatorStatus { OperatorStatus(pill) }
     public var flash: FlashCue?
     public var arrow: ArrowCue?
     public var banner: GuideBannerCue?
+    /// "Look up / look down", when the phone is pointed well off the target's
+    /// height and the operator is already turned the right way. nil the rest of
+    /// the time. Surfaced separately from `banner` so the view can draw a
+    /// vertical chevron without parsing a sentence.
+    public var elevation: ElevationCue?
     public var toast: ToastCue?
     public var detections: DetectionsCue?
     public var pings: [PingCue] = []
+    /// The hub's found candidate (`world.candidate`), located like a ping so it
+    /// can sit on the compass and float in the camera view. `id` is −1.
+    public var candidate: PingCue?
     /// "lobby", "calibrate", "search", "found", "end".
     public var phase: String?
     /// From `welcome`: "#3", and the colour the dashboard draws this phone in.
@@ -252,9 +457,11 @@ public struct OverlayModel: Sendable {
     public private(set) var state = OverlayState()
 
     private enum Guide: Sendable, Equatable {
-        /// A room heading to turn to. `refreshed` is when the hub last said so.
+        /// A room heading to turn to. `text` is the hub's own wording, kept only
+        /// as the fallback for when this phone has no heading of its own and
+        /// cannot work out which way to turn.
         case heading(target: Double, kind: String, label: String?, text: String?, distance: Double?,
-                     onTarget: Bool, until: Double)
+                     until: Double)
         /// True-north bearing. This client has no compass (`.gravity`), so: text.
         case compass(kind: String, label: String?, bearing: Double, until: Double)
     }
@@ -275,6 +482,9 @@ public struct OverlayModel: Sendable {
     private var guide: Guide?
     private var cueSerial: UInt64 = 0
     private var wasOnTarget = false
+    /// Latched so the elevation cue can be released at a gentler angle than it
+    /// appears at. See `GuideThresholds.elevationReleaseDegrees`.
+    private var showingElevation = false
 
     /// A `delta` guide is a snapshot of where the phone was facing; the hub
     /// refreshes it several times a second. Three seconds without one means the
@@ -326,18 +536,21 @@ public struct OverlayModel: Sendable {
             guide = nil
             state.arrow = nil
             state.banner = nil
+            state.elevation = nil
             wasOnTarget = false
-        case .guideTurn(let sector, let delta, let onTarget, let text, let kind, let distance):
+            showingElevation = false
+        case .guideTurn(let sector, let delta, _, let text, let kind, let distance):
             // Same as phone.js: without a heading there is nothing to anchor to.
             guard let heading else { return false }
+            // The hub's own `onTarget` is discarded, exactly as the web discards
+            // it. It describes where the phone was pointing when the hub last
+            // ticked, up to 200 ms ago; the live offset is recomputed every
+            // frame in `updateGuide`.
             guide = .heading(target: RoomMath.wrap360(heading + delta), kind: kind, label: sector,
-                             text: text, distance: distance, onTarget: onTarget,
-                             until: now + Self.turnGuideLifetime)
-            if onTarget && !wasOnTarget { cue(haptic: "onTarget", intensity: 0.6) }
-            wasOnTarget = onTarget
+                             text: text, distance: distance, until: now + Self.turnGuideLifetime)
         case .guideHeading(let kind, let sector, let target, let distance, let untilMs):
             guide = .heading(target: RoomMath.wrap360(target), kind: kind, label: sector, text: nil,
-                             distance: distance, onTarget: false, until: now + untilMs / 1000)
+                             distance: distance, until: now + untilMs / 1000)
         case .guideCompass(let kind, let sector, let compass, let untilMs):
             guide = .compass(kind: kind, label: sector, bearing: compass, until: now + untilMs / 1000)
         case .flash(let color, let text, let ttlMs):
@@ -428,90 +641,255 @@ public struct OverlayModel: Sendable {
         let roomPose = usablePose.flatMap { pose in alignment.map { $0.project(pose) } }
         state.roomPose = roomPose
 
-        updateGuide(heading: roomPose?.heading, now: now)
+        updateGuide(heading: roomPose?.heading, pitch: roomPose?.pitch, now: now)
         updatePings(pose: usablePose, roomPose: roomPose, alignment: alignment, intrinsics: intrinsics)
     }
 
-    private mutating func updateGuide(heading: Double?, now: Double) {
+    /// Rewrites the banner from the *live* offset, every tick.
+    ///
+    /// It used to echo the hub's `text` field verbatim, which meant the operator
+    /// read "Turn left 37°" for up to 200 ms after they had already turned — and
+    /// for a `look` or `go`, where the hub sends no `text` at all, they read a
+    /// line that never changed and never went green. `web/phone.js`
+    /// `updateGuideBanner` recomputes on every animation frame for exactly this
+    /// reason, and the wording here is its wording.
+    private mutating func updateGuide(heading: Double?, pitch: Double?, now: Double) {
         switch guide {
         case nil:
             state.arrow = nil
             state.banner = nil
-        case .heading(let target, let kind, let label, let text, let distance, let onTarget, let until):
+            state.elevation = nil
+            wasOnTarget = false
+            showingElevation = false
+        case .heading(let target, let kind, let label, let text, let distance, let until):
             guard now <= until else {
                 guide = nil
                 state.arrow = nil
                 state.banner = nil
+                state.elevation = nil
                 wasOnTarget = false
+                showingElevation = false
                 return
             }
-            state.banner = GuideBannerCue(kind: kind,
-                                          text: Self.bannerText(kind: kind, label: label, text: text,
-                                                                distance: distance),
-                                          onTarget: onTarget)
             // We do not know where the camera is looking, so we cannot say which
             // way to turn. Showing the last arrow would point at nothing.
+            //
+            // The web drops the banner outright here, but it has nothing else:
+            // it never stores the hub's wording, and its banner is the only
+            // place a directive appears. Dropping ours would blink the whole
+            // directive off for the second a stale pose takes to recover, and
+            // then back on — which reads as the hub having cancelled it. So say
+            // what was asked for without claiming a direction.
             guard let heading else {
                 state.arrow = nil
+                let fallback = text.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? Self.directionlessText(kind: kind, label: label, distance: distance)
+                state.banner = fallback.map { GuideBannerCue(kind: kind, text: $0, onTarget: false) }
+                state.elevation = nil
+                wasOnTarget = false
+                showingElevation = false
                 return
             }
             let off = RoomMath.signedDiff(target, heading)
-            state.arrow = ArrowCue(bearingRadians: Float(off * .pi / 180), label: label,
-                                   distance: distance.map(Float.init), until: until)
+            let onTarget = abs(off) < GuideThresholds.onTargetDegrees
+            let tilted = pitch.map { abs($0) > GuideThresholds.tiltedPitchDegrees } ?? false
+            let elevation = elevationCue(kind: kind, distance: distance, pitch: pitch,
+                                         onTarget: onTarget, tilted: tilted)
+            state.elevation = elevation
+            state.banner = GuideBannerCue(
+                kind: kind,
+                text: Self.bannerText(kind: kind, offsetDegrees: off, label: label,
+                                      distance: distance, tilted: tilted, elevation: elevation),
+                onTarget: onTarget, tilted: tilted)
+            state.arrow = ArrowCue(bearingRadians: Float(off * .pi / 180),
+                                   elevationRadians: distance.map {
+                                       Float(TargetGeometry.elevationRadians(horizontalDistance: $0))
+                                   },
+                                   label: label, distance: distance.map(Float.init), until: until)
+            // Edge-triggered, with a release band: a 90 s `go` would otherwise
+            // buzz every time the operator drifted a degree over the boundary.
+            if onTarget && !wasOnTarget {
+                cue(haptic: "onTarget", intensity: 0.6)
+                wasOnTarget = true
+            } else if abs(off) > GuideThresholds.onTargetReleaseDegrees {
+                wasOnTarget = false
+            }
         case .compass(let kind, let label, let bearing, let until):
             guard now <= until else {
                 guide = nil
                 state.banner = nil
+                state.elevation = nil
+                wasOnTarget = false
+                showingElevation = false
                 return
             }
             state.arrow = nil
-            let name = label.map { "\($0) · " } ?? ""
+            // A compass directive has no distance, so no target geometry.
+            state.elevation = nil
+            // ARKit runs `.gravity`; this phone has no true north and cannot
+            // resolve a real-world bearing. It used to render
+            // "Look the door · 137° NE", which reads like a direction the
+            // operator could follow. The web's wording is the honest one.
+            _ = bearing
             state.banner = GuideBannerCue(kind: kind,
-                                          text: "\(kind == "go" ? "Walk" : "Look") \(name)\(Int(bearing.rounded()))° \(Self.cardinal(bearing))",
+                                          text: "Face \(label ?? "that way") (no compass on this phone)",
                                           onTarget: false)
         }
     }
 
+    /// "Look up" / "look down", or nil.
+    ///
+    /// Four things have to be true before the operator is told to tilt:
+    ///
+    /// 1. **The target's distance is known.** Elevation is derived from it and
+    ///    `TargetGeometry`; a `search` sweep or a bare `look` at a sector carries
+    ///    no distance, so there is no geometry and no cue.
+    /// 2. **The phone's pitch is known.** No pitch, no error to correct.
+    /// 3. **The operator is already facing it.** Turning and tilting at once is
+    ///    two instructions; the horizontal one is the bigger error and wins. So
+    ///    the cue is suppressed off target — turn first, then tilt.
+    /// 4. **The error is outside the dead zone**, latched so it does not flicker.
+    private mutating func elevationCue(kind: String, distance: Double?, pitch: Double?,
+                                       onTarget: Bool, tilted: Bool) -> ElevationCue? {
+        // A `search` guide past 65° already owns the banner with "Hold your
+        // phone up", which is the hub's and the web's wording and is not being
+        // regressed. Two vertical instructions at once is one too many.
+        guard let distance, let pitch, onTarget, !(kind == "search" && tilted) else {
+            showingElevation = false
+            return nil
+        }
+        let target = TargetGeometry.elevationRadians(horizontalDistance: distance)
+        let targetDegrees = target * 180 / .pi
+        // Positive = the target is above where the camera points = raise the
+        // phone. `pitch` is positive tilted up, so this is a plain difference —
+        // getting it backwards tells the operator to look at the ceiling when
+        // the candidate is at their feet.
+        let needed = targetDegrees - pitch
+        let threshold = showingElevation ? GuideThresholds.elevationReleaseDegrees
+                                         : GuideThresholds.elevationDeadZoneDegrees
+        guard abs(needed) > threshold else {
+            showingElevation = false
+            return nil
+        }
+        showingElevation = true
+        return ElevationCue(targetRadians: Float(target), neededDegrees: needed)
+    }
+
     private mutating func updatePings(pose: Pose?, roomPose: RoomPose?, alignment: RoomAlignment?,
                                       intrinsics: CameraIntrinsics?) {
+        state.candidate = state.world?.candidate.map {
+            PingCue(id: -1, x: $0.x, y: $0.y, label: "CANDIDATE", until: .infinity)
+        }
         for index in state.pings.indices {
-            var ping = state.pings[index]
-            ping.bearingRadians = nil
-            ping.distance = nil
-            ping.imagePoint = nil
-            if let pose, let roomPose, let alignment {
-                ping.distance = Float(hypot(ping.x - roomPose.x, ping.y - roomPose.y))
-                if let heading = roomPose.heading {
-                    let bearing = RoomMath.bearing(fromX: roomPose.x, y: roomPose.y, toX: ping.x, y: ping.y)
-                    ping.bearingRadians = Float(RoomMath.signedDiff(bearing, heading) * .pi / 180)
-                }
-                if let intrinsics {
-                    // A spot on the floor, in the same 3D frame the pose is in. The
-                    // venue origin is on the floor; a seat-tap frame's origin is
-                    // wherever ARKit started, so assume a phone held at chest height.
-                    let floor: Float = state.alignment == .marker ? 0 : pose.position.y - 1.4
-                    let point = alignment.unproject(x: ping.x, y: ping.y, height: floor)
-                    ping.imagePoint = Projection.project(venuePoint: point, camera: pose, intrinsics: intrinsics)
-                }
-            }
-            state.pings[index] = ping
+            state.pings[index] = located(state.pings[index], pose: pose, roomPose: roomPose,
+                                         alignment: alignment, intrinsics: intrinsics)
+        }
+        state.candidate = state.candidate.map {
+            located($0, pose: pose, roomPose: roomPose, alignment: alignment, intrinsics: intrinsics)
         }
     }
 
-    static func bannerText(kind: String, label: String?, text: String?, distance: Double?) -> String {
-        if let text, !text.isEmpty { return text }
-        let metres = distance.map { String(format: " · %.1f m", $0) } ?? ""
+    private func located(_ cue: PingCue, pose: Pose?, roomPose: RoomPose?, alignment: RoomAlignment?,
+                         intrinsics: CameraIntrinsics?) -> PingCue {
+        var ping = cue
+        ping.bearingRadians = nil
+        ping.distance = nil
+        ping.imagePoint = nil
+        guard let pose, let roomPose, let alignment else { return ping }
+        ping.distance = Float(hypot(ping.x - roomPose.x, ping.y - roomPose.y))
+        if let heading = roomPose.heading {
+            let bearing = RoomMath.bearing(fromX: roomPose.x, y: roomPose.y, toX: ping.x, y: ping.y)
+            ping.bearingRadians = Float(RoomMath.signedDiff(bearing, heading) * .pi / 180)
+        }
+        if let intrinsics {
+            // A spot on the floor, in the same 3D frame the pose is in. The
+            // venue origin is on the floor; a seat-tap frame's origin is wherever
+            // ARKit started, so assume a phone held at chest height.
+            let floor: Float = state.alignment == .marker ? 0 : pose.position.y - 1.4
+            let point = alignment.unproject(x: ping.x, y: ping.y, height: floor)
+            ping.imagePoint = Projection.project(venuePoint: point, camera: pose, intrinsics: intrinsics)
+        }
+        return ping
+    }
+
+    /// The fourteen strings `updateGuideBanner` (`web/phone.js:763-805`) can
+    /// produce, transcribed including the arrow glyphs.
+    ///
+    /// The glyphs are not decoration: `←` and `→` sit on the side of the line
+    /// the operator has to turn toward, so the direction is readable at a glance
+    /// from a phone being swung around, before the degrees have been parsed.
+    ///
+    /// - Parameters:
+    ///   - offsetDegrees: live signed offset to the target. Positive = the target
+    ///     is clockwise of where the operator is facing, so turn right.
+    ///   - tilted: `|pitch| > 65`. Only `search` says anything about it, exactly
+    ///     as the web does — a `look`, `go` or `respond` never shows it.
+    ///   - elevation: the new vertical cue, which nothing in `swarm/` or the web
+    ///     client has. It is only ever non-nil when the operator is already on
+    ///     target horizontally, so it takes the slot the turn instruction would
+    ///     have had: one correction at a time, in the same place on the line.
+    static func bannerText(kind: String, offsetDegrees off: Double, label: String?,
+                           distance: Double?, tilted: Bool, elevation: ElevationCue? = nil) -> String {
+        let onTarget = abs(off) < GuideThresholds.onTargetDegrees
+        let turn = off > 0 ? "Turn right \(degrees(off))° →" : "← Turn left \(degrees(-off))°"
+
         switch kind {
-        case "respond": return "Candidate found\(metres)"
-        case "go": return "Walk to \(label ?? "the spot")\(metres)"
-        case "look": return "Look \(label ?? "this way")\(metres)"
-        default: return (label ?? "") + metres
+        case "respond":
+            // The hub's responder guidance always carries a distance
+            // (`swarm/target.py`); drop the clause rather than print "null m" if
+            // a future one does not.
+            let dist = distance.map { " · \(metres($0)) m" } ?? ""
+            if let elevation { return elevation.text + dist }
+            return onTarget ? "↑ Candidate ahead\(dist)" : turn + dist
+        case "go":
+            let name = label ?? "the spot"
+            let dist = distance.map { " · \(metres($0)) m" } ?? ""
+            if let elevation { return "\(elevation.text) · walk to \(name)\(dist)" }
+            return onTarget ? "↑ Walk to \(name)\(dist)" : "\(turn) · walk to \(name)\(dist)"
+        case "look":
+            let name = label ?? "that way"
+            if let elevation { return "Face \(name) · \(elevation.phrase)" }
+            if onTarget { return "Facing \(name) ✓ hold it" }
+            return off > 0 ? "Face \(name) · turn right \(degrees(off))° →"
+                           : "← Face \(name) · turn left \(degrees(-off))°"
+        default:
+            // `search` — the planner's sweep, and anything unrecognised, which
+            // `phone.js` also funnels here via `msg.kind || 'search'`.
+            if tilted { return "Hold your phone up" }
+            if let elevation { return elevation.text }
+            return onTarget ? "Scanning \(label ?? "the area")…" : turn
         }
     }
 
-    static func cardinal(_ degrees: Double) -> String {
-        let names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-        return names[Int((RoomMath.wrap360(degrees) + 22.5) / 45) % 8]
+    /// What the directive is, with no claim about which way to turn — for when
+    /// this phone has no heading of its own. Nothing here says "left", "right"
+    /// or "ahead", because at this point we do not know.
+    static func directionlessText(kind: String, label: String?, distance: Double?) -> String? {
+        let dist = distance.map { " · \(metres($0)) m" } ?? ""
+        switch kind {
+        case "respond": return "Candidate found\(dist)"
+        case "go": return "Walk to \(label ?? "the spot")\(dist)"
+        case "look": return "Face \(label ?? "that way")"
+        default:
+            // `search`: the planner always sends `text`, so this is the case
+            // that should not arise. With no label there is nothing to say.
+            return label.map { "Searching \($0)" }
+        }
+    }
+
+    /// `Math.round` on a positive number, as a string. The web prints whole
+    /// degrees.
+    private static func degrees(_ value: Double) -> String {
+        String(Int(value.rounded()))
+    }
+
+    /// The hub rounds a distance to one decimal place and JavaScript prints the
+    /// result as `6`, not `6.0`. Matching the web's wording means matching that
+    /// too, or every whole-metre readout differs from the browser's by a
+    /// trailing zero.
+    private static func metres(_ value: Double) -> String {
+        let rounded = (value * 10).rounded() / 10
+        return rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%.1f", rounded)
     }
 
     /// Takes the pending haptic, clearing it. A haptic fires once.

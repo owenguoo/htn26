@@ -4,10 +4,13 @@ Phones become tracked cameras. Each one reports its 6DoF pose in a shared venue
 frame plus periodic JPEG frames to the orchestrator over WebSocket, and displays
 commands sent back: a full-screen flash, a directional arrow, a sound, a haptic.
 
-This repo is a drop-in replacement for the **pose source and frame source** of a
-web prototype that already exists and works. It does not replace the
-orchestrator, the dashboard, the feed wall or the join flow. Read `CLAUDE.md` for
-the constraints and `PLAN.md` for the sequence.
+**This is the mobile client.** The browser phone client at `../web/phone.js` was
+the prototype; it is a behavioural reference now, not something we ship or extend.
+Operator-facing features belong here, in Swift.
+
+What this repo does *not* replace: the orchestrator, the operator console, the
+dashboard and the feed wall, which are the team's and still live. Read `CLAUDE.md`
+for the constraints and `PLAN.md` for the sequence.
 
 ## Layout
 

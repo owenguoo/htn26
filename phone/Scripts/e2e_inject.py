@@ -2,13 +2,15 @@
 
     uv run python phone/Scripts/e2e_inject.py --port 8077 --phone swarm-replay-e2e flash
     uv run python phone/Scripts/e2e_inject.py --port 8077 --phone swarm-replay-e2e focus   # → rate + hud
+
+The hub accepts dashboard commands from the console origin, so this connects
+with the same origin header as the browser console.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-
 import websockets
 
 
@@ -34,6 +36,17 @@ async def main() -> None:
         else:
             msg = {"type": "focus", "phoneId": args.phone}
         await ws.send(json.dumps(msg))
+        # The hub answers a refused command with {"error": …}; silence would hide it.
+        # Bounded by a deadline, not by quiet: the hub streams state at 10 Hz, so
+        # waiting for the socket to go quiet waits forever.
+        deadline = asyncio.get_running_loop().time() + 0.4
+        while (remaining := deadline - asyncio.get_running_loop().time()) > 0:
+            try:
+                reply = await asyncio.wait_for(ws.recv(), timeout=remaining)
+            except asyncio.TimeoutError:
+                break
+            if isinstance(reply, str) and reply.startswith('{"error"'):
+                raise SystemExit(f"hub refused the command: {reply[:200]}")
         # Focus only lasts while this console is connected; hold it open to observe the boost.
         await asyncio.sleep(args.hold)
 

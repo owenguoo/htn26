@@ -8,11 +8,22 @@ over WebSocket, and displays commands sent back (full-screen color flash,
 directional arrow, sound, haptic). The operators walk around and sweep their
 cameras; they are not seated.
 
-**A working web prototype already exists.** The orchestrator, dashboard, feed
-wall, cone rendering and QR join flow are built and running. This iOS app is a
-drop-in replacement for the *pose source* and *frame source* only. Do not
-rewrite, redesign or "improve" the server or the dashboard. If the wire protocol
-here disagrees with the server, the server wins — ask, don't refactor.
+**This Swift app is the mobile client. `../web/phone.js` is not.** The browser
+client was the prototype that proved the idea; we no longer build on it or put it
+in an operator's hands. Everything an operator sees or does on a phone — the UI,
+the guidance cues, voice input, the HUD — lands here, in Swift. A gap here is a
+gap, not something the web client covers for us.
+
+`../web/phone.js` stays useful as a **behavioural reference**. It is the working
+implementation of things this client is still catching up to, so read it to learn
+what the hub sends and expects, and to match wording, thresholds and timings.
+Read it; don't extend it.
+
+The rest of the web prototype is a different matter and is still live: the
+orchestrator, the operator console, the dashboard, the feed wall, cone rendering
+and the QR join flow are built, running, and **not ours**. Do not rewrite,
+redesign or "improve" the server or the console. If the wire protocol here
+disagrees with the server, the server wins — ask, don't refactor.
 
 **The server is the htn26 hub, in this same checkout** (`../swarm/hub.py`,
 `../swarm/protocol.py`, `../web/phone.js`). Phone work must not modify
@@ -94,6 +105,16 @@ resumable from the last green commit.
   which the hub exposes verbatim in `/api/state`.
 - Alignment is `none → seat → marker`. Unaligned, the phone sends `orient` with
   pitch only — never a position or heading from ARKit's arbitrary start frame.
+- **One HUD, two renderers.** The phone draws its HUD from the same
+  `HubHUDMirror` value it sends the console, using `web/console.js` `drawHud`'s
+  geometry (`UnifiedHUDView.swift`). Add a HUD element by adding it to the
+  mirror; never draw something on the phone the console cannot.
+- **Status is one plain sentence** (`OperatorStatus`, tested): the most
+  important problem and what to do. No `conf/fix/air/drop` on screen — those
+  are in Settings. The mini-map follows the operator; it never lets the dot
+  walk off the edge.
+- The hello carries `native: true`; the hub skips its "old page, reload" check
+  for native clients.
 - **HUD mirror:** while a console has the phone expanded the hub sends
   `cmd: hud` and the phone answers `type: hud` at 5 Hz (`HUDMirror.swift`), in
   upright-frame fractions. A reconnect starts un-viewed.

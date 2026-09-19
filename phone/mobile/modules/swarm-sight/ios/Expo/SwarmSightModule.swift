@@ -38,6 +38,14 @@ public class SwarmSightModule: Module {
       let binder = SessionBinder(events: self.events)
       self.binder = binder
       self.observer = SwarmRuntime.shared.observe { session in binder.bind(session) }
+
+      // Before the first frame, so the app never flashes light while the root
+      // window is still coming up. The module is created before that window
+      // exists, hence the observer as well as the immediate apply.
+      Task { @MainActor in
+        ThemeController.applyDark()
+        ThemeController.followNewWindows()
+      }
     }
 
     OnDestroy {
@@ -109,13 +117,31 @@ public class SwarmSightModule: Module {
       await SwarmRuntime.shared.session?.client.resetOrigin()
     }
 
+    /// The mic control, and the only thing JS may do to voice. Returns the new
+    /// state so a toggle can settle immediately instead of waiting for the next
+    /// `onState`.
+    ///
+    /// **No audio buffer ever crosses this boundary** — same rule as frames,
+    /// poses and the socket. JS gets a bool in and a string out; the samples go
+    /// from `MicrophoneCapture`'s tap straight into `SwarmClient`.
+    ///
+    /// Goes through the capture when there is one, because muting has to stop
+    /// the input running as well as tell the gate. With no capture (replay, or
+    /// the operator declined the microphone) it still tells the client, so the
+    /// snapshot and the control agree.
+    AsyncFunction("setMicrophoneMuted") { (muted: Bool) async -> String in
+      if let state = await MicrophoneCapture.setMuted(muted) { return state.rawValue }
+      let state = await SwarmRuntime.shared.session?.client.setMicrophoneMuted(muted)
+      return (state ?? .unavailable).rawValue
+    }
+
     AsyncFunction("getDiagnostics") { () async -> [String: Any] in
       guard let client = SwarmRuntime.shared.session?.client else { return ["joined": false] }
       return Self.payload(await client.snapshot())
     }
 
     View(OperatorExpoView.self) {
-      Events("onRequestLeave")
+      Events("onRequestSettings")
 
       Prop("showDebug") { (view: OperatorExpoView, value: Bool) in
         view.showDebug = value
@@ -142,6 +168,12 @@ public class SwarmSightModule: Module {
       "dropped": s.dropped,
       "reconnects": s.reconnects,
       "thermal": s.thermal.rawValue,
+      // "unavailable" | "muted" | "idle" | "speaking". The client knows whether
+      // voice is configured and whether the gate is open; only the capture
+      // knows whether the operator ever granted the microphone, so a declined
+      // prompt is folded in here rather than being reported as a quiet mic.
+      "micState": MicrophoneCapture.availability == .running
+        ? s.micState.rawValue : MicrophoneState.unavailable.rawValue,
     ]
     // Absent rather than null: a missing key is `undefined` in JS, and every
     // one of these is optional in the TypeScript type.

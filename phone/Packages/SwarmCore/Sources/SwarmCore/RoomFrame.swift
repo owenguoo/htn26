@@ -92,6 +92,31 @@ public struct RoomAlignment: Sendable, Equatable, Codable {
         return SIMD3<Float>(Float(dx * cos(yaw) + dy * sin(yaw)), height,
                             Float(-dx * sin(yaw) + dy * cos(yaw)))
     }
+
+    /// The exact inverse of `project`: a room pose back to a full 3D camera pose
+    /// at the given height. `project(unproject(p)) == p`.
+    ///
+    /// This lives here, next to the forward transform and next to its sign
+    /// tests, rather than in whatever wants it, because **the yaw sign is not
+    /// obvious and getting it wrong mirrors the room.** Room heading is measured
+    /// clockwise seen from above; a simd rotation about venue +Y is right-handed
+    /// and therefore counter-clockwise seen from above. So a room heading of `h`
+    /// is a rotation of `−h`. `project` states the same fact the other way round
+    /// as `atan2(f.x, −f.z)`.
+    ///
+    /// Pitch is applied about the camera's own right axis, after the yaw, so it
+    /// tilts the camera rather than orbiting it — the same order
+    /// `Geometry.yaw`'s decomposition assumes. A heading of nil means the pose
+    /// is pointed straight up or down and there is nothing to invert.
+    public func unproject(_ pose: RoomPose, height: Float) -> Pose? {
+        guard let heading = pose.heading else { return nil }
+        let yaw = Float((heading - yawDegrees) * .pi / 180)
+        let pitch = Float(pose.pitch * .pi / 180)
+        let orientation = simd_quatf(angle: -yaw, axis: VenueAxis.up)
+            * simd_quatf(angle: pitch, axis: CameraAxis.right)
+        return Pose(position: unproject(x: pose.x, y: pose.y, height: height),
+                    orientation: orientation.unitOrIdentity)
+    }
 }
 
 /// The fallback for when no marker is in sight: the operator taps where they are

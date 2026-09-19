@@ -48,6 +48,18 @@ public enum TransportState: Sendable, Equatable {
 /// Control traffic — hello, pong, seat, name — is never dropped: a lost pong
 /// leaves the hub without a clock offset and therefore without latency.
 ///
+/// **Audio is the third kind.** Voice chunks may not be dropped — the hub
+/// concatenates them into one WAV (`hub.py` `end_utterance`), so a missing chunk
+/// is not a lost moment but a hole spliced into the middle of a sentence, and
+/// the transcript comes back wrong rather than short. But they may not be sent
+/// ahead of everything else either: a held microphone produces about twelve
+/// messages a second, and putting those in the control queue — which is drained
+/// to empty before any perishable lane gets a turn — would starve frames on a
+/// slow socket, and no frames means no inference, which is the whole system.
+/// So audio has a never-dropped FIFO that takes its turn in the same round-robin
+/// as frames and poses. It is bounded by `VoiceGate`'s 12 s utterance cut, not
+/// by dropping.
+///
 /// **Hello goes first, alone.** The hub registers the phone from the first
 /// message on the socket. With more than one send in flight the socket does not
 /// promise ordering, so after every connect the hello is sent by itself and
@@ -116,6 +128,8 @@ public actor Transport {
 
     /// Never dropped, FIFO.
     private var controlQueue: [HubOutbound] = []
+    /// Never dropped either, but rotated rather than prioritised.
+    private var audioQueue: [HubOutbound] = []
     /// Latest-wins, one shallow buffer per perishable lane so a burst of frames
     /// cannot starve poses.
     private var perishable: [HubOutbound.Lane: [HubOutbound]] = [:]
@@ -188,7 +202,9 @@ public actor Transport {
         // Hello is the transport's to send, first and alone. See `adopt`.
         if case .hello = message { return }
         let lane = message.lane
-        if lane != .control {
+        if lane == .audio {
+            audioQueue.append(message)
+        } else if lane != .control {
             var bucket = perishable[lane] ?? []
             bucket.append(message)
             while bucket.count > configuration.bufferDepth {
@@ -207,11 +223,12 @@ public actor Transport {
     }
 
     private var bufferedCount: Int {
-        controlQueue.count + perishable.values.reduce(0) { $0 + $1.count }
+        controlQueue.count + audioQueue.count + perishable.values.reduce(0) { $0 + $1.count }
     }
 
-    /// The perishable lanes, in the order the cursor rotates through them.
-    private static let perishableOrder: [HubOutbound.Lane] = [.slam, .frame, .debug, .hud]
+    /// The lanes the cursor rotates through. `.audio` is here so it takes a turn
+    /// like the rest, even though its queue is never dropped.
+    private static let rotatingOrder: [HubOutbound.Lane] = [.slam, .frame, .audio, .debug, .hud]
 
     private func nextMessage() -> HubOutbound? {
         if !controlQueue.isEmpty { return controlQueue.removeFirst() }
@@ -222,11 +239,16 @@ public actor Transport {
         // refills at 10 Hz, so it is never empty at a send opportunity, and
         // frames would never leave the phone. No frames means no inference,
         // which is the entire point of the system.
-        let order = Self.perishableOrder
+        let order = Self.rotatingOrder
         for step in 0..<order.count {
             let index = (perishableCursor + step) % order.count
             let lane = order[index]
-            if var bucket = perishable[lane], !bucket.isEmpty {
+            if lane == .audio {
+                if !audioQueue.isEmpty {
+                    perishableCursor = (index + 1) % order.count
+                    return audioQueue.removeFirst()
+                }
+            } else if var bucket = perishable[lane], !bucket.isEmpty {
                 let message = bucket.removeFirst()
                 perishable[lane] = bucket
                 perishableCursor = (index + 1) % order.count
@@ -435,6 +457,13 @@ public actor Transport {
                 stats.dropped += bucket.count
                 stats.droppedByLane[lane, default: 0] += bucket.count
             }
+            // The hub's buffer for this phone died with the socket, so a
+            // half-utterance waiting here has nothing to be appended to.
+            if !audioQueue.isEmpty {
+                stats.dropped += audioQueue.count
+                stats.droppedByLane[.audio, default: 0] += audioQueue.count
+                audioQueue.removeAll()
+            }
             perishable.removeAll()
             controlQueue.removeAll()
             stats.buffered = 0
@@ -464,8 +493,19 @@ public actor Transport {
 /// under `swift test` on macOS.
 public final class URLSessionWebSocketChannel: WebSocketChannel {
     private let task: URLSessionWebSocketTask
+    /// The session that owns `task`, held for exactly as long as the task is.
+    ///
+    /// A `URLSession` owns its tasks; a task does not own its session. Letting
+    /// the session go out of scope after handing back the task tears the task
+    /// down a few milliseconds later, and the symptom is not "you forgot to
+    /// retain something" — it is `NSURLErrorNetworkConnectionLost` (-1005) on a
+    /// socket the server never saw, which reads exactly like a hub that is down
+    /// or a Wi-Fi that dropped. The phone then sits on "Reconnecting…" while the
+    /// hub is healthy and answering everyone else.
+    private let session: URLSession
 
-    public init(task: URLSessionWebSocketTask) {
+    public init(session: URLSession, task: URLSessionWebSocketTask) {
+        self.session = session
         self.task = task
         task.resume()
     }
@@ -508,6 +548,9 @@ public final class URLSessionWebSocketChannel: WebSocketChannel {
 
     public func close() async {
         task.cancel(with: .goingAway, reason: nil)
+        // Reconnects make a fresh session each time; without this the old ones
+        // accumulate for the life of the process.
+        session.invalidateAndCancel()
     }
 }
 
@@ -524,8 +567,22 @@ public struct URLSessionWebSocketChannelFactory: WebSocketChannelFactory {
     }
 
     public func connect(to url: URL) async throws -> any WebSocketChannel {
-        let session = URLSession(configuration: configuration)
-        let channel = URLSessionWebSocketChannel(task: session.webSocketTask(with: url))
+        // `expo-dev-launcher` swizzles `URLSessionConfiguration.default` to
+        // insert its CDP network inspector's `URLProtocol` at index 0, and that
+        // protocol's `canInit` claims *every* http/https request. A WebSocket
+        // upgrade handed to it is proxied through a plain data task, which
+        // cannot upgrade: the handshake reaches 101 and the task then dies with
+        // -1005 on a socket the hub saw open and is happily waiting on.
+        //
+        // This is why the dev client could never hold a socket while the plain
+        // Xcode shell and the macOS CLI both connected to the same hub in the
+        // same minute. Expo works around its own interceptor the same way
+        // (`expo-dev-launcher`'s `Avatar.swift`). Copy first: the swizzled
+        // getter hands back a shared instance and we must not mutate it.
+        let sessionConfiguration = (configuration.copy() as? URLSessionConfiguration) ?? configuration
+        sessionConfiguration.protocolClasses = []
+        let session = URLSession(configuration: sessionConfiguration)
+        let channel = URLSessionWebSocketChannel(session: session, task: session.webSocketTask(with: url))
         // Not connected until the handshake lands. Returning before that makes
         // every downstream connection indicator a lie.
         try await channel.waitUntilOpen()

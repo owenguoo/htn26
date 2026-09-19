@@ -17,6 +17,7 @@
           "_swarmsight._tcp"
         ],
         "NSMotionUsageDescription": "Motion tells SwarmSight whether you moved while camera tracking was lost.",
+        "NSMicrophoneUsageDescription": "SwarmSight listens while you hold the voice button so you can say what the team is looking for. Speech goes to the search hub to set that target and is discarded once it has been read; SwarmSight never identifies anyone by voice or face.",
         "UIRequiredDeviceCapabilities": [
           "arm64",
           "arkit"
