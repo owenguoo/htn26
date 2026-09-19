@@ -144,6 +144,25 @@
 
     #mapWrap { position: relative; height: 480px; }
     #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #mapWrap.is3d { height: 600px; }
+    #scene3d { position: absolute; inset: 0; overflow: hidden; border-radius: 0 0 12px 12px; }
+    #scene3d[hidden] { display: none; }
+    .s3d-canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; }
+    .s3d-labels { position: absolute; inset: 0; pointer-events: none; }
+    .s3d-tag { font-size: 12px; font-weight: 500; color: #fff; text-align: center; padding: 3px 8px; border-radius: 6px;
+      background: rgba(0,0,0,0.65); white-space: nowrap; max-width: 240px; }
+    .s3d-tag .s3d-say { font-weight: 400; margin-top: 2px; white-space: normal; }
+    .s3d-tag .s3d-sees { font-size: 11px; font-weight: 400; color: #bbb; margin-top: 2px; white-space: normal; }
+    .s3d-tag .s3d-sees.hit { color: #ff8a95; }
+    .s3d-mark { font: 600 11px var(--mono); padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.7); white-space: nowrap; }
+    .s3d-status { position: absolute; left: 12px; bottom: 12px; font: 500 11px var(--mono); color: var(--fg-3); pointer-events: none; }
+    .fitBar { position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 6px; font-size: 12px;
+      padding: 6px 8px; border-radius: 8px; background: rgba(0,0,0,0.7); border: 1px solid var(--line-2); }
+    .fitBar[hidden] { display: none; }
+    .fitBar .btn { min-width: 28px; justify-content: center; }
+    .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 6px; overflow: hidden; margin-right: 10px; }
+    .seg button { font: 500 12px var(--mono); padding: 3px 10px; color: var(--fg-2); }
+    .seg button.on { background: var(--fg); color: #000; }
 
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .row + .row { margin-top: 14px; }
@@ -173,14 +192,19 @@
     tr.off td { opacity: .4; }
     .thumb { width: 56px; height: 42px; border-radius: 4px; background: var(--bg-2); object-fit: cover; display: block;
       border: 1px solid var(--line); }
-    .thumb.hidden { filter: grayscale(1) brightness(.35); }
     .idx { font: 500 13px var(--mono); }
     .badge { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; font-size: 11px;
       font-weight: 500; border: 1px solid var(--line-2); color: var(--fg-2); margin-right: 4px; }
     .badge.w { color: #000; background: var(--fg); border-color: var(--fg); }
     .badge.r { color: var(--red); border-color: rgba(255,77,77,0.4); background: var(--red-bg); }
-    .actions { text-align: right; }
-    .actions .btn + .btn { margin-left: 6px; }
+    .joinWrap { position: relative; }
+    .joinPop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; display: none; width: 260px; padding: 14px;
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      text-align: center; }
+    .joinPop.on { display: block; }
+    .joinPop img { width: 100%; background: #fff; border-radius: 8px; padding: 10px; }
+    .joinPop .mono { font-size: 12px; margin-top: 10px; word-break: break-all; }
+    .joinPop .hint { margin-top: 4px; }
     .empty { padding: 40px 16px; text-align: center; color: var(--fg-3); }
 
     /* expanded feed */
@@ -206,6 +230,19 @@
       padding: 8px 14px; border-radius: 8px; background: rgba(0,0,0,0.78); color: #fff; font-size: 16px; font-weight: 500;
       text-align: center; line-height: 1.35; }
     .vcap.on { display: block; }
+    .vsees { position: absolute; top: 12px; right: 12px; max-width: 55%; display: none; font-size: 12px; color: #ddd;
+      padding: 4px 9px; border-radius: 6px; background: rgba(0,0,0,0.6); }
+    .vsees.on { display: block; }
+    .vsees.hit { color: #fff; background: rgba(229,72,77,0.85); }
+    .valert { position: absolute; top: 44px; left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 8px;
+      padding: 8px 14px; border-radius: 8px; background: var(--red); color: #fff; font-size: 14px; font-weight: 500;
+      box-shadow: 0 8px 30px rgba(229,72,77,0.4); animation: vIn .2s ease-out; white-space: nowrap; }
+    .valert.on { display: flex; }
+    .valert small { opacity: .8; font-weight: 400; }
+    .viewer.alerting .vbox { box-shadow: 0 0 0 2px var(--red), 0 30px 80px rgba(0,0,0,0.6); }
+    .visText { font-family: var(--mono); font-size: 12px; color: var(--fg-3); }
+    .autoSw#visSw.on .switch { background: var(--fg); border-color: var(--fg); }
+    .autoSw#visSw.on .switch::after { background: #000; }
     td .cap { font-size: 12px; color: var(--fg-2); max-width: 280px; white-space: normal; margin-top: 2px; }
     #vHud.on { background: var(--fg); color: #000; border-color: var(--fg); }
     #vHud.on kbd { color: #555; border-color: #999; }
@@ -232,6 +269,12 @@
       .phases { flex-wrap: wrap; }
     }
   </style>
+  <script type="importmap">
+    { "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    } }
+  </script>
 </head>
 <body>
   <header>
@@ -244,7 +287,9 @@
       <span class="muted">Console</span>
       <span class="conn"><span class="dot" id="connDot"></span><span id="connText">Connecting</span></span>
       <span class="spacer"></span>
-      <a class="btn" href="/dashboard" target="_blank" rel="noopener">Open projector ↗</a>
+      <div class="joinWrap"><button class="btn" id="joinBtn">Join QR</button>
+        <div class="joinPop" id="joinPop"><img id="joinQr" alt="Scan to join"><div class="mono" id="joinUrl"></div>
+          <div class="hint">Phones scan this to join</div></div></div>
     </div>
   </header>
 
@@ -252,7 +297,7 @@
     <section class="phases">
       <div class="steps" id="steps"></div>
       <span class="spacer"></span>
-      <span class="faint" style="font-size:12px"><kbd>1</kbd>–<kbd>5</kbd> phase &nbsp; <kbd>P</kbd> planner &nbsp; <kbd>M</kbd> autonomy</span>
+      <span class="faint" style="font-size:12px"><kbd>1</kbd>–<kbd>5</kbd> phase &nbsp; <kbd>P</kbd> planner &nbsp; <kbd>M</kbd> autonomy &nbsp; <kbd>V</kbd> vision</span>
       <span class="timer" id="timer">00:00</span>
     </section>
 
@@ -261,10 +306,12 @@
         <span class="prompt">›</span>
         <input id="mcInput" placeholder="Tell Mission Control what to do — “send phones 3 and 5 to the back-left corner”" spellcheck="false">
         <span class="faint mono" style="font-size:12px" id="mcModel"></span>
+        <button type="button" class="autoSw" id="visSw" title="Vision: sample phone cameras (V)"><span class="switch"></span>Vision</button>
         <button type="button" class="autoSw" id="autoSw" title="Autonomy (M)"><span class="switch"></span>Autonomy</button>
         <kbd>/</kbd>
       </form>
-      <div id="aiStatus"><span class="pulse" id="aiPulse"></span><span id="aiText"></span><span class="spacer"></span>
+      <div id="aiStatus"><span class="pulse" id="aiPulse"></span><span id="aiText"></span>
+        <span class="visText" id="visText"></span><span class="spacer"></span>
         <span id="aiUsage"></span></div>
       <div id="recs"></div>
       <div id="mcFeed"></div>
@@ -281,10 +328,17 @@
 
     <section class="grid">
       <div class="card">
-        <div class="card-h"><h2>Floor plan</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
+        <div class="card-h"><div class="seg" id="viewSeg"><button data-view="2d" class="on">2D</button><button data-view="3d">3D</button></div><span class="faint mono" id="roomName"></span><span class="spacer"></span>
           <span class="mono" style="font-size:12px" id="likely"></span>
-          <span class="faint" style="font-size:12px">· brighter = more likely · drag the candidate · right-click to ping</span></div>
-        <div id="mapWrap"><canvas id="map"></canvas></div>
+          <span class="faint" style="font-size:12px" id="mapHint">· brighter = more likely · drag the candidate · right-click to ping</span></div>
+        <div id="mapWrap"><canvas id="map"></canvas><div id="scene3d" hidden></div>
+          <div class="fitBar" id="fitBar" hidden><span class="faint">Fit scan</span>
+            <button class="btn sm" data-fit="scale" data-v="0.8" title="Smaller">−</button>
+            <button class="btn sm" data-fit="scale" data-v="1.25" title="Bigger">+</button>
+            <button class="btn sm" data-fit="turn" data-v="-15" title="Turn left">⟲</button>
+            <button class="btn sm" data-fit="turn" data-v="15" title="Turn right">⟳</button>
+            <button class="btn sm" data-fit="reset" title="Back to the automatic fit">Auto</button>
+            <span class="mono faint" id="fitInfo"></span></div></div>
       </div>
       <div class="stack">
         <div class="card">
@@ -292,6 +346,9 @@
           <div class="card-b">
             <div class="row"><div><div class="label">Planner</div><div class="hint">Assign sectors and steer phones</div></div>
               <button class="switch" id="plannerSw" aria-label="Planner"></button></div>
+            <div class="row"><div><div class="label">Live 3D scan</div><div class="hint" id="scanHint">VGGT on the GPU, from phone frames</div></div>
+              <div style="display:flex;gap:8px;align-items:center"><button class="btn sm" id="scanReset">Reset</button><button class="btn sm" id="scanRebuild">Rebuild</button>
+              <button class="switch" id="scanSw" aria-label="Live 3D scan"></button></div></div>
             <div class="row"><div><div class="label">Coverage</div><div class="hint">Mark the whole room unsearched</div></div>
               <button class="btn sm" id="resetCov">Reset</button></div>
           </div>
@@ -315,7 +372,7 @@
         <div class="card-h"><h2>Phones</h2><span class="faint mono" id="phoneCount">0</span></div>
         <div style="overflow:auto">
           <table>
-            <thead><tr><th></th><th>#</th><th>Name</th><th>Position</th><th>Heading</th><th>FPS</th><th>Latency</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th></th><th>#</th><th>Name</th><th>Position</th><th>Heading</th><th>FPS</th><th>Latency</th><th>Status</th></tr></thead>
             <tbody id="phones"></tbody>
           </table>
           <div class="empty" id="phonesEmpty">No phones connected</div>
@@ -335,10 +392,11 @@
         <span id="vBadges"></span><span class="spacer"></span>
         <span class="vfoot"><kbd>←</kbd> <kbd>→</kbd> switch</span>
         <button class="btn sm" id="vHud" title="Show what's on this phone's screen (H)">HUD <kbd>H</kbd></button>
-        <button class="btn sm" id="vHide"></button><button class="btn sm" id="vClose">Close <kbd>Esc</kbd></button>
+        <button class="btn sm" id="vClose">Close <kbd>Esc</kbd></button>
       </div>
       <div class="vimg"><img id="vImg" alt=""><canvas id="vHudCanvas"></canvas><div class="vnone" id="vNone">Waiting for video…</div>
-        <div class="live"><i></i>LIVE</div><div class="vcap" id="vCap"></div></div>
+        <div class="live"><i></i>LIVE</div><div class="vsees" id="vSees"></div><div class="vcap" id="vCap"></div>
+        <div class="valert" id="vAlert"></div></div>
       <div class="vstats">
         <div><div class="k">Doing</div><div class="v" id="vTask"></div></div>
         <div><div class="k">Position</div><div class="v" id="vPos"></div></div>

@@ -16,7 +16,7 @@ let lastDragSend = 0;
 // ---------------------------------------------------------------- socket
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=2`);
+  ws = new WebSocket(`${proto}://${location.host}/ws/console?thumb_fps=2`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => setConn(true);
   ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };
@@ -36,9 +36,16 @@ function onJson(msg) {
   if (msg.type === 'hello') {
     room = msg.room;
     $('#roomName').textContent = `${room.width} × ${room.depth} m`;
+    $('#joinQr').src = `/api/qr.svg?data=${encodeURIComponent(msg.joinUrl)}`;
+    $('#joinUrl').textContent = msg.joinUrl;
     resizeMap();
+    let saved = '2d';
+    try { saved = localStorage.getItem('swarm.mapMode') || '2d'; } catch {}
+    if (saved === '3d' && mapMode !== '3d') setMapMode('3d');
   } else if (msg.type === 'mission') {
     onMission(msg);
+  } else if (msg.type === 'spotlight') {
+    spotlight(msg);
   } else if (msg.type === 'state') {
     st = msg;
     phones.clear();
@@ -104,6 +111,18 @@ function renderMetrics() {
 
 function renderControls() {
   $('#plannerSw').classList.toggle('on', !!st.planner?.enabled);
+  const sc = st.scan;
+  if (sc) {
+    $('#scanSw').classList.toggle('on', sc.enabled);
+    const l = sc.last;
+    $('#scanHint').textContent = !sc.configured ? 'Set MAP_WORKER_SSH in .env'
+      : sc.running ? `Rebuilding from ${sc.keyframes} views…`
+      : sc.error ? `Error: ${sc.error}`
+      : !sc.enabled ? 'VGGT on the GPU, from phone frames'
+      : sc.paused ? `Paused in the lobby · ${sc.keyframes} views kept`
+      : `${sc.keyframes}/${sc.maxKeyframes} views · ${sc.newSince}/${sc.runAfter} new`
+        + (l ? ` · v${l.version} in ${l.seconds}s` : '');
+  }
   const t = st.target;
   const s = $('#candStatus');
   s.classList.toggle('found', !!t?.foundBy);
@@ -141,7 +160,6 @@ function phoneStatus(p) {
   if (!p.connected) out.push(['Offline', '']);
   else if (p.stale) out.push(['Stale', '']);
   if (p.pitch != null && Math.abs(p.pitch) > 65) out.push([p.pitch < 0 ? 'Floor' : 'Ceiling', '']);
-  if (p.hidden) out.push(['Hidden', '']);
   if (p.speaking) out.push(['🎙 Speaking', 'w']);
   if (p.oldPage && !p.sim && p.connected) out.push(['Old page · reload', 'r']);
   return out;
@@ -161,13 +179,12 @@ function renderPhones() {
       tr.dataset.id = p.id;
       tr.innerHTML = `<td><img class="thumb" alt="" data-thumb="${escapeHtml(p.id)}"></td><td class="idx"></td><td class="name"></td>
         <td class="pos mono muted"></td><td class="hd mono muted"></td><td class="fps mono muted"></td><td class="lat mono muted"></td>
-        <td class="st"></td><td class="actions"><button class="btn sm" data-act="hide"></button></td>`;
+        <td class="st"></td>`;
       if (thumbs.has(p.id)) tr.querySelector('img').src = thumbs.get(p.id);
     }
     existing.delete(p.id);
     if (body.children[i] !== tr) body.insertBefore(tr, body.children[i] || null);
     tr.classList.toggle('off', !p.connected);
-    tr.querySelector('.thumb').classList.toggle('hidden', p.hidden);
     tr.querySelector('.idx').textContent = p.index;
     tr.querySelector('.name').innerHTML = `${escapeHtml(p.name || 'Phone')} <span class="faint">${escapeHtml(p.device || '')}</span>`
       + (p.caption ? `<div class="cap">“${escapeHtml(p.caption.text)}”</div>` : '');
@@ -177,7 +194,6 @@ function renderPhones() {
     tr.querySelector('.fps').textContent = p.fps.toFixed(1);
     tr.querySelector('.lat').textContent = p.latencyMs != null ? `${p.latencyMs}ms` : '–';
     tr.querySelector('.st').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
-    tr.querySelector('[data-act="hide"]').textContent = p.hidden ? 'Show' : 'Hide';
   });
   for (const tr of existing.values()) tr.remove();
 }
@@ -186,8 +202,7 @@ $('#phones').addEventListener('click', (e) => {
   const tr = e.target.closest('tr');
   const p = tr && phones.get(tr.dataset.id);
   if (!p) return;
-  if (e.target.closest('[data-act]')) send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
-  else openViewer(p.id); // click anywhere else on the row: expand the feed
+  openViewer(p.id); // click a row: expand the feed
 });
 
 // ---------------------------------------------------------------- expanded feed
@@ -206,6 +221,7 @@ function openViewer(id) {
 
 function closeViewer() {
   viewing = null;
+  clearAlert();
   clearHud();
   $('#viewer').classList.remove('on');
   send({ type: 'focus', phoneId: null });
@@ -222,13 +238,16 @@ function renderViewer() {
   const p = phones.get(viewing);
   if (!p) { closeViewer(); return; }
   $('#vNum').textContent = `#${p.index}`;
+  const v = p.vision, sees = $('#vSees');
+  sees.textContent = v ? `👁 ${v.target ? `target ${Math.round(v.confidence * 100)}% · ` : ''}${v.sees}` : '';
+  sees.classList.toggle('on', !!v?.sees);
+  sees.classList.toggle('hit', !!(v?.target || v?.urgent));
   const cap = $('#vCap');
   cap.textContent = p.caption ? p.caption.text : p.speaking ? '…' : '';
   cap.classList.toggle('on', !!(p.caption || p.speaking));
   $('#vName').textContent = p.name || 'Phone';
   $('#vDevice').textContent = p.device || '';
   $('#vBadges').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
-  $('#vHide').textContent = p.hidden ? 'Show on projector' : 'Hide from projector';
   const pose = p.pose;
   $('#vTask').textContent = p.task || (st.planner?.assignments?.[p.id] ? `searching ${st.planner.assignments[p.id].sector}` : 'idle');
   $('#vPos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : 'not placed';
@@ -246,6 +265,24 @@ function toggleHud() {
   showHud = !showHud;
   try { localStorage.setItem('swarm.hud', showHud ? '1' : '0'); } catch {}
   $('#vHud').classList.toggle('on', showHud);
+}
+
+// ---------------------------------------------------------------- spotlight
+// Vision (or Mission Control) found something a human should see: pull that phone's feed up.
+let alertTimer = null;
+function spotlight(ev) {
+  if (!phones.has(ev.phoneId)) return;
+  if (viewing !== ev.phoneId) openViewer(ev.phoneId);
+  const el = $('#vAlert');
+  el.innerHTML = `⚠ ${escapeHtml(ev.reason || 'Look at this')} <small>· ${ev.source === 'vision' ? 'Vision' : 'Mission Control'} pulled up #${ev.index}</small>`;
+  el.classList.add('on');
+  $('#viewer').classList.add('alerting');
+  clearTimeout(alertTimer);
+  alertTimer = setTimeout(clearAlert, 12000);
+}
+function clearAlert() {
+  $('#vAlert').classList.remove('on');
+  $('#viewer').classList.remove('alerting');
 }
 
 // ---------------------------------------------------------------- phone HUD mirror
@@ -380,10 +417,8 @@ function drawTape(ctx, x0, y0, w, h, cmp, k) {
   ctx.beginPath(); ctx.moveTo(cx - 5 * k, y0 + h); ctx.lineTo(cx + 5 * k, y0 + h); ctx.lineTo(cx, y0 + h - 6 * k); ctx.fill();
 }
 requestAnimationFrame(drawHud);
-$('#vHide').addEventListener('click', () => {
-  const p = phones.get(viewing);
-  if (p) send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
-});
+$('#joinBtn').addEventListener('click', (e) => { e.stopPropagation(); $('#joinPop').classList.toggle('on'); });
+document.addEventListener('click', (e) => { if (!e.target.closest('.joinWrap')) $('#joinPop').classList.remove('on'); });
 $('#viewer').addEventListener('click', (e) => { if (e.target === $('#viewer')) closeViewer(); });
 
 function renderLog() {
@@ -453,7 +488,12 @@ function renderAutonomy(m) {
     : !searching ? 'Autonomous · waiting for the search phase'
     : m.thinking ? 'Analyzing the room…'
     : `Autonomous${m.lastThinkMs ? ` · reviews take ${(m.lastThinkMs / 1000).toFixed(1)}s` : ''}`;
-  $('#aiUsage').textContent = `${m.calls || 0} calls · ${((m.tokens || 0) / 1000).toFixed(1)}k tokens`;
+  const vs = st.vision;
+  $('#visSw').classList.toggle('on', !!vs?.enabled);
+  $('#visText').textContent = !vs?.enabled ? '' : vs.error ? `· vision error: ${vs.error}`
+    : `· 👁 ${vs.perSec} looks/s${vs.lastMs ? ` · ${(vs.lastMs / 1000).toFixed(1)}s each` : ''} · ${vs.model}`;
+  const calls = (m.calls || 0) + (vs?.calls || 0), tokens = (m.tokens || 0) + (vs?.tokens || 0);
+  $('#aiUsage').textContent = `${calls} calls · ${(tokens / 1000).toFixed(1)}k tokens`;
 
   // live feed of what autonomy did (newest first, last minute), plus the one being explained
   const all = m.recs || [];
@@ -487,6 +527,9 @@ function evidenceHtml(ev) {
   }
   if (ev.point) rows.push(['Target', `${ev.sector ? `sector ${ev.sector} ` : ''}${pos(ev.point[0], ev.point[1])}`]);
   for (const s of ev.speech || []) rows.push(['Heard', `#${s.index} ${pos(s.x, s.y)}: “${s.text}”`]);
+  for (const v of ev.vision || []) {
+    rows.push(['Saw', `#${v.index}: ${v.urgent ? `⚠ ${v.urgent} · ` : ''}${v.target != null ? `target ${Math.round(v.target * 100)}% · ` : ''}${v.sees}`]);
+  }
   if (ev.sighting) rows.push(['Sighting', `${Math.round(ev.sighting.confidence * 100)}% at ${pos(ev.sighting.x, ev.sighting.y)}`]);
   if (ev.likely?.length) rows.push(['Most likely then', ev.likely.map((l) => `${l.sector} ${Math.round(l.share * 100)}%`).join(' · ')]);
   return `<div class="evidence">${rows.map(([k, v]) => `<div><span class="k">${k}</span>${escapeHtml(v)}</div>`).join('')}
@@ -591,6 +634,10 @@ function drawExplain() {
 }
 
 $('#autoSw').addEventListener('click', () => send({ type: 'autonomy', enabled: !st?.mission?.autonomy }));
+$('#scanSw').addEventListener('click', () => send({ type: 'scan', enabled: !st?.scan?.enabled }));
+$('#scanRebuild').addEventListener('click', () => send({ type: 'scan', action: 'rebuild' }));
+$('#scanReset').addEventListener('click', () => send({ type: 'scan', action: 'reset' }));
+$('#visSw').addEventListener('click', () => send({ type: 'vision', enabled: !st?.vision?.enabled }));
 
 // ---------------------------------------------------------------- controls
 let respondersPref = 3;
@@ -624,9 +671,72 @@ window.addEventListener('keydown', (e) => {
   if (e.key === '/') { e.preventDefault(); $('#mcInput').focus(); return; }
   if (e.key === 'Escape' && explaining) { explaining = null; recsKey = ''; if (st?.mission) renderAutonomy(st.mission); return; }
   if (e.key === 'm' || e.key === 'M') { send({ type: 'autonomy', enabled: !st?.mission?.autonomy }); return; }
+  if (e.key === 'v' || e.key === 'V') { send({ type: 'vision', enabled: !st?.vision?.enabled }); return; }
   const n = Number(e.key);
   if (n >= 1 && n <= PHASES.length) send({ type: 'phase', phase: PHASES[n - 1][0] });
   else if (e.key === 'p' || e.key === 'P') send({ type: 'planner', enabled: !st?.planner?.enabled });
+});
+
+// ---------------------------------------------------------------- 3D view
+// The scan (VGGT GLB; a mock until the real one exists) with everyone in it. three.js loads only
+// the first time 3D is opened, so the 2D console works without internet.
+let mapMode = '2d', scene3d = null, s3dStatus = null;
+
+async function setMapMode(mode) {
+  mapMode = mode;
+  try { localStorage.setItem('swarm.mapMode', mode); } catch {}
+  for (const b of document.querySelectorAll('#viewSeg button')) b.classList.toggle('on', b.dataset.view === mode);
+  const is3d = mode === '3d';
+  $('#mapWrap').classList.toggle('is3d', is3d);
+  $('#map').hidden = is3d;
+  $('#scene3d').hidden = !is3d;
+  $('#mapHint').textContent = is3d ? '· drag to orbit · scroll to zoom · click a person for their feed · double-click to reset'
+    : '· brighter = more likely · drag the candidate · right-click to ping';
+  if (!is3d) { scene3d?.hide(); return; }
+  if (!scene3d) {
+    if (!room) return;
+    s3dStatus = document.createElement('div');
+    s3dStatus.className = 's3d-status';
+    s3dStatus.textContent = 'Loading 3D…';
+    $('#scene3d').appendChild(s3dStatus);
+    try {
+      const { createScene3D } = await import('/web/scene3d.js');
+      scene3d = createScene3D($('#scene3d'), {
+        room, getState: () => st, getThumb: (id) => thumbs.get(id), onPick: (id) => openViewer(id),
+      });
+      $('#scene3d').addEventListener('dblclick', () => scene3d.resetView());
+      setInterval(() => {
+        const s = scene3d.status();
+        s3dStatus.textContent = s === 'ready' ? scene3d.label()
+          : s === 'waiting' ? 'waiting for the first live scan…' : s === 'loading' ? 'loading scan…' : s === 'failed' ? 'scan failed to load' : 'no scan configured';
+      }, 1000);
+    } catch (e) {
+      s3dStatus.textContent = `3D unavailable (needs internet for three.js): ${e.message}`;
+      return;
+    }
+  }
+  if (mapMode === '3d') scene3d.show();
+}
+$('#fitBar').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-fit]');
+  if (!b) return;
+  const kind = b.dataset.fit;
+  send({ type: 'scan', action: 'fit', ...(kind === 'reset' ? { reset: true } : { [kind]: Number(b.dataset.v) }) });
+});
+function renderFit() {
+  const l = st?.scan?.last;
+  $('#fitBar').hidden = mapMode !== '3d' || !l;
+  if (!l) return;
+  const a = l.alignment || {}, f = l.fit || { scale: 1, turnDeg: 0 };
+  $('#fitInfo').textContent = `${l.viewDistanceM != null ? `~${(l.viewDistanceM * f.scale).toFixed(1)} m views · ` : ''}`
+    + `${f.scale !== 1 ? `×${f.scale.toFixed(2)} ` : ''}${f.turnDeg ? `${f.turnDeg > 0 ? '+' : ''}${Math.round(f.turnDeg)}° ` : ''}`
+    + `${a.leveledBy === 'gravity' ? 'level ✓' : ''}`;
+}
+setInterval(renderFit, 500);
+
+$('#viewSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-view]');
+  if (b) setMapMode(b.dataset.view);
 });
 
 // ---------------------------------------------------------------- map (monochrome)
@@ -647,7 +757,7 @@ new ResizeObserver(resizeMap).observe($('#mapWrap'));
 
 function draw() {
   requestAnimationFrame(draw);
-  if (!view || !st) return;
+  if (!view || !st || mapMode === '3d') return;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
 
   // probability heatmap: brighter = the candidate is more likely here (relative to the hottest cell)

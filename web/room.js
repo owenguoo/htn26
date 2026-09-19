@@ -1,4 +1,4 @@
-// Floor-plan geometry shared by the phone page and the dashboard.
+// Floor-plan geometry shared by the phone page and the console.
 // Room coordinates are meters, drawn with the stage at the top of the map:
 // x = 0 at stage center (+x = map right), y = 0 at the stage edge (+y = toward the back).
 // Heading: degrees, 0 = facing the stage, clockwise when viewed from above.

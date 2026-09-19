@@ -1,4 +1,4 @@
-"""Swarm Sight hub: phone sessions, frame routing, and live state for the dashboard.
+"""Swarm Sight hub: phone sessions, frame routing, and live state for the operator console.
 
 Run:  uv run python -m swarm.hub [--public-url https://xyz.trycloudflare.com]
 """
@@ -30,6 +30,8 @@ from .coverage import Coverage
 from .planner import Planner
 from .sightings import FOUND_CONF, POSSIBLE_CONF, MockDetector, Sightings
 from .target import Target
+from .vision import Vision
+from .mapper import Mapper
 from .protocol import now_ms, pack, unpack
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -81,7 +83,6 @@ class Phone:
     external_pose: dict | None = None
     gps: dict | None = None          # latest browser geolocation fix
     debug: dict | None = None        # latest diagnostics the phone reported
-    hidden: bool = False             # operator hid this feed from the projector
     hud: dict | None = None          # what's on the phone's screen, sent while it's expanded in a console
     build: str = ""                  # version of the page the phone is running (see build_id)
     audio: bytearray = field(default_factory=bytearray)  # current utterance (PCM), until transcribed
@@ -91,6 +92,7 @@ class Phone:
     tilted_since: float | None = None  # when it started pointing at the floor/ceiling
     # latest frame (latest wins, never queued)
     frame: bytes | None = None
+    frame_ori: dict | None = None    # device orientation (alpha, beta, gamma) when that frame was taken
     frame_seq: int = -1
     frame_t: float = 0              # capture time, server clock
     frame_at: float = 0             # arrival time, server clock
@@ -132,7 +134,6 @@ class Phone:
             "stale": self.frame is None or now - self.frame_at > STALE_MS,
             "frames": self.frames_total,
             "debug": self.debug,
-            "hidden": self.hidden,
             "oldPage": self.build != build_id(),
             "hud": self.hud if self.hud and now - self.hud["t"] < 2000 else None,
             "speaking": now - self.audio_at < 700,
@@ -167,13 +168,15 @@ class Hub:
         self.looking_for = ""               # what searchers should look for, shown on phones
         self.pings: list[dict] = []         # {id, x, y, label, t, phones: set | None}
         self.ping_ids = itertools.count(1)
-        self.consoles: set = set()          # dashboard/console subscribers, for pushed events
+        self.consoles: set = set()          # console subscribers, for pushed events
         # operator "look" directions: phone id → {label, until, sent, and compass | heading | point}
         self.directives: dict[str, dict] = {}
         self.directives_cleared: list[str] = []
         self.mission_complete = False       # every responder reached the found candidate
         self.boosted: set[str] = set()      # phones told to capture faster (expanded in a console)
         self.mission = None                 # Mission Control (LLM); created in main()
+        self.vision = None                  # frame sampler that lets Mission Control see; created in main()
+        self.mapper = None                  # live 3D scan (VGGT on the GPU pod); created in main()
 
     # ---- phone lifecycle -------------------------------------------------
     async def register(self, hello: dict, ws: WebSocket) -> Phone:
@@ -239,6 +242,7 @@ class Hub:
             phone.frame_t = now
         self._apply_orientation(phone, header)
         phone.frame = jpeg
+        phone.frame_ori = header.get("orientation") if isinstance(header.get("orientation"), dict) else None
         phone.frame_seq = int(header.get("seq", phone.frame_seq + 1))
         phone.frame_at = now
         phone.frames_total += 1
@@ -358,15 +362,19 @@ class Hub:
             self.mission_complete = done
             await asyncio.sleep(1 / hz)
 
-    async def ingest_detections(self, phone: Phone, boxes: list[dict]) -> None:
+    async def ingest_detections(self, phone: Phone, boxes: list[dict], pose: dict | None = None) -> None:
         """Detections for one phone's frame, from the real model (POST /api/detections) or the mock:
         draw them on that phone, and while searching, turn them into sightings and heatmap evidence."""
         await phone.send({"type": "command", "cmd": "detections", "boxes": boxes, "ttlMs": 1500})
         if self.phase not in SEARCH_PHASES or self.target.found_by:
             return
-        pose = phone.pose(now_ms())
+        pose = pose or phone.pose(now_ms())  # vision passes the pose its (older) frame was taken at
         if not pose:
             return
+        if self.vision and self.vision.enabled:  # an unsure detection: get vision's second opinion next
+            for b in boxes:
+                if b.get("label") != "vision":
+                    self.vision.trigger(phone.id, float(b.get("score") or 0))
         for x, y, score in self.sightings.ingest(phone.id, pose, boxes, now_ms() / 1000):
             self.coverage.boost(x, y, score)
 
@@ -570,7 +578,7 @@ class Hub:
         self.boosted = wanted
 
     async def emit(self, event: dict) -> None:
-        """Push an event (e.g. Mission Control progress) to every open console/dashboard."""
+        """Push an event (e.g. Mission Control progress) to every open console."""
         await asyncio.gather(*(c.send_json(event) for c in list(self.consoles)), return_exceptions=True)
 
     def active_pings(self, now: float) -> list[dict]:
@@ -617,7 +625,8 @@ class Hub:
         phones = sorted(self.phones.values(), key=lambda p: p.index)
         cell_m2 = self.coverage.cell ** 2
         return {"type": "state", "t": now,
-                "phones": [p.summary(now) | {"task": self.task_of(p.id), "searchedM2": round(p.searched_cells * cell_m2, 1)}
+                "phones": [p.summary(now) | {"task": self.task_of(p.id), "searchedM2": round(p.searched_cells * cell_m2, 1),
+                                             "vision": self.vision.recent(p.id) if self.vision else None}
                            for p in phones],
                 "coverage": self.coverage.snapshot(), "planner": self.planner.snapshot(),
                 "target": self.target.snapshot(now),
@@ -625,6 +634,8 @@ class Hub:
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
                 "sightings": self.sightings.snapshot(), "likely": self.likely_sectors(),
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
+                "vision": self.vision.status() if self.vision else None,
+                "scan": self.mapper.status() if self.mapper else None,
                 "mission": self.mission.status() if self.mission else {"ready": False, "why": "not started"}}
 
     async def command(self, target: str, cmd: dict) -> None:
@@ -661,7 +672,7 @@ app = FastAPI(title="Swarm Sight hub")
 async def no_stale_pages(request, call_next):
     """Pages and scripts change often during development; make browsers (and phones) revalidate every time."""
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path in ("/console", "/dashboard") or request.url.path.startswith("/web/"):
+    if request.url.path == "/" or request.url.path == "/console" or request.url.path.startswith("/web/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -672,9 +683,8 @@ class FrameSubscriber:
     Latest-wins: if the socket is slow, intermediate frames are skipped, never queued.
     """
 
-    def __init__(self, ws: WebSocket, fps: float, with_state: bool, skip_hidden: bool = False) -> None:
+    def __init__(self, ws: WebSocket, fps: float, with_state: bool) -> None:
         self.ws = ws
-        self.skip_hidden = skip_hidden  # projector: never show feeds the operator hid
         self.focus: str | None = None   # phone shown large in the console: gets frames faster
         self.min_interval = 1000 / max(fps, 0.1)
         self.with_state = with_state
@@ -694,7 +704,7 @@ class FrameSubscriber:
                 last_state = now
                 await self.send_json(hub.state())
             for p in list(hub.phones.values()):
-                if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq or (self.skip_hidden and p.hidden):
+                if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq:
                     continue
                 interval = FOCUS_INTERVAL_MS if p.id == self.focus else self.min_interval
                 # 25% slack: frames arrive with jitter, and a strict check would skip every other one
@@ -752,9 +762,9 @@ async def _ping_loop(phone: Phone, ws: WebSocket) -> None:
 
 
 async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: dict | None,
-                            skip_hidden: bool = False) -> None:
+) -> None:
     await ws.accept()
-    sub = FrameSubscriber(ws, fps=fps, with_state=with_state, skip_hidden=skip_hidden)
+    sub = FrameSubscriber(ws, fps=fps, with_state=with_state)
     if hello:
         await sub.send_json(hello)
     if with_state:
@@ -785,14 +795,21 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
             elif msg.get("type") == "focus":
                 sub.focus = msg.get("phoneId") or None
                 await hub.update_boost()
-            elif msg.get("type") == "hide":
-                phone = hub.phones.get(str(msg.get("phoneId")))
-                if phone:
-                    phone.hidden = bool(msg.get("hidden"))
             elif msg.get("type") == "ping":
                 await hub.ping(msg["x"], msg["y"], msg.get("label") or "Check here", msg.get("phones"))
             elif msg.get("type") == "mission" and hub.mission:
                 asyncio.create_task(hub.mission.run(str(msg.get("text", ""))))
+            elif msg.get("type") == "scan" and hub.mapper:
+                if "enabled" in msg:
+                    hub.mapper.set_enabled(bool(msg["enabled"]))
+                if msg.get("action") == "rebuild":
+                    asyncio.create_task(hub.mapper.rebuild())
+                elif msg.get("action") == "reset":
+                    hub.mapper.reset()
+                elif msg.get("action") == "fit":
+                    hub.mapper.adjust(scale=msg.get("scale"), turn=msg.get("turn"), reset=bool(msg.get("reset")))
+            elif msg.get("type") == "vision" and hub.vision:
+                hub.vision.set_enabled(bool(msg.get("enabled")))
             elif msg.get("type") == "autonomy" and hub.mission:
                 hub.mission.set_autonomy(bool(msg.get("enabled")))
     except (WebSocketDisconnect, RuntimeError, ValueError, KeyError):
@@ -804,13 +821,11 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
             await hub.update_boost()
 
 
-@app.websocket("/ws/dashboard")
-async def ws_dashboard(ws: WebSocket) -> None:
-    """Projector and operator console. The console (role=console) still sees hidden feeds."""
+@app.websocket("/ws/console")
+async def ws_console(ws: WebSocket) -> None:
+    """Operator console: state, pushed events and feed thumbnails."""
     fps = float(ws.query_params.get("thumb_fps", 10))
-    console = ws.query_params.get("role") == "console"
-    await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url},
-                            skip_hidden=not console)
+    await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url})
 
 
 @app.websocket("/ws/frames")
@@ -888,9 +903,6 @@ def phone_page() -> HTMLResponse:
     return _page("phone.html")
 
 
-@app.get("/dashboard")
-def dashboard_page() -> HTMLResponse:
-    return _page("dashboard.html")
 
 
 @app.get("/console")
@@ -934,9 +946,11 @@ def main() -> None:
     load_env()
     from .mission import MissionControl  # after load_env so it sees the API key
     hub.mission = MissionControl(hub, ROOM)
+    hub.vision = Vision(hub, hub.mission)
+    hub.mapper = Mapper(hub, ROOM, WEB / "models" / "live")
     ap = argparse.ArgumentParser(description="Swarm Sight hub")
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=8000, help="plain HTTP (dashboard, simulator, tunnel)")
+    ap.add_argument("--port", type=int, default=8000, help="plain HTTP (console, simulator, tunnel)")
     ap.add_argument("--https-port", type=int, default=8443, help="HTTPS for phones on the LAN (needs certs/)")
     ap.add_argument("--public-url", default="", help="URL phones should open, e.g. your tunnel URL")
     args = ap.parse_args()
@@ -953,7 +967,7 @@ def main() -> None:
                                       lifespan="off", ssl_certfile=str(cert), ssl_keyfile=str(key)))
 
     print("\n  Swarm Sight hub")
-    print(f"  Dashboard:   http://localhost:{args.port}/dashboard")
+    print(f"  Console:     http://localhost:{args.port}/console")
     print(f"  Phones join: {hub.join_url}")
     if not has_tls and not args.public_url:
         print("  ! iPhone cameras need HTTPS: use a tunnel (--public-url) or run scripts/make-cert.sh")
@@ -964,6 +978,8 @@ def main() -> None:
         asyncio.create_task(hub.coverage_loop())
         asyncio.create_task(hub.world_loop())
         asyncio.create_task(hub.mission.autonomy_loop())
+        asyncio.create_task(hub.vision.loop())
+        asyncio.create_task(hub.mapper.loop())
         await asyncio.gather(*(uvicorn.Server(c).serve() for c in configs))
 
     try:

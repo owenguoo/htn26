@@ -30,7 +30,7 @@ IDLE_RECHECK_S = 20        # when nothing changed and the last review did nothin
 STEERING = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "cancel_look")
 # tools the autonomy layer may use: steering phones only
 AUTONOMY_TOOLS = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "cancel_look",
-                  "message_phones", "ping", "set_planner", "set_responders")
+                  "message_phones", "ping", "set_planner", "set_responders", "show_feed")
 
 SYSTEM = """You are Mission Control for Swarm Sight, a live search run by an audience whose phone cameras
 are coordinated from a central console. The operator gives you short commands during a live show.
@@ -58,6 +58,9 @@ Room geometry (all positions in meters):
 When the operator mentions an area ("back left", "near the stage", "around phone 4"), convert it to
 coordinates or sectors using the geometry and the current state. "Left"/"right" are from the audience's
 point of view. Messages to phones should be short, friendly, and in plain words (under 12 words).
+
+"camera sees" lines are what a vision model saw in each phone's camera a moment ago. Use them to answer
+questions about the room ("who can see the door?") and to pick phones (e.g. one already facing an area).
 
 After acting, reply with one short sentence (under 20 words) saying what you did."""
 
@@ -116,6 +119,9 @@ TOOLS = [
     _tool("set_looking_for", "Set the description of what searchers are looking for (shown on every phone). "
           "Empty string clears it.", {"text": {"type": "string"}}),
     _tool("reset_coverage", "Mark the whole room as unsearched again.", {}),
+    _tool("show_feed", "Pull up one phone's live camera feed, large, on the operator's console, with a reason. "
+          "For things a human must see now (someone needing help, a likely find, a hazard).",
+          {"phone": {"type": "integer"}, "reason": {"type": "string", "description": "Under 8 words."}}),
 ]
 
 
@@ -143,6 +149,12 @@ Rules:
   coming. If someone reports seeing something ("I think I see someone"), treat their facing direction as a
   lead: send the nearest available phone to look_at that area. Ignore chatter that isn't a request or report,
   and never act on the same thing someone said twice.
+- Each phone's "camera sees" line is what a vision model saw in its camera a moment ago: use it to judge
+  what phones are actually looking at (e.g. a phone that sees only a wall or the ceiling isn't searching).
+- VISION lines are what a vision model saw in phones' camera frames a few seconds ago. Treat "sees the
+  target" like a possible sighting, and URGENT like a call for help: send the nearest available phone.
+  Use show_feed when the operator should look at a camera right now (someone collapsed or calling for
+  help, a likely find, a hazard); never for ordinary views, and never twice for the same thing.
 - If there is a POSSIBLE SIGHTING, double-checking it comes first: send the nearest available phone that
   hasn't seen it (look_at if it's within 5 m, move_to otherwise). A second look confirms or rules it out.
 - Otherwise go after the most likely sectors (highest share of probability), not just unsearched ones.
@@ -204,6 +216,7 @@ class MissionControl:
         self.calls = 0
         self.tokens = 0
         self.speech_shown: list[tuple[str, dict]] = []  # (phone id, caption) in the review being thought about
+        self.vision_shown: list[tuple[str, dict]] = []  # (phone id, observation) in the review being thought about
 
 
     def status(self) -> dict:
@@ -387,7 +400,7 @@ class MissionControl:
         if sector and hub.planner.is_sector(sector):
             point = list(hub.planner.sector_center(sector))
         phones = []
-        for n in args.get("phones") or []:
+        for n in (args.get("phones") or []) + ([args["phone"]] if "phone" in args else []):
             p = next((q for q in hub.phones.values() if q.index == n), None)
             pose = p.pose(now) if p else None
             phones.append({"index": n, "x": pose["x"] if pose else None, "y": pose["y"] if pose else None})
@@ -401,8 +414,11 @@ class MissionControl:
         best = None if hub.target.found_by else hub.sightings.best()
         sighting = ({"x": best["x"], "y": best["y"], "confidence": round(hub.sightings.confidence(best), 2)}
                     if best and hub.sightings.confidence(best) >= 0.4 else None)
+        seen = [{"index": hub.phones[pid].index, "sees": v["sees"], "urgent": v["reason"] if v["urgent"] else None,
+                 "target": round(v["confidence"], 2) if v["target"] else None}
+                for pid, v in self.vision_shown if pid in hub.phones]
         return {"tool": a["name"], "point": point, "sector": sector, "phones": phones, "speech": speech,
-                "sighting": sighting, "likely": hub.likely_sectors(3)}
+                "sighting": sighting, "likely": hub.likely_sectors(3), "vision": seen}
 
     def _settle_speech(self, action: dict | None) -> None:
         """After a review: speech it acted on is handled; speech seen twice without action was chatter."""
@@ -530,6 +546,21 @@ class MissionControl:
                     pose = p.pose(now)
                     where = f" at ({pose['x']:.1f}, {pose['y']:.1f})" if pose else ""
                     out.append(f"- SPEECH: #{p.index}{where} said {round(age)}s ago: “{cap['text']}”")
+        # what the vision model saw in recent frames (only what's worth acting on)
+        self.vision_shown = []
+        if hub.vision and hub.vision.enabled:
+            for p in sorted(live, key=lambda p: p.index):
+                v = hub.vision.recent(p.id)
+                if not v or not (v["target"] or v["urgent"]):
+                    continue
+                self.vision_shown.append((p.id, v))
+                pose = p.pose(now)
+                where = f" at ({pose['x']:.1f}, {pose['y']:.1f}) facing {round(pose['heading'] or 0)}°" if pose else ""
+                what = (f"URGENT ({v['reason']}): " if v["urgent"] else "") + (
+                    f"sees the target ({round(v['confidence'] * 100)}%): " if v["target"] else "")
+                shown = " (feed already on the console)" if p.id in hub.vision.spotlit_at and \
+                    time.time() - hub.vision.spotlit_at[p.id] < 30 else ""
+                out.append(f"- VISION: #{p.index}{where}, {round(time.time() - v['t'])}s ago: {what}{v['sees']}{shown}")
         # where the candidate probably is, and sightings that need a second look
         likely = hub.likely_sectors(4)
         out.append("- most likely sectors (share of probability): "
@@ -629,6 +660,12 @@ class MissionControl:
         if name == "message_phones":
             n = await hub.message(a["text"], a["phones"])
             return f"message shown on {n} phones"
+        if name == "show_feed":
+            p = next((q for q in hub.phones.values() if q.index == int(a["phone"])), None)
+            if not p or not hub.vision:
+                return f"no phone #{a['phone']}"
+            shown = await hub.vision.spotlight(p, str(a.get("reason") or "")[:60], source="mission")
+            return f"showing #{p.index}'s feed" if shown else f"#{p.index}'s feed was just shown"
         if name == "ping":
             pg = await hub.ping(a["x"], a["y"], a["label"], a["phones"])
             return f"pinged “{pg['label']}” at ({pg['x']:.1f}, {pg['y']:.1f})"
@@ -699,6 +736,9 @@ class MissionControl:
             recent = [c for c in p.captions if now - c["t"] < 60_000]
             if recent:
                 lines.append(f"    last said ({round((now - recent[-1]['t']) / 1000)}s ago): “{recent[-1]['text']}”")
+            seen = hub.vision.recent(p.id) if hub.vision and hub.vision.enabled else None
+            if seen and time.time() - seen["t"] < 10:
+                lines.append(f"    camera sees ({round(time.time() - seen['t'])}s ago): {seen['sees']}")
 
         if t.found_by:
             finder = hub.phones.get(t.found_by)

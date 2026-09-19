@@ -380,7 +380,7 @@ function onSlamUpdate(reality) {
   }
 }
 
-// Tracker diagnostics, shown on the dashboard tile's tooltip and in /api/state.
+// Tracker diagnostics, reported in /api/state.
 let motionEvents = 0;
 window.addEventListener('devicemotion', () => { motionEvents++; });
 function sendSlamDebug() {

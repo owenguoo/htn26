@@ -4,7 +4,7 @@ Run:  uv run python -m swarm.sim --n 30
 Each fake phone sits at a random seat and sweeps its heading back and forth. It turns
 toward the sector the planner assigns it, and walks to a found candidate when it's
 dispatched as a responder. It streams generated JPEG frames, answers clock-sync pings,
-and turns its frames the flash color when the dashboard flashes it.
+and turns its frames the flash color when the console flashes it.
 """
 from __future__ import annotations
 

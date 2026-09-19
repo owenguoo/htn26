@@ -2,7 +2,21 @@
   "name": "Main hall",
   "width": 20,
   "depth": 15,
-  "stage": { "width": 8, "depth": 2.5 },
+  "stage": {
+    "width": 8,
+    "depth": 2.5
+  },
   "cameraFovDeg": 55,
-  "coneLength": 5
+  "coneLength": 5,
+  "scene": {
+    "url": "/web/models/mock-room.glb",
+    "scale": 1,
+    "rotateYDeg": 0,
+    "offset": [
+      0,
+      0,
+      0
+    ],
+    "note": "3D scan (VGGT GLB) and how to line it up with room meters: scale, then rotate about the vertical axis, then offset [x, height, y]"
+  }
 }
