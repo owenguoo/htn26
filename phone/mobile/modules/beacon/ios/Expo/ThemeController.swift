@@ -1,24 +1,24 @@
 import UIKit
 
-/// Dark, always.
+/// Light, always.
 ///
-/// `app.json` pins `"userInterfaceStyle": "dark"`, which writes
-/// `UIUserInterfaceStyle = Dark` into the plist. That alone is enough once the
+/// `app.json` pins `"userInterfaceStyle": "light"`, which writes
+/// `UIUserInterfaceStyle = Light` into the plist. That alone is enough once the
 /// window exists. This controller still paints every window at module create
-/// and again as new ones appear, so the first frame is never the system light
+/// and again as new ones appear, so the first frame is never the system dark
 /// appearance while the root window is still coming up.
 @MainActor
 enum ThemeController {
     /// Safe to call before any window exists — `followNewWindows()` catches the
     /// ones that arrive later.
-    static func applyDark() {
-        applied = .dark
+    static func applyLight() {
+        applied = .light
         paint()
     }
 
     /// The module is created before the React root window is, so a single
     /// `apply` at launch would style nothing and the first frame would flash
-    /// light. Every window that becomes visible afterwards gets dark too.
+    /// dark. Every window that becomes visible afterwards gets light too.
     static func followNewWindows() {
         guard observer == nil else { return }
         observer = NotificationCenter.default.addObserver(

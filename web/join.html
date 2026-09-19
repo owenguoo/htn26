@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#070a14">
+  <title>Beacon</title>
+  <style>
+    :root {
+      --bg: #070a14; --text: #eef2ff; --muted: #8b93b0; --accent: #4cc9f0;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+      font: 16px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    }
+    main {
+      min-height: 100dvh; display: flex; flex-direction: column; justify-content: center;
+      gap: 18px; padding: 28px max(24px, env(safe-area-inset-left));
+      background: radial-gradient(120% 80% at 50% 0%, #13204a 0%, var(--bg) 60%);
+    }
+    h1 { margin: 0; font-size: 34px; letter-spacing: -0.02em; }
+    p { margin: 0; color: var(--muted); max-width: 28rem; }
+    a.primary {
+      display: inline-block; text-align: center; text-decoration: none;
+      padding: 16px; border-radius: 14px; background: var(--accent); color: #04121a;
+      font-weight: 700; font-size: 18px;
+    }
+    a.secondary { color: var(--accent); }
+    code { color: var(--text); font-size: 0.92em; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Beacon</h1>
+    <p>Cameras join from the Beacon iPhone app — not this browser page.</p>
+    <a class="primary" id="openApp" href="#">Open in Beacon</a>
+    <p>Or in the app, scan the console QR / paste this hub:<br><code id="hubUrl"></code></p>
+    <p><a class="secondary" href="/console">Operator console</a></p>
+  </main>
+  <script>
+    const hub = `${location.origin}/`;
+    document.getElementById('hubUrl').textContent = hub;
+    document.getElementById('openApp').href =
+      `beacon://join?hub=${encodeURIComponent(hub)}`;
+  </script>
+</body>
+</html>

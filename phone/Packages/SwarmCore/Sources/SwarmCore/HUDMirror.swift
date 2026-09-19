@@ -49,6 +49,12 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
         public var color: String
     }
 
+    public struct SoundEdge: Sendable, Equatable, Encodable {
+        /// "left", "right", or "ahead".
+        public var side: String
+        public var color: String
+    }
+
     public var compass: Compass?
     public var banner: Banner?
     public var lookingFor: String?
@@ -58,6 +64,7 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
     /// `[x0, y0, x1, y1]`: the part of the frame the phone's screen shows.
     public var screen: [Double]?
     public var dets: [HubDetectionBox]?
+    public var soundEdge: SoundEdge?
 }
 
 /// The words on the lobby / calibrate / end cards. Here rather than in the
@@ -93,6 +100,7 @@ public enum HUDMirror {
     static let directedColor = "#4cc9f0"
     static let turnColor = "#ffb703"
     static let pingColor = "#ffd166"
+    public static let soundColor = "#ff3b30"
 
     /// - Parameters:
     ///   - captureWidth/captureHeight: the sensor-orientation capture the
@@ -125,6 +133,10 @@ public enum HUDMirror {
             let metres = cue.distance.map { String(format: " %.0fm", $0) } ?? ""
             markers.append(.init(off: Double(bearing) * 180 / .pi, label: label + metres, color: color, big: false))
         }
+        let soundOffset = overlay.directionalSound.map { $0.offset(from: overlay.roomPose?.heading) }
+        if let soundOffset {
+            markers.append(.init(off: soundOffset, label: "SOUND", color: soundColor, big: true))
+        }
         let compass = overlay.roomPose?.heading.map {
             HubHUDMirror.Compass(center: $0, abs: false, markers: markers)
         }
@@ -132,7 +144,11 @@ public enum HUDMirror {
         // The tone rules live on the cue, next to the wording they colour, so the
         // console pill and the phone banner cannot disagree about whether the
         // operator is there yet.
-        let banner = overlay.banner.map { HubHUDMirror.Banner(text: $0.text, tone: $0.tone) }
+        let soundSide = soundOffset.map { offset in
+            offset < -20 ? "left" : offset > 20 ? "right" : "ahead"
+        }
+        let banner = soundSide.map { HubHUDMirror.Banner(text: "Sound heard · \($0)", tone: "alert") }
+            ?? overlay.banner.map { HubHUDMirror.Banner(text: $0.text, tone: $0.tone) }
 
         let searching = overlay.phase == "search" || overlay.phase == "found"
         let lookingFor = overlay.world?.lookingFor.flatMap { $0.isEmpty || !searching ? nil : $0 }
@@ -161,7 +177,8 @@ public enum HUDMirror {
                             toast: overlay.toast.map { "📣 " + $0.text }, card: card, ar: ar,
                             screen: visibleFrame(captureWidth: captureWidth, captureHeight: captureHeight,
                                                  screenAspect: screenAspect),
-                            dets: overlay.detections?.boxes)
+                            dets: overlay.detections?.boxes,
+                            soundEdge: soundSide.map { .init(side: $0, color: soundColor) })
     }
     /// A pixel in the landscape capture → 0…1 in the upright frame the hub has.
     /// The encoder rotates 90° clockwise: (x, y) in W×H lands at (H − y, x) in H×W.

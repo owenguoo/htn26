@@ -39,11 +39,11 @@ public class BeaconModule: Module {
       self.binder = binder
       self.observer = SwarmRuntime.shared.observe { session in binder.bind(session) }
 
-      // Before the first frame, so the app never flashes light while the root
+      // Before the first frame, so the app never flashes dark while the root
       // window is still coming up. The module is created before that window
       // exists, hence the observer as well as the immediate apply.
       Task { @MainActor in
-        ThemeController.applyDark()
+        ThemeController.applyLight()
         ThemeController.followNewWindows()
       }
     }
@@ -126,13 +126,12 @@ public class BeaconModule: Module {
     /// from `MicrophoneCapture`'s tap straight into `SwarmClient`.
     ///
     /// Goes through the capture when there is one, because muting has to stop
-    /// the input running as well as tell the gate. With no capture (replay, or
-    /// the operator declined the microphone) it still tells the client, so the
-    /// snapshot and the control agree.
+    /// the input running as well as tell the gate. With no live tap (replay,
+    /// drive, or the operator declined the microphone) the control stays
+    /// unavailable — do not let the gate alone look like a working mic.
     AsyncFunction("setMicrophoneMuted") { (muted: Bool) async -> String in
       if let state = await MicrophoneCapture.setMuted(muted) { return state.rawValue }
-      let state = await SwarmRuntime.shared.session?.client.setMicrophoneMuted(muted)
-      return (state ?? .unavailable).rawValue
+      return MicrophoneState.unavailable.rawValue
     }
 
     AsyncFunction("getDiagnostics") { () async -> [String: Any] in

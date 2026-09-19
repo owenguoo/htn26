@@ -476,5 +476,19 @@ with synthetic PCM over a real socket. Neither involved a microphone.
       up: capture resumes by itself, without leaving or rejoining.
 - [ ] Route changes: plug in and unplug wired headphones, connect and disconnect
       AirPods while capturing. The tap rebuilds each time and voice keeps working.
+- [ ] **Stereo direction is oriented correctly.** Hold the phone upright and
+      clap once from its left, then its right. Each short burst shows the red
+      edge on that side, a red `SOUND` compass marker, and `Sound heard · left`
+      or `right`. Turn after the clap: the marker stays on the same room heading.
+- [ ] **Direction degrades safely.** With AirPods or another mono route, voice
+      continues but no directional sound cue appears. Returning to the built-in
+      mic restores the cues without rejoining.
+- [ ] **Speech and self-audio are rejected.** Speak continuously, then trigger
+      ping and message beeps. None produces a `SOUND` marker. A separate hand
+      clap immediately after the beep-suppression window still does.
+- [ ] **Venue tuning.** In the real room, try claps at left/ahead/right from
+      2–6 m. Record misses and false positives before changing
+      `DirectionalSoundDetector.minimumOnsetRMS`, `noiseMultiplier`, or the
+      450 ms burst limit; Simulator audio is not evidence for those values.
 - [ ] Thirty minutes with voice live: memory flat, no growth in the transport's
       in-flight count, thermal state no worse than with voice off.

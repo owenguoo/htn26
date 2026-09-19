@@ -60,6 +60,41 @@ enum HUDStyle {
     }
 }
 
+/// A glance-speed indication for a local loud sound. The cue itself lives in
+/// `HubHUDMirror`, beside the compass marker and banner, so this is only a
+/// renderer of the same HUD contract sent to the console.
+struct HUDSoundEdgeView: View {
+    let edge: HubHUDMirror.SoundEdge
+
+    var body: some View {
+        GeometryReader { geometry in
+            let color = Color(hex: edge.color) ?? .red
+            ZStack {
+                switch edge.side {
+                case "left":
+                    LinearGradient(colors: [color.opacity(0.95), color.opacity(0)],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: min(86, geometry.size.width * 0.24))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                case "right":
+                    LinearGradient(colors: [color.opacity(0), color.opacity(0.95)],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: min(86, geometry.size.width * 0.24))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                default:
+                    LinearGradient(colors: [color.opacity(0.9), color.opacity(0)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: min(72, geometry.size.height * 0.12))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 /// The screen-space stack: compass tape, guide banner, "looking for", toast —
 /// top to bottom in the order and spacing the console uses.
 struct HUDStackView: View {
@@ -143,6 +178,10 @@ struct HUDStackView: View {
                 let x = edge ? (marker.off > 0 ? x0 + width - 18 * k : x0 + 18 * k)
                     : centerX + marker.off * pointsPerDegree
                 let label = edge ? (marker.off > 0 ? "\(marker.label) ▶" : "◀ \(marker.label)") : marker.label
+                if marker.label == "STAGE" {
+                    drawStageLandmark(&layer, x: x, y0: y0, label: label, k: k)
+                    continue
+                }
                 let text = layer.resolve(Text(label).font(.system(size: (marker.big ? 10 : 9) * k, weight: .heavy))
                     .foregroundStyle(HUDStyle.deepInk))
                 let textWidth = text.measure(in: CGSize(width: CGFloat.infinity, height: .infinity)).width + 10 * k
@@ -159,6 +198,19 @@ struct HUDStackView: View {
         caret.addLine(to: CGPoint(x: centerX, y: y0 + height - 6 * k))
         caret.closeSubpath()
         context.fill(caret, with: .color(HUDStyle.tapeInk))
+    }
+
+    /// The stage is a permanent room landmark, not an alert. Quiet label only —
+    /// no coloured badge or locator tick (those are for temporary guidance).
+    private func drawStageLandmark(_ context: inout GraphicsContext, x: CGFloat, y0: CGFloat,
+                                   label: String, k: CGFloat) {
+        let text = context.resolve(Text(label).font(.system(size: 9 * k, weight: .bold))
+            .foregroundStyle(HUDStyle.tapeInk.opacity(0.9)))
+        let measured = text.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
+        let minimumX = measured.width / 2 + 2 * k
+        let maximumX = 390 * k - measured.width / 2 - 2 * k
+        let labelX = max(minimumX, min(maximumX, x))
+        context.draw(text, at: CGPoint(x: labelX, y: y0 + 8 * k))
     }
 }
 

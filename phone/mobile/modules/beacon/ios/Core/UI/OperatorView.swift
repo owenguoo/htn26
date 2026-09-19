@@ -42,7 +42,8 @@ public struct OperatorView: View {
                 // The Simulator, driving. A room that turns with the heading,
                 // so the HUD can be judged over something that moves the way
                 // the operator moved rather than over a flat gradient.
-                DriveBackdropView(room: overlay.room, pose: overlay.roomPose)
+                DriveBackdropView(room: overlay.room, pose: overlay.roomPose,
+                                  candidate: overlay.candidate)
             } else {
                 ReplayBackdrop(isJoined: model.isJoined)
             }
@@ -67,6 +68,10 @@ public struct OperatorView: View {
             // Boxes and floating diamonds, in frame coordinates — the same ones
             // the console draws over the feed.
             HUDFrameLayerView(hud: model.frame.hud, captureSize: captureSize)
+
+            if let soundEdge = model.frame.hud.soundEdge {
+                HUDSoundEdgeView(edge: soundEdge)
+            }
 
             chrome
 
@@ -126,20 +131,23 @@ public struct OperatorView: View {
             // Compass first, full width, where the console draws it. Then what
             // the hub is telling this operator, then how the phone itself is doing.
             HUDStackView(hud: model.frame.hud)
-            // Gear right, status centred. Identity used to sit on the leading
-            // edge and shove the status off-centre; it is gone on purpose.
+            // Healthy tracking should feel like the absence of a problem, not
+            // a permanent green badge competing with the camera. Only surface
+            // status when the operator can or must do something about it.
             ZStack(alignment: .top) {
                 HStack(alignment: .top, spacing: Space.s) {
                     Spacer(minLength: 0)
                     if let onRequestSettings {
-                        ChromeButton(symbol: "gearshape.fill", label: "Settings", action: onRequestSettings)
+                        SettingsButton(action: onRequestSettings)
                     }
                 }
-                OperatorStatusView(status: overlay.status,
-                                   onTap: overlay.status.offersSeatPicker ? { isPickingSeat = true } : nil)
-                    // Keep long hint cards from covering the gear.
-                    .padding(.horizontal, 52)
-                    .frame(maxWidth: .infinity, alignment: .top)
+                if overlay.status.level != .ok {
+                    OperatorStatusView(status: overlay.status,
+                                       onTap: overlay.status.offersSeatPicker ? { isPickingSeat = true } : nil)
+                        // Keep long hint cards from covering the settings control.
+                        .padding(.horizontal, 52)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                }
             }
             Spacer()
             HStack(alignment: .bottom) {
@@ -163,28 +171,20 @@ public struct OperatorView: View {
     }
 }
 
-/// A round glyph on blur: the shared shape for everything that floats over the
-/// feed. Sized to match the status capsules in the same row — same type size
-/// and vertical inset — so the circle and the pills share one height. Tapped at
-/// 44pt via `hitTarget`; the visual size and the hit target are not the same
-/// number, and a 30pt tap target on a phone held at arm's length is a miss.
-struct ChromeButton: View {
-    let symbol: String
-    let label: String
+/// Settings is a real SwiftUI control, not a hand-built circle with a tap
+/// gesture. The app's iOS 26 deployment target guarantees the glass treatment.
+struct SettingsButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(TypeScale.identity)
-                .foregroundStyle(.hudInk)
-                // Same vertical inset as `OperatorStatusView`.
-                .padding(Space.s)
-                .background(Surface.hudChrome, in: Circle())
-                .hitTarget()
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
+        Button("Settings", systemImage: "gearshape", action: action)
+            .labelStyle(.iconOnly)
+            .font(TypeScale.inlineSymbol)
+            .controlSize(.large)
+            .buttonBorderShape(.circle)
+            .buttonStyle(.glass)
+            .tint(.hudInk)
+            .accessibilityLabel("Settings")
     }
 }
 

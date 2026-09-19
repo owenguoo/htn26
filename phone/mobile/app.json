@@ -5,9 +5,10 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "com.beacon.Beacon",
+      "deploymentTarget": "26.0",
       "supportsTablet": false,
       "requireFullScreen": true,
       "infoPlist": {
@@ -38,14 +39,6 @@
         {
           "cameraPermission": "Beacon tracks where this phone is and streams what it sees to the search dashboard.",
           "recordAudioAndroid": false
-        }
-      ],
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "deploymentTarget": "17.0"
-          }
         }
       ],
       "./plugins/withBeacon"

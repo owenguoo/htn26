@@ -62,7 +62,10 @@
     .upload-zone:hover, .upload-zone.dragging { background: var(--accent-bg); border-color: var(--accent); }
     .upload-zone:disabled { opacity: .5; cursor: wait; }
     .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .search-panel input, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
+    .search-panel input, .search-panel select, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
+    .scenario-tools { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .scenario-tools label { color: var(--fg-2); font-size: 13px; }
+    #rehearsalScenario { min-width: 174px; height: 32px; padding: 0 30px 0 10px; }
     #referencePreview { max-width: 100%; max-height: 280px; margin-top: 12px; }
     #personChoices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     #searchMessage:empty { display: none; }
@@ -414,6 +417,8 @@
               <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" aria-label="Upload photo" hidden>
               <button class="upload-zone" type="button" id="uploadPhoto"><strong>Drop a photo here</strong><span>or click to choose</span></button>
               <button class="btn" id="clearReference" type="button" hidden>Clear</button>
+              <button class="btn" id="rehearsalMode" type="button">Use rehearsal mode</button>
+              <span class="scenario-tools"><label for="rehearsalScenario">Scenario</label><select id="rehearsalScenario" aria-label="Rehearsal scenario"></select><button class="btn primary" id="runScenario" type="button">Run scenario</button></span>
 </div>
               <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
             </fieldset>

@@ -176,7 +176,7 @@ extension View {
     /// operator got a dark modal card for no reason. But a material *is*
     /// scheme-dependent: `.ultraThinMaterial` resolved light would put the
     /// gear's white glyph on a white blur. So the camera layers opt in
-    /// explicitly, and everything else follows the window (always dark).
+    /// explicitly, and everything else follows the window (light by default).
     func cameraChrome() -> some View {
         environment(\.colorScheme, .dark)
     }

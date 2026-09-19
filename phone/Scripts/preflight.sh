@@ -3,6 +3,9 @@
 set -uo pipefail
 
 status=0
+IOS_SIMULATOR_OS="${IOS_SIMULATOR_OS:-26.3.1}"
+IOS_SIMULATOR_RUNTIME_VERSION="${IOS_SIMULATOR_RUNTIME_VERSION:-26.3}"
+IOS_SIMULATOR_RUNTIME="com.apple.CoreSimulator.SimRuntime.iOS-26-3"
 
 echo "=== Xcode license ==="
 if xcodebuild -version >/dev/null 2>&1 && xcodebuild -showsdks >/dev/null 2>&1; then
@@ -14,18 +17,17 @@ else
   status=1
 fi
 
-echo "=== iOS Simulator runtime ==="
+echo "=== iOS $IOS_SIMULATOR_RUNTIME_VERSION Simulator runtime ==="
 # Directory existence is not enough: those appear as soon as a download starts.
 # The only thing that means anything is simctl listing a bootable device.
-if xcrun simctl list devices available 2>/dev/null | grep -qi "iPhone"; then
-  echo "  ok: a runtime is installed"
-  xcrun simctl list devices available 2>/dev/null | grep -i "iPhone 16" | head -3
+if xcrun simctl list runtimes 2>/dev/null | grep -q "iOS $IOS_SIMULATOR_RUNTIME_VERSION "; then
+  echo "  ok: iOS $IOS_SIMULATOR_RUNTIME_VERSION is installed"
 elif xcrun simctl list runtimes 2>/dev/null | grep -qi "iOS"; then
-  echo "  PARTIAL: a runtime is installed but no iPhone device exists yet. Run:"
-  echo "      xcrun simctl create 'iPhone 16' 'iPhone 16'"
+  echo "  WRONG VERSION: an iOS runtime is installed, but not $IOS_SIMULATOR_RUNTIME_VERSION."
+  echo "  Install the iOS $IOS_SIMULATOR_RUNTIME_VERSION runtime in Xcode Settings → Components."
   status=1
 else
-  echo "  MISSING. This Xcode does not ship the iOS Simulator runtime, so there"
+  echo "  MISSING. This Xcode does not have the iOS $IOS_SIMULATOR_RUNTIME_VERSION runtime, so there"
   echo "  are no simulator devices and -destination cannot resolve. Run:"
   echo "      xcodebuild -downloadPlatform iOS"
   echo "  (multi-gigabyte download)"
@@ -36,11 +38,16 @@ echo "=== the destination the gate names ==="
 # The runtime ships device types, not devices. iOS 26.3 creates an iPhone 16e
 # and a few 17s but no plain iPhone 16, which is the name Scripts/verify.sh
 # uses — so it has to be created once.
-if xcrun simctl list devices available 2>/dev/null | grep -q "iPhone 16 ("; then
-  echo "  ok: an 'iPhone 16' device exists"
+if xcrun simctl list devices available 2>/dev/null | awk -v os="$IOS_SIMULATOR_RUNTIME_VERSION" '
+    $0 == "-- iOS " os " --" { in_runtime = 1; next }
+    /^-- / { in_runtime = 0 }
+    in_runtime && /iPhone 16 \(/ { found = 1 }
+    END { exit !found }
+  '; then
+  echo "  ok: an iPhone 16 exists on iOS $IOS_SIMULATOR_RUNTIME_VERSION"
 elif xcrun simctl list devicetypes 2>/dev/null | grep -q "SimDeviceType.iPhone-16$"; then
   echo "  MISSING, but the device type is available. Run:"
-  echo "      xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16"
+  echo "      xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16 $IOS_SIMULATOR_RUNTIME"
   status=1
 else
   echo "  MISSING, and this runtime has no iPhone 16 device type. Point"

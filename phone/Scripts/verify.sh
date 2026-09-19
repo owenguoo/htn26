@@ -10,6 +10,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Keep every local build on the same simulator generation even when a newer
+# runtime is installed. Override only when intentionally moving the baseline.
+IOS_SIMULATOR_OS="${IOS_SIMULATOR_OS:-26.3.1}"
+IOS_SIMULATOR_DESTINATION="platform=iOS Simulator,name=iPhone 16,OS=$IOS_SIMULATOR_OS"
+
 echo "=== gate 1/2: swift test ==="
 (cd Packages/SwarmCore && swift test)
 
@@ -23,7 +28,7 @@ Scripts/preflight.sh --core >/dev/null 2>&1 || {
   Scripts/preflight.sh --core
   exit 1
 }
-xcodebuild -scheme Beacon -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -scheme Beacon -destination "$IOS_SIMULATOR_DESTINATION" build
 
 echo
 echo "=== expo shell: typecheck + lint ==="
@@ -37,7 +42,7 @@ if [ "${1:-}" = "--expo" ] || [ "${2:-}" = "--expo" ]; then
   export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
   (cd mobile && pnpm expo prebuild -p ios --clean >/dev/null)
   (cd mobile/ios && xcodebuild -workspace Beacon.xcworkspace -scheme Beacon -configuration Release \
-      -destination 'platform=iOS Simulator,name=iPhone 16' -derivedDataPath ../../build/expo-dd build \
+      -destination "$IOS_SIMULATOR_DESTINATION" -derivedDataPath ../../build/expo-dd build \
       | grep -E '^\*\* BUILD|[^-]error: ')
 fi
 

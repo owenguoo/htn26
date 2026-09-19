@@ -26,6 +26,9 @@ struct DriveBackdropView: View {
     let room: HubRoom?
     /// Where the operator has driven to. nil before the first pose.
     let pose: RoomPose?
+    /// The confirmed person, at the same room coordinate used by the compass
+    /// and mini-map. nil until the hub has actually found someone.
+    let candidate: PingCue?
 
     private var width: Double { max(1, room?.width ?? DriveBounds.roomJSON.width) }
     private var depth: Double { max(1, room?.depth ?? DriveBounds.roomJSON.depth) }
@@ -93,6 +96,8 @@ struct DriveBackdropView: View {
         }
         context.stroke(grid, with: .color(.white.opacity(0.13)), lineWidth: 1)
 
+        drawRehearsalScene(&context, camera: camera)
+
         // The stage wall: the one landmark that makes "facing the stage"
         // unambiguous without reading anything. Same fill the mini-map gives
         // the stage, so the two pictures name it the same way.
@@ -124,6 +129,139 @@ struct DriveBackdropView: View {
             camera.add(&walls, from: (a.0, a.1, 0), to: (a.0, a.1, Self.wallHeight))
         }
         context.stroke(walls, with: .color(MapInk.outline.opacity(0.28)), lineWidth: 1)
+    }
+
+    /// A repeatable, deliberately varied room for exercising the drive mode.
+    ///
+    /// The people cover stage-left, right aisle and rear-room bearings. The
+    /// props give the simulated camera enough landmarks to make turning and
+    /// walking legible without pretending this wireframe is a real camera
+    /// feed. Nothing here participates in search logic: the highlighted person
+    /// below is placed from the hub's real `world.candidate` coordinate.
+    private func drawRehearsalScene(_ context: inout GraphicsContext, camera: RoomCamera) {
+        let people: [(x: Double, y: Double)] = [
+            (-width * 0.24, depth * 0.32),
+            (width * 0.27, depth * 0.52),
+            (-width * 0.08, depth * 0.78),
+        ]
+        for person in people {
+            drawPerson(&context, camera: camera, x: person.x, y: person.y,
+                       color: .white.opacity(0.34))
+        }
+
+        drawTable(&context, camera: camera, x: width * 0.22, y: depth * 0.28,
+                  color: .white.opacity(0.19))
+        drawChair(&context, camera: camera, x: -width * 0.30, y: depth * 0.48,
+                  color: .white.opacity(0.19))
+        drawBox(&context, camera: camera, x: width * 0.31, y: depth * 0.67,
+                width: 0.9, depth: 0.55, height: 0.65, color: .white.opacity(0.19))
+        drawBackpack(&context, camera: camera, x: -width * 0.20, y: depth * 0.64,
+                     color: .white.opacity(0.23))
+        drawCone(&context, camera: camera, x: width * 0.06, y: depth * 0.42,
+                 color: .white.opacity(0.23))
+
+        if let candidate {
+            drawPerson(&context, camera: camera, x: candidate.x, y: candidate.y,
+                       color: HUDStyle.detection, label: "FOUND PERSON")
+        }
+    }
+
+    private func drawPerson(_ context: inout GraphicsContext, camera: RoomCamera,
+                            x: Double, y: Double, color: Color, label: String? = nil) {
+        var body = Path()
+        camera.add(&body, from: (x, y, 0.25), to: (x, y, 1.42))
+        camera.add(&body, from: (x, y, 1.12), to: (x - 0.34, y, 0.78))
+        camera.add(&body, from: (x, y, 1.12), to: (x + 0.34, y, 0.78))
+        camera.add(&body, from: (x, y, 0.72), to: (x - 0.25, y, 0))
+        camera.add(&body, from: (x, y, 0.72), to: (x + 0.25, y, 0))
+        // The second shoulder axis keeps a person recognizable when viewed
+        // from the side, where the x-axis stick figure would collapse.
+        camera.add(&body, from: (x, y - 0.18, 1.1), to: (x, y + 0.18, 1.1))
+        context.stroke(body, with: .color(color), lineWidth: label == nil ? 2 : 3)
+
+        guard let head = camera.point((x, y, 1.62)) else { return }
+        let radius = camera.projectedRadius(at: (x, y, 1.62), metres: 0.13)
+        context.stroke(Path(ellipseIn: CGRect(x: head.x - radius, y: head.y - radius,
+                                              width: radius * 2, height: radius * 2)),
+                       with: .color(color), lineWidth: label == nil ? 2 : 3)
+        guard let label else { return }
+        let text = context.resolve(Text(label).font(.system(size: 11, weight: .heavy))
+            .foregroundStyle(HUDStyle.deepInk))
+        let measured = text.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
+        let badge = CGRect(x: head.x - measured.width / 2 - 6,
+                           y: head.y - radius - measured.height - 10,
+                           width: measured.width + 12, height: measured.height + 5)
+        context.fill(Path(roundedRect: badge, cornerRadius: badge.height / 2), with: .color(color))
+        context.draw(text, at: CGPoint(x: badge.midX, y: badge.midY))
+    }
+
+    private func drawTable(_ context: inout GraphicsContext, camera: RoomCamera,
+                           x: Double, y: Double, color: Color) {
+        let halfWidth = 0.75, halfDepth = 0.4, top = 0.78
+        var path = Path()
+        let corners = [(x - halfWidth, y - halfDepth), (x + halfWidth, y - halfDepth),
+                       (x + halfWidth, y + halfDepth), (x - halfWidth, y + halfDepth)]
+        for index in corners.indices {
+            let a = corners[index], b = corners[(index + 1) % corners.count]
+            camera.add(&path, from: (a.0, a.1, top), to: (b.0, b.1, top))
+            camera.add(&path, from: (a.0, a.1, 0), to: (a.0, a.1, top))
+        }
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
+    }
+
+    private func drawChair(_ context: inout GraphicsContext, camera: RoomCamera,
+                           x: Double, y: Double, color: Color) {
+        let half = 0.28, seat = 0.48, back = 1.05
+        var path = Path()
+        let corners = [(x - half, y - half), (x + half, y - half),
+                       (x + half, y + half), (x - half, y + half)]
+        for index in corners.indices {
+            let a = corners[index], b = corners[(index + 1) % corners.count]
+            camera.add(&path, from: (a.0, a.1, seat), to: (b.0, b.1, seat))
+            camera.add(&path, from: (a.0, a.1, 0), to: (a.0, a.1, seat))
+        }
+        camera.add(&path, from: (x - half, y + half, seat), to: (x - half, y + half, back))
+        camera.add(&path, from: (x + half, y + half, seat), to: (x + half, y + half, back))
+        camera.add(&path, from: (x - half, y + half, back), to: (x + half, y + half, back))
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
+    }
+
+    private func drawBox(_ context: inout GraphicsContext, camera: RoomCamera,
+                         x: Double, y: Double, width boxWidth: Double, depth boxDepth: Double,
+                         height: Double, color: Color) {
+        let x0 = x - boxWidth / 2, x1 = x + boxWidth / 2
+        let y0 = y - boxDepth / 2, y1 = y + boxDepth / 2
+        let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        var path = Path()
+        for index in corners.indices {
+            let a = corners[index], b = corners[(index + 1) % corners.count]
+            camera.add(&path, from: (a.0, a.1, 0), to: (b.0, b.1, 0))
+            camera.add(&path, from: (a.0, a.1, height), to: (b.0, b.1, height))
+            camera.add(&path, from: (a.0, a.1, 0), to: (a.0, a.1, height))
+        }
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
+    }
+
+    private func drawBackpack(_ context: inout GraphicsContext, camera: RoomCamera,
+                              x: Double, y: Double, color: Color) {
+        var path = Path()
+        camera.add(&path, from: (x - 0.28, y, 0), to: (x - 0.22, y, 0.66))
+        camera.add(&path, from: (x - 0.22, y, 0.66), to: (x, y, 0.82))
+        camera.add(&path, from: (x, y, 0.82), to: (x + 0.22, y, 0.66))
+        camera.add(&path, from: (x + 0.22, y, 0.66), to: (x + 0.28, y, 0))
+        camera.add(&path, from: (x - 0.28, y, 0), to: (x + 0.28, y, 0))
+        camera.add(&path, from: (x - 0.15, y, 0.72), to: (x + 0.15, y, 0.72))
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
+    }
+
+    private func drawCone(_ context: inout GraphicsContext, camera: RoomCamera,
+                          x: Double, y: Double, color: Color) {
+        var path = Path()
+        camera.add(&path, from: (x - 0.28, y, 0), to: (x, y, 0.7))
+        camera.add(&path, from: (x + 0.28, y, 0), to: (x, y, 0.7))
+        camera.add(&path, from: (x - 0.28, y, 0), to: (x + 0.28, y, 0))
+        camera.add(&path, from: (x - 0.17, y, 0.28), to: (x + 0.17, y, 0.28))
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
     }
 
     /// "STAGE" across the band, but only when the band is big enough on screen
@@ -180,6 +318,22 @@ private struct RoomCamera {
         let depth = max(v.z, Self.near)
         return CGPoint(x: Double(size.width) / 2 + v.x / depth * focal,
                        y: Double(size.height) / 2 - v.y / depth * focal)
+    }
+
+    func point(_ point: (Double, Double, Double)) -> CGPoint? {
+        let cameraPoint = view(point)
+        guard cameraPoint.z >= Self.near else { return nil }
+        return screen(cameraPoint)
+    }
+
+    /// A world-space radius expressed in screen points. Taking the larger of
+    /// the room x/y axes keeps billboard details visible from every heading.
+    func projectedRadius(at point: (Double, Double, Double), metres: Double) -> CGFloat {
+        guard let center = self.point(point) else { return 0 }
+        let x = self.point((point.0 + metres, point.1, point.2))
+        let y = self.point((point.0, point.1 + metres, point.2))
+        return max(2, max(x.map { hypot($0.x - center.x, $0.y - center.y) } ?? 0,
+                          y.map { hypot($0.x - center.x, $0.y - center.y) } ?? 0))
     }
 
     /// Appends one room-frame segment, clipped to the near plane.

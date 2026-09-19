@@ -31,17 +31,6 @@ test('zero detections replace previous overlay and a clear allows the new refere
   run("acceptDetection(z,{clear:true,searchRevision:'next'},600)");
   assert.equal(run("acceptDetection(z,{streamId:'s',seq:2,searchRevision:'next',boxes:[]},700).until"),1600);
 });
-test('phone cover-fit maps portrait, landscape, rotation and synthetic frames', () => {
-  const phone = fs.readFileSync('web/phone.js','utf8');
-  const fn = phone.slice(phone.indexOf('function frameToScreen('),phone.indexOf('\n}', phone.indexOf('function frameToScreen(')) + 2);
-  const ctx = vm.createContext({});
-  vm.runInContext("let FAKE=false;let video={videoWidth:1280,videoHeight:720};const $=()=>video;"+fn,ctx);
-  const point = s => JSON.parse(JSON.stringify(vm.runInContext(s,ctx)));
-  assert.deepEqual(point('frameToScreen(.5,.5,390,844)'),[195,422]);
-  assert.deepEqual(point('frameToScreen(0,0,1280,720)'),[0,0]);
-  assert.deepEqual(point('video={videoWidth:720,videoHeight:1280};frameToScreen(.5,.5,844,390)'),[422,195]);
-  assert.deepEqual(point('FAKE=true;frameToScreen(.25,.75,400,800)'),[100,600]);
-});
 test('score label keeps appearance similarity separate from detection confidence', () => {
   assert.equal(run("scoreLabel({similarity:.73,detectionScore:.91})"),'Similarity 0.73 · confidence 91%');
 });
@@ -123,40 +112,4 @@ test('confirmation button captures exact sighting identity and hides on expiry',
   vm.runInContext('st.search={active:true,searchRevision:"r",sightings:[result]};clock=1600;renderAnalysis()',sandbox);
   assert.equal(vm.runInContext('nodes["#confirmSighting"].hidden',sandbox),true);
   assert.equal(vm.runInContext('nodes["#confirmSighting"].onclick',sandbox),null);
-});
-
-test('phone HUD mirrors accepted detections using the capture clock and clears on expiry', () => {
-  const phone = fs.readFileSync('web/phone.js', 'utf8');
-  const mirror = phone.slice(phone.indexOf('const hud = '), phone.indexOf('\nfunction drawAR('));
-  const sandbox = vm.createContext({});
-  vm.runInContext(source + `
-    let now=100, sent, tick;
-    const performance={now:()=>now};
-    const Date={now:()=>1700000000000};
-    const $=()=>({classList:{contains:()=>false},textContent:''});
-    const setInterval=fn=>tick=fn;
-    const sendJson=msg=>sent=msg;
-    const state={dets:acceptDetection({streamId:'s',revision:null,seq:-1,captures:new Map([[1,0]])},
-      {streamId:'s',seq:1,searchRevision:'r',boxes:[{x:.1,y:.2,w:.3,h:.4}]},now)};
-  ` + mirror + 'hud.on=true;tick();', sandbox);
-  assert.equal(vm.runInContext('sent.dets?.length', sandbox), 1);
-  vm.runInContext('now=1501;tick()', sandbox);
-  assert.equal(vm.runInContext('sent.dets', sandbox), null);
-});
-
-test('rehearsal detections retain stream and revision guards and clear with real search', () => {
-  const phone=fs.readFileSync('web/phone.js','utf8');
-  const command=phone.slice(phone.indexOf('function onCommand('),phone.indexOf('// ---------------------------------------------------------------- compass tape'));
-  const sandbox=vm.createContext({});
-  vm.runInContext(source + `
-    const performance={now:()=>100};
-    const state={dets:null,detection:{streamId:'s',revision:null,seq:-1,captures:new Map([[1,0],[2,50]])}};
-    const message={cmd:'rehearsal_detections',streamId:'s',seq:1,searchRevision:'mock',boxes:[{score:.9}]};
-  ` + command, sandbox);
-  vm.runInContext('onCommand(message)',sandbox);
-  assert.equal(vm.runInContext('state.dets?.rehearsal',sandbox),true);
-  vm.runInContext("onCommand({cmd:'detections',clear:true,searchRevision:'real'})",sandbox);
-  assert.equal(vm.runInContext('state.dets',sandbox),null);
-  vm.runInContext('onCommand({...message,seq:2})',sandbox);
-  assert.equal(vm.runInContext('state.dets',sandbox),null);
 });

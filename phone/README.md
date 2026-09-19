@@ -4,9 +4,8 @@ Phones become tracked cameras. Each one reports its 6DoF pose in a shared venue
 frame plus periodic JPEG frames to the orchestrator over WebSocket, and displays
 commands sent back: a full-screen flash, a directional arrow, a sound, a haptic.
 
-**This is the mobile client.** The browser phone client at `../web/phone.js` was
-the prototype; it is a behavioural reference now, not something we ship or extend.
-Operator-facing features belong here, in Swift.
+**This is the mobile client.** Operators join with Beacon; there is no browser
+phone page. Operator-facing features belong here, in Swift.
 
 What this repo does *not* replace: the orchestrator, the operator console, the
 dashboard and the feed wall, which are the team's and still live. Read `CLAUDE.md`
@@ -41,7 +40,7 @@ xcodebuild -downloadPlatform iOS
 ```
 
 ```bash
-xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16
+xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16 com.apple.CoreSimulator.SimRuntime.iOS-26-3
 ```
 
 The first is a one-off; until it is run, every `swift`, `xcrun` and `xcodebuild`
@@ -67,7 +66,7 @@ which is exactly:
 
 ```
 cd Packages/SwarmCore && swift test
-xcodebuild -scheme Beacon -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -scheme Beacon -destination 'platform=iOS Simulator,name=iPhone 16,OS=26.3.1' build
 ```
 
 **Neither proves positioning works.** ARKit does not run in the Simulator, so no

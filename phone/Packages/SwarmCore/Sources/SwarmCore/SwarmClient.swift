@@ -185,6 +185,7 @@ public actor SwarmClient {
     /// only ever hands over a buffer — the same shape as the pose and frame
     /// paths.
     private var voice = VoiceGate()
+    private var directionalSound = DirectionalSoundDetector()
     private var audioSeq: UInt64 = 0
     /// Display width ÷ height, so the mirror can say which part of the frame
     /// the operator actually sees. An iPhone's, until the view reports its own.
@@ -363,11 +364,21 @@ public actor SwarmClient {
     ///   - samples: mono float samples, nominally −1…1.
     ///   - sourceRate: the capture sample rate, e.g. 48000.
     ///   - capturedAt: the tap's own monotonic timestamp, in `uptime`'s domain.
-    public func offerAudio(samples: [Float], sourceRate: Double, capturedAt: Double? = nil) async {
+    public func offerAudio(samples: [Float], sourceRate: Double, capturedAt: Double? = nil,
+                           stereoLeft: [Float]? = nil, stereoRight: [Float]? = nil) async {
         guard configuration.voiceEnabled, !samples.isEmpty else { return }
+        let now = capturedAt ?? dependencies.uptime()
+        let event: DirectionalSoundEvent?
+        if let stereoLeft, let stereoRight {
+            event = directionalSound.offerStereo(left: stereoLeft, right: stereoRight, at: now)
+        } else {
+            event = directionalSound.offerMono(samples, at: now)
+        }
+        if let event {
+            model.hearDirectionalSound(event, heading: model.state.roomPose?.heading, now: now)
+        }
         let (pcm, rms) = VoiceGate.downsample(samples, from: sourceRate)
         guard !pcm.isEmpty else { return }
-        let now = capturedAt ?? dependencies.uptime()
         await emit(voice.offer(pcm, rms: rms, now: now), capturedAt: now)
     }
 
@@ -569,7 +580,12 @@ public actor SwarmClient {
 
     private func flushCues() {
         if let haptic = model.consumeHaptic() { cueContinuation?.yield(.haptic(haptic)) }
-        if let sound = model.consumeSound() { cueContinuation?.yield(.sound(sound)) }
+        if let sound = model.consumeSound() {
+            // Cover the local beep plus its first room reflection. Without this,
+            // a ping can report itself as a loud sound off one edge of the phone.
+            directionalSound.suppress(until: dependencies.uptime() + 0.8)
+            cueContinuation?.yield(.sound(sound))
+        }
     }
 
     // MARK: - Periodic work

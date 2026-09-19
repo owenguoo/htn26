@@ -51,6 +51,42 @@ struct HUDMirrorTests {
         #expect(hud.banner == .init(text: "Turn right 40° →", tone: "warn"))
     }
 
+    @Test func aDirectionalSoundBecomesARoomAnchoredAlert() throws {
+        var model = OverlayModel()
+        model.hearDirectionalSound(.init(relativeBearingDegrees: -90, confidence: 0.8),
+                                   heading: 90, now: 0)
+        var diagnostics = SessionDiagnostics()
+        diagnostics.state = .tracking
+        diagnostics.quality = .normal
+        let portrait = simd_quatf(angle: -.pi / 2, axis: [0, 0, 1])
+        let pose = Pose(position: [0, 1.5, 5],
+                        orientation: simd_quatf(angle: -Float(100 * Double.pi / 180), axis: [0, 1, 0]) * portrait)
+        model.update(pose: pose, alignment: .identity, source: .marker, intrinsics: Sample.intrinsics(),
+                     diagnostics: diagnostics, transport: .init(), transportState: .connected, now: 0.5)
+
+        let hud = mirror(model.state)
+        let sound = try #require(hud.compass?.markers.first { $0.label == "SOUND" })
+        #expect(isClose(sound.off, -100, within: 0.1),
+                "the event stays at room heading 0 while the phone turns to 100")
+        #expect(sound.color == HUDMirror.soundColor)
+        #expect(hud.banner == .init(text: "Sound heard · left", tone: "alert"))
+        #expect(hud.soundEdge?.side == "left")
+        let onWire = DeliveredMessage(try HubOutbound.hud(hud).encoded())
+        #expect((onWire.json["soundEdge"] as? [String: Any])?["side"] as? String == "left")
+    }
+
+    @Test func aDirectionalSoundExpires() {
+        var model = OverlayModel()
+        model.hearDirectionalSound(.init(relativeBearingDegrees: 70, confidence: 0.7),
+                                   heading: 10, now: 0)
+        var diagnostics = SessionDiagnostics()
+        diagnostics.state = .tracking
+        diagnostics.quality = .normal
+        model.update(pose: nil, alignment: nil, source: .none, intrinsics: nil,
+                     diagnostics: diagnostics, transport: .init(), transportState: .connected, now: 2.1)
+        #expect(model.state.directionalSound == nil)
+    }
+
     @Test func tonesMatchTheConsolesThreePills() {
         let ok = overlay { $0.apply(.guideTurn(sector: "A1", delta: 2, onTarget: true, text: "Scanning A1…",
                                                kind: "search", distance: nil), heading: 90, now: 0) }

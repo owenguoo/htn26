@@ -402,6 +402,29 @@ public struct SoundCue: Sendable, Equatable {
     }
 }
 
+/// A loud, short sound fixed to the room direction where it was heard.
+public struct HeardSoundCue: Sendable, Equatable {
+    /// Absolute room heading when the phone was localized. Nil leaves the cue
+    /// screen-relative, which is still useful before calibration.
+    public var roomBearingDegrees: Double?
+    public var fallbackRelativeBearingDegrees: Double
+    public var confidence: Double
+    public var until: Double
+
+    public init(roomBearingDegrees: Double?, fallbackRelativeBearingDegrees: Double,
+                confidence: Double, until: Double) {
+        self.roomBearingDegrees = roomBearingDegrees
+        self.fallbackRelativeBearingDegrees = fallbackRelativeBearingDegrees
+        self.confidence = confidence
+        self.until = until
+    }
+
+    public func offset(from heading: Double?) -> Double {
+        guard let roomBearingDegrees, let heading else { return fallbackRelativeBearingDegrees }
+        return RoomMath.signedDiff(roomBearingDegrees, heading)
+    }
+}
+
 /// Everything the SwiftUI overlay renders, as plain data.
 public struct OverlayState: Sendable, Equatable {
     public var pill = StatusPill()
@@ -436,6 +459,7 @@ public struct OverlayState: Sendable, Equatable {
     /// Consumed once and cleared: a haptic is an event, not a state.
     public var pendingHaptic: HapticCue?
     public var pendingSound: SoundCue?
+    public var directionalSound: HeardSoundCue?
 
     public init() {}
 }
@@ -492,6 +516,19 @@ public struct OverlayModel: Sendable {
     public static let turnGuideLifetime: Double = 3
 
     public init() {}
+
+    /// Adds a local microphone event without putting audio on the wire. The
+    /// room bearing makes the cue remain spatially stable as the phone turns.
+    public mutating func hearDirectionalSound(_ event: DirectionalSoundEvent,
+                                              heading: Double?, now: Double) {
+        let relative = max(-90, min(90, event.relativeBearingDegrees))
+        state.directionalSound = HeardSoundCue(
+            roomBearingDegrees: heading.map { RoomMath.wrap360($0 + relative) },
+            fallbackRelativeBearingDegrees: relative,
+            confidence: max(0, min(1, event.confidence)),
+            until: now + 2
+        )
+    }
 
     // MARK: - Hub messages
 
@@ -635,6 +672,7 @@ public struct OverlayModel: Sendable {
         if let flash = state.flash, now > flash.until { state.flash = nil }
         if let toast = state.toast, now > toast.until { state.toast = nil }
         if let detections = state.detections, now > detections.until { state.detections = nil }
+        if let sound = state.directionalSound, now > sound.until { state.directionalSound = nil }
         state.pings.removeAll { now > $0.until }
 
         let usablePose = diagnostics.isStale ? nil : pose

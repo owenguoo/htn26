@@ -1,5 +1,6 @@
 import { frameKey, freshSighting, scoreLabel } from '/web/inference-ui.js';
 import { makeView, drawRoom, drawCone } from '/web/room.js';
+import { REHEARSAL_SCENARIOS, rehearsalAnchor, rehearsalPosition } from '/web/rehearsal-scenarios.js';
 
 const $ = (s) => document.querySelector(s);
 const PHASES = [
@@ -955,6 +956,36 @@ function clearReferencePreview() {
   $('#personChoices').replaceChildren();
   $('#referenceFile').value = '';
 }
+
+const rehearsalScenario = $('#rehearsalScenario');
+for (const scenario of REHEARSAL_SCENARIOS) {
+  const option = document.createElement('option');
+  option.value = scenario.id;
+  option.textContent = `${scenario.label} · ${scenario.distance} m`;
+  rehearsalScenario.append(option);
+}
+
+$('#rehearsalMode').addEventListener('click', () => searchAction(async () => {
+  const result = await searchApi('/api/search/rehearsal', {method: 'POST'});
+  if (st) st.search = result;
+  clearReferencePreview();
+  $('#searchMessage').textContent = 'Rehearsal mode active. Place a mock candidate to rehearse.';
+}));
+
+$('#runScenario').addEventListener('click', () => searchAction(async () => {
+  const anchor = rehearsalAnchor(phones.values());
+  if (!anchor) throw new Error('Place and calibrate a connected phone before running a direction scenario.');
+  const placement = rehearsalPosition(room, anchor, rehearsalScenario.value);
+  if (!placement) throw new Error(`Phone ${anchor.index} is too close to the room edge for that scenario.`);
+
+  const result = await searchApi('/api/search/rehearsal', {method: 'POST'});
+  if (st) st.search = result;
+  clearReferencePreview();
+  send({type: 'target', x: placement.x, y: placement.y, responders: respondersPref});
+  $('#searchMessage').textContent = `${placement.scenario.label} scenario active — candidate ${placement.distance.toFixed(1)} m from Phone ${anchor.index}. Ambient people and props remain in the iOS rehearsal scene.`;
+}));
+
+
 $('#clearReference').addEventListener('click', () => searchAction(async () => {
   await searchApi('/api/search/reference', {method: 'DELETE'});
   clearReferencePreview();
