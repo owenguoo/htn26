@@ -62,7 +62,11 @@ struct ReplayIntegrationTests {
             #expect(buffered <= 1, "the buffer grew to \(buffered) at pose \(index)")
         }
         await channel.grant(50)
-        await waitUntil("drained") { await transport.bufferedMessageCount() == 0 }
+        await waitUntil("drained and settled") {
+            let buffered = await transport.bufferedMessageCount()
+            let inFlight = await transport.currentStats().inFlight
+            return buffered == 0 && inFlight == 0
+        }
 
         let stats = await transport.currentStats()
         #expect(stats.dropped > poses.count / 2, "only \(stats.dropped) of \(poses.count) dropped")
@@ -117,7 +121,11 @@ struct ReplayIntegrationTests {
             await Task.yield()
         }
         await channel.grant(100)
-        await waitUntil("drained") { await transport.bufferedMessageCount() == 0 }
+        await waitUntil("drained and settled") {
+            let buffered = await transport.bufferedMessageCount()
+            let inFlight = await transport.currentStats().inFlight
+            return buffered == 0 && inFlight == 0
+        }
 
         let delivered = await channel.deliveredEnvelopes()
         let poseCount = delivered.filter { if case .pose = $0.message { true } else { false } }.count
@@ -127,8 +135,13 @@ struct ReplayIntegrationTests {
         #expect(poseCount > frameCount,
                 "poses (\(poseCount)) did not outnumber frames (\(frameCount)) — the round-robin is favouring the wrong traffic")
 
+        // The socket is granted a permit per message here, so it keeps up and
+        // there is nothing to drop. What matters is that nothing was lost
+        // silently: every offered message is either sent or counted.
         let stats = await transport.currentStats()
-        #expect(stats.droppedByType[.pose] ?? 0 > 0 || stats.droppedByType[.frame] ?? 0 > 0)
+        let offered = events.poses.count + events.frames.count
+        #expect(stats.sent + stats.dropped + stats.sendFailures == offered)
+        #expect(stats.sendFailures == 0)
         await transport.stop()
     }
 

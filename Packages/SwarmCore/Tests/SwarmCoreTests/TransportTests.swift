@@ -52,7 +52,11 @@ struct TransportTests {
             await channel.grant(1)
             try? await Task.sleep(nanoseconds: 2_000_000)
         }
-        await waitUntil("socket drained") { await transport.bufferedMessageCount() == 0 }
+        await waitUntil("socket drained and settled") {
+            let buffered = await transport.bufferedMessageCount()
+            let inFlight = await transport.currentStats().inFlight
+            return buffered == 0 && inFlight == 0
+        }
 
         let delivered = await channel.deliveredEnvelopes()
         let deliveredSeqs: [UInt64] = delivered.compactMap {
@@ -106,7 +110,11 @@ struct TransportTests {
             await channel.grant(1)
             try? await Task.sleep(nanoseconds: 1_000_000)
         }
-        await waitUntil("drained") { await transport.bufferedMessageCount() == 0 }
+        await waitUntil("drained and settled") {
+            let buffered = await transport.bufferedMessageCount()
+            let inFlight = await transport.currentStats().inFlight
+            return buffered == 0 && inFlight == 0
+        }
 
         let delivered = await channel.deliveredEnvelopes()
         let pingIDs: [UInt64] = delivered.compactMap {
