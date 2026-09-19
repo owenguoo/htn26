@@ -28,9 +28,14 @@ MAX_STEPS = 6  # model → tools → model rounds per command
 THINK_EVERY_S = 2          # start a review this soon after the previous one started (reviews take ~2 s)
 IDLE_RECHECK_S = 20        # when nothing changed and the last review did nothing, re-check this rarely
 STEERING = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "cancel_look")
-# tools the autonomy layer may use: steering phones only
-AUTONOMY_TOOLS = ("send_phones_to_sector", "look_at", "look_direction", "move_to", "cancel_look",
-                  "message_phones", "ping", "set_planner", "set_responders", "show_feed")
+# Autonomy works a level above the phones: it turns evidence (speech, vision, reports) into
+# probability, and the Bayesian planner decides who looks where. It still sends people to someone
+# who asked for help (that's rescue, not search), messages, pings and pulls up feeds.
+AUTONOMY_TOOLS = ("adjust_likelihood_at", "adjust_likelihood_sectors", "move_to", "message_phones", "ping",
+                  "show_feed", "set_responders")
+LIKELIHOOD = {"much more likely": 5.0, "more likely": 2.5, "less likely": 0.4, "ruled out": 0.05}
+_likelihood = {"type": "string", "enum": list(LIKELIHOOD),
+               "description": "How the evidence changes the chance the candidate is there."}
 
 SYSTEM = """You are Mission Control for Swarm Sight, a live search run by an audience whose phone cameras
 are coordinated from a central console. The operator gives you short commands during a live show.
@@ -61,6 +66,10 @@ point of view. Messages to phones should be short, friendly, and in plain words 
 
 "camera sees" lines are what a vision model saw in each phone's camera a moment ago. Use them to answer
 questions about the room ("who can see the door?") and to pick phones (e.g. one already facing an area).
+
+Evidence about where the candidate is ("last seen near the stage", "we already checked the back") goes into
+the probability map with ONE adjust_likelihood_at or adjust_likelihood_sectors call per piece of evidence;
+the search planner then steers phones by itself.
 
 After acting, reply with one short sentence (under 20 words) saying what you did."""
 
@@ -119,6 +128,17 @@ TOOLS = [
     _tool("set_looking_for", "Set the description of what searchers are looking for (shown on every phone). "
           "Empty string clears it.", {"text": {"type": "string"}}),
     _tool("reset_coverage", "Mark the whole room as unsearched again.", {}),
+    _tool("adjust_likelihood_at", "Change how likely the candidate is to be around a spot, from evidence that "
+          "isn't a camera look: a report, where they were last seen, what someone said or a vision note. The "
+          "probability map changes and the search planner sends phones accordingly.",
+          {"x": {"type": "number"}, "y": {"type": "number"},
+           "radius": {"type": "number", "description": "Meters the evidence covers, 1-6."},
+           "change": _likelihood,
+           "reason": {"type": "string", "description": "The evidence, under 10 words."}}),
+    _tool("adjust_likelihood_sectors", "Change how likely the candidate is to be in whole sectors, e.g. an "
+          "area staff already checked (less likely / ruled out) or where they usually sit (more likely).",
+          {"sectors": {"type": "array", "items": {"type": "string"}}, "change": _likelihood,
+           "reason": {"type": "string", "description": "The evidence, under 10 words."}}),
     _tool("show_feed", "Pull up one phone's live camera feed, large, on the operator's console, with a reason. "
           "For things a human must see now (someone needing help, a likely find, a hazard).",
           {"phone": {"type": "integer"}, "reason": {"type": "string", "description": "Under 8 words."}}),
@@ -129,6 +149,13 @@ AUTONOMY_SYSTEM = """You are the autonomy layer of Mission Control for Swarm Sig
 audience whose phone cameras are coordinated centrally. Every few seconds you review the current state and
 signals and recommend actions that clearly improve the search or fix a problem.
 
+How the search works: a probability map says where the candidate probably is. A Bayesian planner
+continuously sends each phone to look wherever it buys the most probability per second (and asks people to
+walk when that's worth it). Camera looks and detections update the map automatically. Your job is one level
+up: turn evidence the cameras can't turn into probability yourself. What people say ("I think I saw someone
+by the door", "she was last seen near the stage", "we already checked the back"), what vision notes describe,
+and reports become adjust_likelihood_at / adjust_likelihood_sectors, and the planner does the steering.
+
 Rules:
 - Take at most ONE action per review: return at most one recommendation with exactly one action, and only
   when it clearly helps. You review again every couple of seconds, so do the single most useful thing now.
@@ -137,33 +164,33 @@ Rules:
 - Titles are short imperative commands a human reads at a glance (under 8 words), e.g.
   "Send #7 to walk to back-right".
 - Never repeat something in RECENT RECOMMENDATIONS, whatever its status.
-- Only give steering orders (move, look, sector, cancel) to phones listed as available. Busy phones are
-  still carrying out a task; leave them alone until it's done. Always name the phones explicitly.
+- Don't steer phones to search: the planner does that better. Use move_to only to send people to someone
+  who asked for help, and only phones listed as available. Always name the phones explicitly.
 - Never "set" something that is already in that state (planner already on, responders already N, ...).
 - Prefer doing nothing over low-value moves. Skip generic encouragement or "wait" messages.
-- send_phones_to_sector and look_at only help for areas within a phone's camera reach (about 5 m from where
-  it stands). For sectors nobody can see from where they stand, use move_to to walk a nearby phone there.
+- Evidence → likelihood: a sighting report or "over there" from someone → "more likely" (or "much more
+  likely" if specific) around where they were facing, radius 2-3 m. "Last seen at X" → "much more likely"
+  near X. "Already checked" → "less likely" (or "ruled out" if certain) for that area. Never adjust the same
+  evidence twice.
 - You do not know where the candidate is. Never guess its location.
 - React to SPEECH. If someone asks for help ("I need help", "over here", "can someone come"), send the
   1-2 nearest available phones to them with move_to their position and message the person that help is
-  coming. If someone reports seeing something ("I think I see someone"), treat their facing direction as a
-  lead: send the nearest available phone to look_at that area. Ignore chatter that isn't a request or report,
-  and never act on the same thing someone said twice.
+  coming. If someone reports seeing something ("I think I see someone"), make the area they're facing more
+  likely (a few meters in front of them). Ignore chatter that isn't a request or report, and never act on
+  the same thing someone said twice.
 - Each phone's "camera sees" line is what a vision model saw in its camera a moment ago: use it to judge
   what phones are actually looking at (e.g. a phone that sees only a wall or the ceiling isn't searching).
-- VISION lines are what a vision model saw in phones' camera frames a few seconds ago. Treat "sees the
-  target" like a possible sighting, and URGENT like a call for help: send the nearest available phone.
+- VISION lines are what a vision model saw in phones' camera frames a few seconds ago. "Sees the target"
+  already feeds the map; URGENT is like a call for help: send the nearest available phone.
   Use show_feed when the operator should look at a camera right now (someone collapsed or calling for
   help, a likely find, a hazard); never for ordinary views, and never twice for the same thing.
-- If there is a POSSIBLE SIGHTING, double-checking it comes first: send the nearest available phone that
-  hasn't seen it (look_at if it's within 5 m, move_to otherwise). A second look confirms or rules it out.
-- Otherwise go after the most likely sectors (highest share of probability), not just unsearched ones.
+- POSSIBLE SIGHTINGS already raise the map there, so the planner sends a second look by itself. Only act
+  if something else suggests where to look.
 - Once the candidate is FOUND it is confirmed: never send anyone to check or confirm it again. Only
   help the find team if a responder is stuck; otherwise do nothing.
-- Typical good moves: walk a nearby idle phone to a sector nobody can reach; tell a phone pointing at the
-  floor to hold it up; point idle phones at unsearched areas; ping an unreached area; after a find, nudge
-  late responders.
-- Don't micromanage phones the planner is already handling well.
+- Typical good moves: turn a report or remark into likelihood; tell a phone pointing at the floor to hold it
+  up; send help to someone who asked; pull up a feed the operator must see; after a find, nudge late
+  responders.
 - severity: "critical" for problems that block the search, "warn" for inefficiencies, "info" otherwise.
 - Each action is a tool name plus its arguments as a JSON object string, e.g.
   {"name": "move_to", "arguments": "{\\"phones\\": [7], \\"x\\": 8.5, \\"y\\": 12.5, \\"label\\": \\"Back right\\"}"}.
@@ -672,6 +699,24 @@ class MissionControl:
         if name == "set_looking_for":
             hub.set_looking_for(a["text"])
             return "looking-for updated"
+        if name in ("adjust_likelihood_at", "adjust_likelihood_sectors"):
+            factor = LIKELIHOOD.get(a["change"])
+            if factor is None:
+                return f"unknown change {a['change']}"
+            if name == "adjust_likelihood_at":
+                x = max(-self.room["width"] / 2, min(self.room["width"] / 2, float(a["x"])))
+                y = max(0.0, min(self.room["depth"], float(a["y"])))
+                r = max(1.0, min(6.0, float(a["radius"])))
+                hub.coverage.adjust(factor, x, y, r)
+                where = f"({x:.1f}, {y:.1f}) ±{r:g} m"
+            else:
+                names = [s.upper() for s in a["sectors"] if hub.planner.is_sector(s.upper())]
+                if not names:
+                    return "no valid sectors"
+                hub.coverage.adjust(factor, cells=[i for s in names for i, _, _ in hub.planner.sector_cells[s]])
+                where = ", ".join(names)
+            hub.planner.note(f"🧭 {a['change']}: {where} · {a['reason']}")
+            return f"{a['change']} at {where}"
         if name == "reset_coverage":
             hub.coverage.reset()
             hub.sightings.reset()

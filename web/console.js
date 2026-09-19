@@ -249,7 +249,8 @@ function renderViewer() {
   $('#vDevice').textContent = p.device || '';
   $('#vBadges').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
   const pose = p.pose;
-  $('#vTask').textContent = p.task || (st.planner?.assignments?.[p.id] ? `searching ${st.planner.assignments[p.id].sector}` : 'idle');
+  const job = st.planner?.assignments?.[p.id];
+  $('#vTask').textContent = p.task || (job ? `searching ${job.sector}${job.gain ? ` · ${(job.gain * 100).toFixed(1)}% find chance` : ''}` : 'idle');
   $('#vPos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : 'not placed';
   $('#vHd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
   $('#vPitch').textContent = p.pitch != null ? `${Math.round(p.pitch)}°` : '–';
