@@ -123,6 +123,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   });
 
   function fitView(top = false) {
+    resize(); // use the current panel aspect, including immediately after changing capture layout
     const bounds = scanObj ? new THREE.Box3().setFromObject(scanObj) : null;
     if (!bounds || bounds.isEmpty()) {
       camera.position.set(0, 13, room.depth + 11);

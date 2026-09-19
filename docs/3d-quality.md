@@ -50,6 +50,8 @@ For a controlled geometry comparison, `gpu/quality/cache_baseline.py` takes a **
 
 Place the baseline GLB/JSON at `web/models/quality/baseline.{glb,json}` and the chosen surface at `surface.{glb,json}` to populate the comparison page. Both sides use the same viewer, so it compares geometry/color rather than exaggerating the old viewer's shading problem.
 
+To keep a new capture separate, use `--output web/models/quality/<capture-name>`, copy its `batch-N.glb` and `batch-N.json` to `surface.glb` and `surface.json` in that same folder, then open `/web/quality.html?scan=<capture-name>`. This shows the new capture on its own and preserves the original comparison and dashboard scan.
+
 ## Verification
 
 Measured on Owen's A100 80GB with the 16 supplied room photos (September 19, 2026):
