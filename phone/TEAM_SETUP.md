@@ -55,7 +55,7 @@ It prints three things worth keeping:
 Operator code: <code>
 
   Swarm Sight hub
-  Dashboard:   http://localhost:8000/dashboard
+  Console:     http://localhost:8000/console
   Phones join: http://192.168.x.x:8000/
 ```
 
@@ -72,7 +72,7 @@ context for `getUserMedia`. The native app uses ARKit and talks plain
 unless someone is joining from Safari.
 
 **4. Prove you are reachable before anyone builds anything.** On a phone, open
-Safari and go to `http://<the-lan-ip-it-printed>:8000/dashboard`. If that page
+Safari and go to `http://<the-lan-ip-it-printed>:8000/console`. If that page
 loads, the network is fine. If it does not, fix that now — see troubleshooting.
 
 **5. Keep the laptop awake.**
@@ -174,7 +174,7 @@ does. Nothing is lost; it takes a couple of minutes once the toolchain is warm.
 
 ## Part 3 — join the hub
 
-**1.** The host opens `http://localhost:8000/dashboard` — it shows a QR code and
+**1.** The host opens `http://localhost:8000/console` and clicks **Join QR** — it shows a QR code and
 the join URL.
 
 **2.** Open SwarmSight on your phone. It starts on the join screen. Scan the QR.
@@ -186,8 +186,8 @@ the join URL.
 blocks the connection silently, and the only way back is Settings → SwarmSight →
 Local Network.
 
-**5.** You should appear on the host's dashboard within a second or two. If the
-dashboard still says "Waiting for phones", go to troubleshooting.
+**5.** You should appear on the host's console within a second or two. If the
+console still says "Waiting for phones", go to troubleshooting.
 
 You never type the hub address into a file — the QR carries it. The hub's own
 LAN IP changes with the network, so rescan after switching Wi-Fi.
@@ -197,7 +197,7 @@ LAN IP changes with the network, so rescan after switching Wi-Fi.
 **Phone can't reach the hub, but both are on the same Wi-Fi.** Almost always
 client isolation: conference, campus and guest networks routinely block
 device-to-device traffic while giving everyone internet. Confirm by opening
-`http://<lan-ip>:8000/dashboard` in the phone's Safari. Two ways out:
+`http://<lan-ip>:8000/console` in the phone's Safari. Two ways out:
 
 - The host turns on a personal hotspot and everyone joins that. Fastest fix, and
   it keeps latency low because traffic stays local.
@@ -245,4 +245,4 @@ Everyone:
 cd phone/mobile && pnpm install && pnpm prebuild && npx expo run:ios --configuration Release --device
 ```
 
-Then scan the QR on the host's dashboard.
+Then scan the QR from the host's console (**Join QR**).

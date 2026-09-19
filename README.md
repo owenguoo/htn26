@@ -1,17 +1,17 @@
 # Swarm Sight
 
-Audience phones stream their cameras into one hub. A command-center dashboard shows every
-live feed and a floor plan with each phone's position and view cone.
+Audience phones stream their cameras into one hub. The operator console shows every live
+feed and a floor plan with each phone's position and view cone.
 
 ## Run
 
 ```bash
 uv sync
 ./scripts/make-cert.sh          # once: self-signed HTTPS so iPhones allow the camera on your Wi-Fi
-uv run python -m swarm.hub      # dashboard: http://localhost:8000/dashboard
+uv run python -m swarm.hub      # console: http://localhost:8000/console
 ```
 
-Phones: scan the QR code on the dashboard (or open `https://<laptop-ip>:8443/`), tap through the
+Phones: scan the QR code from the console's **Join QR** button (or open `https://<laptop-ip>:8443/`), tap through the
 certificate warning (Show Details → visit this website), tap **Join with camera**, allow camera +
 motion, tap your spot on the map, then point at the stage and tap **calibrate**.
 
@@ -27,7 +27,7 @@ cloudflared tunnel --url http://localhost:8000
 uv run python -m swarm.hub --public-url https://<printed>.trycloudflare.com
 ```
 
-You can also paste the URL into the join box on the dashboard; the QR code updates.
+The console's join QR code then points at the tunnel.
 
 ## Phone page options
 

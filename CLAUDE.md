@@ -19,6 +19,5 @@ the hub sends and expects, and to match wording, thresholds and timings. Do not
 extend it, and do not treat a gap in the Swift client as covered because the web
 client has it.
 
-`web/console.js` and `web/dashboard.js` are a different matter — those are the
-operator console and dashboard, they are still live, and `console.js`'s `drawHud`
-remains the geometry the phone HUD mirrors.
+`web/console.js` is a different matter — it is the operator console, it is still
+live, and its `drawHud` remains the geometry the phone HUD mirrors.

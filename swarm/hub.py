@@ -714,7 +714,7 @@ class Hub:
         self.boosted = wanted
 
     async def emit(self, event: dict) -> None:
-        """Push an event (e.g. Mission Control progress) to every open console/dashboard."""
+        """Push an event (e.g. Mission Control progress) to every open console."""
         await asyncio.gather(*(c.send_json(event) for c in list(self.consoles)), return_exceptions=True)
 
     def active_pings(self, now: float) -> list[dict]:
@@ -811,7 +811,7 @@ install_routes(app, hub, auth)
 async def no_stale_pages(request, call_next):
     """Pages and scripts change often during development; make browsers (and phones) revalidate every time."""
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path in ("/console", "/dashboard") or request.url.path.startswith("/web/"):
+    if request.url.path == "/" or request.url.path == "/console" or request.url.path.startswith("/web/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -1059,11 +1059,6 @@ def phone_page() -> HTMLResponse:
     return _page("phone.html")
 
 
-@app.get("/dashboard")
-def dashboard_page() -> HTMLResponse:
-    return _page("dashboard.html")
-
-
 @app.get("/console")
 def console_page() -> HTMLResponse:
     return _page("console.html")
@@ -1114,7 +1109,7 @@ def main() -> None:
                                       lifespan="off", ssl_certfile=str(cert), ssl_keyfile=str(key)))
 
     print("\n  Swarm Sight hub")
-    print(f"  Dashboard:   http://localhost:{args.port}/dashboard")
+    print(f"  Console:     http://localhost:{args.port}/console")
     print(f"  Phones join: {hub.join_url}")
     if not has_tls and not args.public_url:
         print("  ! iPhone cameras need HTTPS: use a tunnel (--public-url) or run scripts/make-cert.sh")

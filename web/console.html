@@ -255,6 +255,14 @@
       .metric:nth-child(n+4) { border-top: 1px solid var(--line); }
       .phases { flex-wrap: wrap; }
     }
+    .joinWrap { position: relative; }
+    .joinPop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; display: none; width: 260px; padding: 14px;
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      text-align: center; }
+    .joinPop.on { display: block; }
+    .joinPop img { width: 100%; background: #fff; border-radius: 8px; padding: 10px; }
+    .joinPop .mono { font-size: 12px; margin-top: 10px; word-break: break-all; }
+    .joinPop .hint { margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -268,7 +276,9 @@
       <span class="muted">Console</span>
       <span class="conn"><span class="dot" id="connDot"></span><span id="connText">Connecting</span></span>
       <span class="spacer"></span>
-      <a class="btn" href="/dashboard" target="_blank" rel="noopener">Open projector ↗</a>
+      <div class="joinWrap"><button class="btn" id="joinBtn">Join QR</button>
+        <div class="joinPop" id="joinPop"><img id="joinQr" alt="Scan to join"><div class="mono" id="joinUrl"></div>
+          <div class="hint">Phones scan this to join</div></div></div>
     </div>
   </header>
 

@@ -42,6 +42,8 @@ function onJson(msg) {
   if (msg.type === 'hello') {
     room = msg.room;
     $('#roomName').textContent = `${room.width} × ${room.depth} m`;
+    $('#joinQr').src = `/api/qr.svg?data=${encodeURIComponent(msg.joinUrl)}`;
+    $('#joinUrl').textContent = msg.joinUrl;
     resizeMap();
   } else if (msg.type === 'mission') {
     onMission(msg);
@@ -636,6 +638,9 @@ function setResponders(d) {
   $('#respN').textContent = respondersPref;
   if (st?.target) send({ type: 'target', responders: respondersPref });
 }
+
+$('#joinBtn').addEventListener('click', (e) => { e.stopPropagation(); $('#joinPop').classList.toggle('on'); });
+document.addEventListener('click', (e) => { if (!e.target.closest('.joinWrap')) $('#joinPop').classList.remove('on'); });
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && e.target === $('#mcInput')) { e.target.blur(); return; }
