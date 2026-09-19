@@ -1,6 +1,5 @@
 import { acceptDetection, scoreLabel } from '/web/inference-ui.js';
 import { loadRoom, makeView, drawRoom, drawCone } from '/web/room.js';
-import { startSlam, cameraForward, slamDebug } from '/web/slam.js';
 
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
@@ -9,10 +8,6 @@ const WIDTH = Number(params.get('w')) || 480;         // frame width in px
 const QUALITY = Number(params.get('q')) || 0.5;       // JPEG quality
 let lastScanCapture = 0, captureIsScan = false, encodingFrame = false;
 const FAKE = params.has('fake');                     // no camera: send a generated test pattern
-const SLAM = params.has('slam') && !FAKE;             // 8th Wall world tracking for position + heading
-const SLAM_SCALE = params.get('slam') === 'responsive' ? 'responsive' : 'absolute';
-const SLAM_POS_SMOOTHING = 0.08;     // per tracker update (~30/s): ~0.4 s to settle
-const SLAM_HEADING_SMOOTHING = 0.25; // heading reacts faster than position
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -33,20 +28,12 @@ const state = {
   detection: {streamId: null, revision: null, seq: -1, captures: new Map()},
   dets: null,   // detection boxes to draw: {boxes, until}
   audio: null,
-  // SLAM mode: raw = latest tracker pose; origin = pose at calibration (your spot, facing the stage)
-  slam: { raw: null, origin: null, status: 'starting', x: null, y: null, heading: null, lastSent: 0 },
-  captureDue: false,
   gps: null, gpsError: null,
   seq: 0, sent: 0, skipped: 0,
   room: null, stream: null,
 };
 store.set('swarm.phoneId', state.phoneId);
 $('#name').value = state.name;
-if (SLAM) {
-  $('#modeLink').href = '/';
-  $('#modeLink').textContent = '← Standard mode';
-}
-
 function randomId() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return 'p-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -70,13 +57,13 @@ $('#joinBtn').addEventListener('click', async () => {
   const micPerm = navigator.mediaDevices?.getUserMedia({
     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false,
   }).catch(() => null) ?? Promise.resolve(null);
-  const camPerm = FAKE || SLAM ? Promise.resolve(null) : navigator.mediaDevices?.getUserMedia({
+  const camPerm = FAKE ? Promise.resolve(null) : navigator.mediaDevices?.getUserMedia({
     video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: false,
   });
 
   try {
-    if (!FAKE && !SLAM && !camPerm) throw new Error('Camera API unavailable. This page must be opened over HTTPS.');
+    if (!FAKE && !camPerm) throw new Error('Camera API unavailable. This page must be opened over HTTPS.');
     const [ori, stream, mic] = await Promise.all([oriPerm, camPerm, micPerm]);
     state.mic = mic;
     if (ori !== 'granted') console.warn('orientation permission:', ori);
@@ -97,16 +84,6 @@ async function startLive() {
   if (FAKE) {
     $('#video').style.display = 'none';
     $('#fakeCanvas').style.display = 'block';
-  } else if (SLAM) {
-    $('#video').style.display = 'none';
-    $('#xrCanvas').style.display = 'block';
-    await startSlam($('#xrCanvas'), {
-      scale: SLAM_SCALE,
-      onUpdate: onSlamUpdate,
-      onRender: onSlamRender,
-      onStatus: (s) => { if (s === 'failed') state.slam.status = 'camera failed'; },
-      onError: (e) => { state.slam.status = 'error'; console.error('8th Wall:', e); },
-    });
   } else {
     const video = $('#video');
     video.srcObject = state.stream;
@@ -122,7 +99,6 @@ async function startLive() {
   connect();
   setCaptureRate(FPS);
   setInterval(sendOrientation, 100);
-  if (SLAM) setInterval(sendSlamDebug, 2000);
   requestAnimationFrame(tickUi);
 }
 
@@ -201,7 +177,6 @@ function captureFrame() {
   if (encodingFrame || ws.bufferedAmount > 256 * 1024) { state.skipped++; return; } // latest wins: drop, don't queue
   captureIsScan = !!state.world?.scanning && Date.now() - lastScanCapture >= 1000;
 
-  if (SLAM) { state.captureDue = true; return; } // grabbed in onSlamRender
   if (FAKE) {
     cap.width = WIDTH; cap.height = Math.round(WIDTH * 0.75);
     drawFakeFrame(capCtx, cap.width, cap.height);
@@ -326,7 +301,6 @@ function absoluteBearing() {
 }
 
 function currentHeading() {
-  if (SLAM && state.slam.heading !== null && state.slam.status === 'NORMAL') return state.slam.heading;
   if (state.yaw === null) return null;
   return (state.yaw - (state.calYaw ?? 0) + 360) % 360;
 }
@@ -342,7 +316,6 @@ $('#calBtn').addEventListener('click', () => {
     $('#calBtn').textContent = 'No motion sensor data';
     return;
   }
-  if (SLAM && !calibrateSlam()) return;
   state.calYaw = state.yaw;
   store.set('swarm.calYaw', String(state.calYaw));
   $('#calBtn').textContent = 'Calibrated ✓ (tap to redo)';
@@ -350,82 +323,6 @@ $('#calBtn').addEventListener('click', () => {
 });
 if (state.calYaw !== null) $('#calBtn').textContent = 'Calibrated ✓ (tap to redo)';
 else $('#calBtn').classList.add('hot');
-
-// ---------------------------------------------------------------- slam (8th Wall)
-// Calibration ties the tracker to the room: the pose at that moment is "my tapped spot,
-// facing the stage". After that, movement in tracker meters becomes movement in room meters.
-function calibrateSlam() {
-  const raw = state.slam.raw;
-  if (!raw || state.slam.status !== 'NORMAL') {
-    $('#calBtn').textContent = 'Tracking not ready: move the phone slowly';
-    return false;
-  }
-  if (!state.seat) {
-    $('#calBtn').textContent = 'Tap your spot on the map first';
-    return false;
-  }
-  const [fx, fz] = raw.flat;
-  state.slam.origin = { px: raw.px, pz: raw.pz, f: [fx, fz], r: [-fz, fx], seat: { ...state.seat } };
-  state.slam.x = state.slam.y = state.slam.heading = null; // restart smoothing from the new anchor
-  return true;
-}
-
-function onSlamUpdate(reality) {
-  const s = state.slam;
-  s.status = reality.trackingStatus || s.status;
-  if (!reality.position || !reality.rotation) return;
-  const f = cameraForward(reality.rotation);
-  const len = Math.hypot(f[0], f[2]);
-  if (len < 1e-3) return; // pointing straight up/down: no meaningful heading
-  s.raw = { px: reality.position.x, pz: reality.position.z, flat: [f[0] / len, f[2] / len] };
-  const o = s.origin;
-  if (!o) return;
-  const dx = s.raw.px - o.px, dz = s.raw.pz - o.pz;
-  const forward = dx * o.f[0] + dz * o.f[1];
-  const right = dx * o.r[0] + dz * o.r[1];
-  const [ux, uz] = s.raw.flat;
-  const heading = ((Math.atan2(ux * o.r[0] + uz * o.r[1], ux * o.f[0] + uz * o.f[1]) * 180) / Math.PI + 360) % 360;
-  const x = o.seat.x + right;
-  const y = o.seat.y - forward; // toward the stage is -y on the floor plan
-  // Smooth out hand shake: blend each tracker update into the running pose.
-  if (s.x === null) {
-    s.x = x; s.y = y; s.heading = heading;
-  } else {
-    s.x += SLAM_POS_SMOOTHING * (x - s.x);
-    s.y += SLAM_POS_SMOOTHING * (y - s.y);
-    s.heading = (s.heading + SLAM_HEADING_SMOOTHING * signedDiff(heading, s.heading) + 360) % 360;
-  }
-  const now = Date.now();
-  if (s.status === 'NORMAL' && now - s.lastSent > 100) {
-    s.lastSent = now;
-    sendJson({ type: 'slam', x: s.x, y: s.y, heading: s.heading, pitch: state.pitch });
-  }
-}
-
-// Tracker diagnostics, reported in /api/state.
-let motionEvents = 0;
-window.addEventListener('devicemotion', () => { motionEvents++; });
-function sendSlamDebug() {
-  const c = $('#xrCanvas');
-  sendJson({
-    type: 'debug',
-    slam: {
-      status: state.slam.status, ...slamDebug, calibrated: !!state.slam.origin,
-      canvas: [c.width, c.height], screen: [innerWidth, innerHeight, devicePixelRatio],
-      motionEventsPer2s: motionEvents, xr8: window.XR8?.version?.() ?? null,
-    },
-  });
-  motionEvents = 0;
-}
-
-function onSlamRender() {
-  if (!state.captureDue) return;
-  state.captureDue = false;
-  const c = $('#xrCanvas');
-  if (!c.width) return;
-  grabInto(c, c.width, c.height);
-  sendCapture();
-}
 
 // ---------------------------------------------------------------- gps
 // Indoors this is typically accurate to tens of meters: useful for "which building",
@@ -467,11 +364,6 @@ function setupSeatMap() {
     store.set('swarm.seat', JSON.stringify(state.seat));
     sendJson({ type: 'seat', seat: state.seat });
     renderPhase();
-    const o = state.slam.origin, raw = state.slam.raw;
-    if (SLAM && o && raw) { // "I'm here now": re-anchor, and jump the pin instead of gliding
-      Object.assign(o, { px: raw.px, pz: raw.pz, seat: { ...state.seat } });
-      state.slam.x = state.slam.y = null;
-    }
     drawSeatMap();
   };
   c.addEventListener('pointerdown', place);
@@ -817,9 +709,8 @@ const PING_COLOR = '#ffd166';
 const CAM_HEIGHT = 1.3;    // m, a phone held up at chest height
 const TARGET_HEIGHT = 1.0; // m, roughly a seated person / tabletop
 
-// Where I am on the floor plan: live SLAM position if calibrated, else the tapped spot.
+// Where I am on the floor plan: the spot selected on the map.
 function myPos() {
-  if (SLAM && state.slam.origin && state.slam.x !== null) return { x: state.slam.x, y: state.slam.y };
   return state.seat;
 }
 
@@ -873,7 +764,7 @@ function project(offDeg, dist, w, h) {
 // Map a 0..1 point in the captured frame to screen pixels (the video is shown object-fit: cover).
 function frameToScreen(nx, ny, W, H) {
   const v = $('#video');
-  if (SLAM || FAKE || !v.videoWidth) return [nx * W, ny * H];
+  if (FAKE || !v.videoWidth) return [nx * W, ny * H];
   const s = Math.max(W / v.videoWidth, H / v.videoHeight);
   const dx = (W - v.videoWidth * s) / 2, dy = (H - v.videoHeight * s) / 2;
   return [dx + nx * v.videoWidth * s, dy + ny * v.videoHeight * s];
@@ -882,7 +773,7 @@ function frameToScreen(nx, ny, W, H) {
 // Inverse of frameToScreen: screen pixels → 0..1 position in the captured frame.
 function screenToFrame(x, y, W, H) {
   const v = $('#video');
-  if (SLAM || FAKE || !v.videoWidth) return [x / W, y / H];
+  if (FAKE || !v.videoWidth) return [x / W, y / H];
   const s = Math.max(W / v.videoWidth, H / v.videoHeight);
   const dx = (W - v.videoWidth * s) / 2, dy = (H - v.videoHeight * s) / 2;
   return [(x - dx) / (v.videoWidth * s), (y - dy) / (v.videoHeight * s)];
@@ -1098,9 +989,7 @@ function tickUi(t) {
     $('#connDot').classList.toggle('ok', state.connected);
     $('#connText').textContent = state.connected ? 'Live' : 'Reconnecting…';
     const gps = state.gps ? `GPS ±${Math.round(state.gps.accuracy)}m` : `GPS ${state.gpsError || '…'}`;
-    const why = state.slam.status !== 'NORMAL' && slamDebug.reason && slamDebug.reason !== 'UNSPECIFIED' ? ` ${slamDebug.reason}` : '';
-    const slam = SLAM ? ` · SLAM ${state.slam.status}${why}${state.slam.origin ? '' : ' (uncal.)'}` : '';
-    $('#stats').textContent = `${state.sent} sent · ${gps}${slam}`;
+    $('#stats').textContent = `${state.sent} sent · ${gps}`;
     const h = currentHeading();
     $('#heading').textContent = h === null ? 'no gyro' : `${Math.round(h)}°${state.calYaw === null ? ' (uncal.)' : ''}`;
     updateWorldUi();
