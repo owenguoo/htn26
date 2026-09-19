@@ -7,11 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C4F841605C97960D3C2767E0 /* Markers in Resources */ = {isa = PBXBuildFile; fileRef = 2D812EE175604B7393968D43 /* Markers */; };
 		EFDC4954493FAD8C432B3157 /* SwarmCore in Frameworks */ = {isa = PBXBuildFile; productRef = 63006837D02926BC53E4FE36 /* SwarmCore */; };
 		7B706DD1A7A93F034B708B9B /* venue.json in Resources */ = {isa = PBXBuildFile; fileRef = FEA3CD2C29190FF061EE5105 /* venue.json */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		2D812EE175604B7393968D43 /* Markers */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Markers; path = Resources/Markers; sourceTree = SOURCE_ROOT; };
+		B6346E8A533AB5823AD3F27F /* markers-print.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; name = "markers-print.pdf"; path = "Resources/markers-print.pdf"; sourceTree = SOURCE_ROOT; };
 		8BCD5BC4CDFDF0918087C782 /* SwarmSight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwarmSight.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FEA3CD2C29190FF061EE5105 /* venue.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = venue.json; path = Fixtures/venue.json; sourceTree = SOURCE_ROOT; };
 		141BE85673A1D7CFB5CE3F07 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -47,6 +50,8 @@
 			children = (
 				141BE85673A1D7CFB5CE3F07 /* Info.plist */,
 				FEA3CD2C29190FF061EE5105 /* venue.json */,
+				2D812EE175604B7393968D43 /* Markers */,
+				B6346E8A533AB5823AD3F27F /* markers-print.pdf */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -128,6 +133,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7B706DD1A7A93F034B708B9B /* venue.json in Resources */,
+				C4F841605C97960D3C2767E0 /* Markers in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -195,7 +201,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_STYLE = Automatic;
-				CODE_SIGNING_ALLOWED = NO;
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development";
+				DEVELOPMENT_TEAM = "";
 				CODE_SIGNING_REQUIRED = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -218,7 +226,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_STYLE = Automatic;
-				CODE_SIGNING_ALLOWED = NO;
+				"CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]" = NO;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development";
+				DEVELOPMENT_TEAM = "";
 				CODE_SIGNING_REQUIRED = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;

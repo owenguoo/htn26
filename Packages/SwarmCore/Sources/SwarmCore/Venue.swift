@@ -84,14 +84,22 @@ public struct Venue: Sendable, Codable, Equatable {
     public var id: String
     public var name: String
     public var note: String?
+    /// Where the orchestrator is, e.g. `ws://192.168.1.23:8765/device`.
+    ///
+    /// It lives here rather than in a build setting for the same reason the
+    /// marker positions do: on the day, the address is whatever the laptop's
+    /// LAN address turns out to be, and finding that out must not mean a
+    /// rebuild. Absent falls back to the app's stored preference.
+    public var orchestratorURL: String?
     public var markers: [VenueMarker]
     public var thresholds: Thresholds
 
-    public init(id: String, name: String, note: String? = nil, markers: [VenueMarker],
-                thresholds: Thresholds = Thresholds()) {
+    public init(id: String, name: String, note: String? = nil, orchestratorURL: String? = nil,
+                markers: [VenueMarker], thresholds: Thresholds = Thresholds()) {
         self.id = id
         self.name = name
         self.note = note
+        self.orchestratorURL = orchestratorURL
         self.markers = markers
         self.thresholds = thresholds
     }

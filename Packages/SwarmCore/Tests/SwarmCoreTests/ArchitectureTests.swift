@@ -148,6 +148,34 @@ struct ArchitectureTests {
         }
     }
 
+    /// Every marker the venue names must have artwork, or the app throws on a
+    /// real device the first time it tries to build its reference images — and
+    /// never calibrates, which looks like tracking being broken rather than a
+    /// missing file.
+    @Test func everyVenueMarkerHasArtwork() throws {
+        let venue = try Venue.load(from: Fixtures.url("venue.json"))
+        let directory = repositoryRoot.appendingPathComponent("Resources/Markers")
+        for marker in venue.markers {
+            let url = directory.appendingPathComponent("\(marker.id).png")
+            #expect(FileManager.default.fileExists(atPath: url.path),
+                    "no artwork for \(marker.id): expected Resources/Markers/\(marker.id).png")
+        }
+    }
+
+    /// A marker wider than A4 cannot be printed at true size on an office
+    /// printer, and a marker printed "to fit" has a declared width that is a
+    /// lie — which scales every distance in the venue by that ratio.
+    @Test func everyMarkerPrintsOnA4AtTrueSize() throws {
+        let venue = try Venue.load(from: Fixtures.url("venue.json"))
+        // A4 is 210 mm wide; 20 mm of margin covers any printer's unprintable
+        // edge.
+        let printable: Float = 0.190
+        for marker in venue.markers {
+            #expect(marker.physicalWidth <= printable,
+                    "\(marker.id) is \(marker.physicalWidth * 1000) mm, too wide to print on A4")
+        }
+    }
+
     /// The 4.6 GB checkpoint must never be committable. GitHub rejects files over
     /// 100 MB, a multi-gigabyte blob makes every clone painful even via LFS, and
     /// the FAIR Noncommercial Research License makes redistribution a licensing

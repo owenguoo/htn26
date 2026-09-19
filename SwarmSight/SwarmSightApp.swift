@@ -31,9 +31,16 @@ final class LaunchState {
     private(set) var phase: Phase = .loading
 
     @MainActor
-    func load(orchestrator: URL) {
+    func load(fallbackOrchestrator: URL) {
         do {
             let venue = try AppCoordinator.loadVenue()
+            // The venue file wins: on the day the orchestrator's address is
+            // whatever the laptop's turns out to be, and that must not mean a
+            // rebuild.
+            let orchestrator = venue.orchestratorURL
+                .flatMap { URL(string: $0) }
+                .flatMap { $0.scheme != nil ? $0 : nil }
+                ?? fallbackOrchestrator
             phase = .ready(AppCoordinator(venue: venue, orchestrator: orchestrator))
         } catch {
             phase = .failed(error.localizedDescription)

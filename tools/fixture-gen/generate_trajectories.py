@@ -126,18 +126,23 @@ def quat_from_matrix(m):
 # Marker poses use the ARImageAnchor convention: image in the anchor's local x-z
 # plane, +Y the normal out of the print, local -Z the image's up direction.
 
+# Widths are placeholders that PRINT ON A4 PORTRAIT AT TRUE SIZE, which is the
+# only reason they are these numbers: a 296.5 mm marker is wider than A4 and
+# cannot be printed full size without A3, and a marker printed "to fit" is a
+# marker whose declared width is a lie. Measure with a tape after printing and
+# put the real number in venue.json regardless.
 MARKERS = [
     # id, centre, outward normal, measured width, primary
-    ("marker-primary", (0.000, 1.600, 0.000), (0, 0, 1), 0.2965, True),
+    ("marker-primary", (0.000, 1.600, 0.000), (0, 0, 1), 0.1800, True),
     # A second marker on the *same* wall, close enough to the primary to be in
     # frame at the same time. Co-visible markers are what make averaging worth
     # anything: two independent detection errors partly cancel, and a
     # misdetection is visible as disagreement rather than being applied.
     # Markers on separate walls can never do this.
-    ("marker-stage-left", (-1.420, 1.585, 0.010), (0, 0, 1), 0.2100, False),
-    ("marker-east", (4.980, 1.550, 3.020), (-1, 0, 0), 0.2100, False),
-    ("marker-west", (-5.010, 1.520, 3.050), (1, 0, 0), 0.2095, False),
-    ("marker-rear", (0.020, 1.580, 7.950), (0, 0, -1), 0.2970, False),
+    ("marker-stage-left", (-1.420, 1.585, 0.010), (0, 0, 1), 0.1500, False),
+    ("marker-east", (4.980, 1.550, 3.020), (-1, 0, 0), 0.1500, False),
+    ("marker-west", (-5.010, 1.520, 3.050), (1, 0, 0), 0.1500, False),
+    ("marker-rear", (0.020, 1.580, 7.950), (0, 0, -1), 0.1800, False),
 ]
 
 
@@ -168,6 +173,7 @@ def write_venue():
         "name": "Hack the North — main hall (placeholder)",
         "note": "Loaded at runtime, never compiled in. Replace every number here with "
                 "tape-measured values on the day; changing venue must need no rebuild.",
+        "orchestratorURL": "ws://CHANGE-ME:8765/device",
         "markers": markers,
         "thresholds": {
             "rejectPositionMeters": 1.5,

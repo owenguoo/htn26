@@ -3,6 +3,8 @@ import SwarmCore
 
 struct RootView: View {
     @Bindable var launch: LaunchState
+    /// Only a fallback. `venue.json` is the authority, so the address can be
+    /// changed on the day by dropping a new file onto the phone.
     @AppStorage("orchestratorURL") private var orchestratorURL = "ws://127.0.0.1:8765/device"
 
     var body: some View {
@@ -10,7 +12,7 @@ struct RootView: View {
             switch launch.phase {
             case .loading:
                 ProgressView("Loading venue…")
-                    .task { launch.load(orchestrator: resolvedURL) }
+                    .task { launch.load(fallbackOrchestrator: resolvedURL) }
             case .ready(let coordinator):
                 OverlayView(coordinator: coordinator)
                     .task { await coordinator.start() }

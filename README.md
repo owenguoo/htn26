@@ -85,6 +85,27 @@ tape measure and a text edit, not a rebuild. The app prefers a copy in its own
 Documents directory over the bundled one, and `UIFileSharingEnabled` is set, so
 on the day it is an AirDrop.
 
+## Running on a real phone
+
+The Simulator cannot do positioning — ARKit has no implementation there, so the
+app correctly reports that and sends nothing. Everything below the UI needs a
+device.
+
+1. Print `Resources/markers-print.pdf` at 100%, on matte stock. Five pages, one
+   marker each, vector-drawn at true size.
+2. Measure each one with a tape between the crop marks and put the real number
+   in `Fixtures/venue.json`. Printers scale, and a marker 2 mm off makes every
+   distance in the venue wrong by that ratio.
+3. Put the orchestrator's LAN address in `venue.json` as `orchestratorURL` (the
+   server prints it on startup). `127.0.0.1` only works from the Simulator.
+4. Set a development team in Xcode under Signing & Capabilities. A free Apple ID
+   works; the profile lasts seven days. Signing is scoped by SDK, so the
+   simulator build still needs no team at all.
+5. Enable Developer Mode on the phone: Settings → Privacy & Security. It needs a
+   restart, so do it the night before.
+
+Then work through `DEVICE_CHECKLIST.md`.
+
 ## Running against the stub orchestrator
 
 ```
