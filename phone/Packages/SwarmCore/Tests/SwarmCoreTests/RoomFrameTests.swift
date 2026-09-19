@@ -139,6 +139,78 @@ struct RoomFrameTests {
         #expect(aligner.source == .marker)
     }
 
+    // MARK: The inverse — room pose back to a 3D camera pose
+
+    /// `project(unproject(p)) == p` over a grid that covers every quadrant, both
+    /// tilt directions and a room-sized floor. The round trip is what pins the
+    /// yaw sign: room heading is clockwise seen from above and a simd rotation
+    /// about +Y is counter-clockwise, so `unproject` negates. Drop the negation
+    /// and half of these come back mirrored about the stage centre line.
+    @Test func unprojectIsTheExactInverseOfProject() throws {
+        for heading in stride(from: 0.0, to: 360.0, by: 45) {
+            for pitch in [-80.0, -40.0, 0.0, 40.0, 80.0] {
+                for x in [-6.0, 0.0, 6.0] {
+                    for y in [1.0, 7.0, 14.0] {
+                        let wanted = RoomPose(x: x, y: y, heading: heading, pitch: pitch)
+                        let pose = try #require(RoomAlignment.identity.unproject(wanted, height: 1.5))
+                        let round = RoomAlignment.identity.project(pose)
+                        #expect(isClose(round.x, x, within: 1e-4))
+                        #expect(isClose(round.y, y, within: 1e-4))
+                        #expect(isClose(round.pitch, pitch, within: 1e-3))
+                        #expect(isClose(RoomMath.signedDiff(try #require(round.heading), heading), 0,
+                                        within: 1e-3),
+                                "heading \(heading) pitch \(pitch) came back \(String(describing: round.heading))")
+                        #expect(isClose(pose.position.y, 1.5, within: 1e-5))
+                    }
+                }
+            }
+        }
+    }
+
+    /// The same round trip through a venue that is offset and rotated. This is
+    /// the one that catches the `heading − yawDegrees` term being dropped: under
+    /// the identity alignment `venue.json` ships with today, dropping it changes
+    /// nothing at all.
+    @Test func theInverseSurvivesAnOffsetAndRotatedVenue() throws {
+        let alignment = RoomAlignment(originX: 1.5, originY: -2, yawDegrees: 30)
+        for heading in stride(from: 0.0, to: 360.0, by: 37) {
+            for pitch in [-55.0, 0.0, 55.0] {
+                let wanted = RoomPose(x: -4, y: 9, heading: heading, pitch: pitch)
+                let pose = try #require(alignment.unproject(wanted, height: 1.5))
+                let round = alignment.project(pose)
+                #expect(isClose(round.x, -4, within: 1e-4))
+                #expect(isClose(round.y, 9, within: 1e-4))
+                #expect(isClose(round.pitch, pitch, within: 1e-3))
+                #expect(isClose(RoomMath.signedDiff(try #require(round.heading), heading), 0, within: 1e-3))
+            }
+        }
+    }
+
+    /// Stated absolutely rather than as a round trip, so a consistently mirrored
+    /// pair of transforms cannot pass. Heading 0 faces the stage, which is venue
+    /// −Z; +90 faces venue +x. Same facts as `turningRightIsClockwise`, read the
+    /// other way.
+    @Test func theInverseOfHeadingNinetyFacesVenuePlusX() throws {
+        let stage = try #require(RoomAlignment.identity.unproject(
+            RoomPose(x: 0, y: 5, heading: 0, pitch: 0), height: 1.5))
+        #expect(isClose(stage.forward.z, -1, within: 1e-4), "heading 0 must face the stage, venue −Z")
+        #expect(isClose(stage.forward.x, 0, within: 1e-4))
+        #expect(isClose(stage.position.z, 5, within: 1e-5), "room y is venue z")
+
+        let right = try #require(RoomAlignment.identity.unproject(
+            RoomPose(x: 0, y: 5, heading: 90, pitch: 0), height: 1.5))
+        #expect(isClose(right.forward.x, 1, within: 1e-4),
+                "turning 90° clockwise from the stage must face venue +x, not −x")
+        #expect(isClose(right.forward.z, 0, within: 1e-4))
+    }
+
+    /// Straight up and straight down have no heading to invert, the same way
+    /// `project` refuses to invent one.
+    @Test func aRoomPoseWithNoHeadingCannotBeInverted() {
+        #expect(RoomAlignment.identity.unproject(
+            RoomPose(x: 0, y: 5, heading: nil, pitch: 90), height: 1.5) == nil)
+    }
+
     // MARK: Maths shared with the hub
 
     @Test func bearingMatchesTheHubsFormula() {
