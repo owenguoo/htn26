@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swarm Sight · Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #000; --bg-1: #0a0a0a; --bg-2: #111; --bg-3: #1a1a1a;
+      --line: #1f1f1f; --line-2: #2e2e2e;
+      --fg: #ededed; --fg-2: #a1a1a1; --fg-3: #707070;
+      --red: #ff4d4d; --red-bg: rgba(255, 77, 77, 0.1);
+      --sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      --r: 10px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans);
+      -webkit-font-smoothing: antialiased; }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .muted { color: var(--fg-2); }
+    .faint { color: var(--fg-3); }
+
+    /* shell */
+    .wrap { max-width: 1440px; margin: 0 auto; padding: 0 24px 40px; }
+    header { position: sticky; top: 0; z-index: 5; background: rgba(0,0,0,0.8); backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+    .bar { max-width: 1440px; margin: 0 auto; padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 12px; }
+    .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
+    .logo svg { display: block; }
+    .slash { color: var(--line-2); font-weight: 300; font-size: 20px; }
+    .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-2); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-3); }
+    .dot.live { background: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,0.12); }
+    .spacer { flex: 1; }
+
+    .btn { height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg);
+      font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+      transition: background .15s, border-color .15s; }
+    .btn:hover { background: var(--bg-2); border-color: #3e3e3e; }
+    a.btn { color: var(--fg); text-decoration: none; }
+    .btn.primary { background: var(--fg); color: #000; border-color: var(--fg); }
+    .btn.primary:hover { background: #fff; }
+    .btn.danger { color: var(--red); }
+    .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
+    .btn:disabled { opacity: .4; cursor: default; }
+    kbd { font: 11px var(--mono); color: var(--fg-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
+
+    /* phase stepper */
+    .phases { display: flex; align-items: center; gap: 16px; padding: 24px 0 20px; }
+    .steps { display: flex; border: 1px solid var(--line); border-radius: var(--r); padding: 4px; gap: 4px; background: var(--bg-1); }
+    .step { height: 36px; padding: 0 14px; border-radius: 7px; display: flex; align-items: center; gap: 10px;
+      color: var(--fg-3); font-weight: 500; transition: background .15s, color .15s; }
+    .step:hover { color: var(--fg); background: var(--bg-2); }
+    .step .n { font: 11px var(--mono); width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-2);
+      display: grid; place-items: center; }
+    .step.done { color: var(--fg-2); }
+    .step.done .n { background: var(--bg-3); border-color: var(--bg-3); }
+    .step.on { background: var(--fg); color: #000; }
+    .step.on .n { border-color: #000; }
+    .step.on.found { background: var(--red); color: #000; }
+    .timer { font: 500 20px var(--mono); letter-spacing: -0.02em; }
+
+    /* metrics */
+    .metrics { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line); border-radius: var(--r);
+      background: var(--bg-1); margin-bottom: 16px; }
+    .metric { padding: 14px 18px; border-left: 1px solid var(--line); }
+    .metric:first-child { border-left: 0; }
+    .metric .k { font-size: 12px; color: var(--fg-2); }
+    .metric .v { font: 500 24px var(--mono); letter-spacing: -0.03em; margin-top: 2px; }
+    .metric.alert { background: var(--red-bg); }
+    .metric.alert .v { color: var(--red); }
+
+    /* cards */
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; margin-bottom: 16px; }
+    .grid.bottom { grid-template-columns: minmax(0, 1fr) 380px; }
+    .card { border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); min-width: 0; }
+    .card-h { height: 48px; padding: 0 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+    .card-h h2 { margin: 0; font-size: 14px; font-weight: 500; }
+    .card-b { padding: 16px; }
+    .stack { display: grid; gap: 16px; align-content: start; }
+
+    #mapWrap { position: relative; height: 480px; }
+    #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .row + .row { margin-top: 14px; }
+    .row .label { font-weight: 500; }
+    .row .hint { font-size: 12px; color: var(--fg-3); }
+    .switch { width: 36px; height: 20px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--line-2);
+      position: relative; transition: background .15s; flex: none; }
+    .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+      background: var(--fg-3); transition: transform .15s, background .15s; }
+    .switch.on { background: var(--fg); border-color: var(--fg); }
+    .switch.on::after { transform: translateX(16px); background: #000; }
+    .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: 6px; height: 28px; }
+    .stepper button { width: 28px; height: 26px; color: var(--fg-2); }
+    .stepper button:hover { color: var(--fg); background: var(--bg-2); }
+    .stepper span { min-width: 28px; text-align: center; font-family: var(--mono); }
+    .status { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--bg-1); border: 1px solid var(--line); }
+    .status.found { background: var(--red-bg); border-color: rgba(255,77,77,0.3); color: var(--red); }
+    .divider { height: 1px; background: var(--line); margin: 16px -16px; }
+
+    /* phones table */
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-weight: 500; font-size: 12px; color: var(--fg-2); padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr { transition: background .1s; }
+    tbody tr:hover { background: var(--bg-1); }
+    tr.off td { opacity: .4; }
+    .thumb { width: 56px; height: 42px; border-radius: 4px; background: var(--bg-2); object-fit: cover; display: block;
+      border: 1px solid var(--line); }
+    .thumb.hidden { filter: grayscale(1) brightness(.35); }
+    .idx { font: 500 13px var(--mono); }
+    .badge { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; font-size: 11px;
+      font-weight: 500; border: 1px solid var(--line-2); color: var(--fg-2); margin-right: 4px; }
+    .badge.w { color: #000; background: var(--fg); border-color: var(--fg); }
+    .badge.r { color: var(--red); border-color: rgba(255,77,77,0.4); background: var(--red-bg); }
+    .actions { text-align: right; }
+    .actions .btn + .btn { margin-left: 6px; }
+    .empty { padding: 40px 16px; text-align: center; color: var(--fg-3); }
+
+    /* activity */
+    #log { max-height: 420px; overflow: auto; }
+    .ev { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .ev:last-child { border-bottom: 0; }
+    .ev time { font: 12px var(--mono); color: var(--fg-3); padding-top: 1px; }
+    .ev b { font-weight: 500; font-family: var(--mono); }
+    .ev.hot { color: var(--red); }
+
+    @media (max-width: 1100px) {
+      .grid, .grid.bottom { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(3, 1fr); }
+      .metric:nth-child(4) { border-left: 0; }
+      .metric:nth-child(n+4) { border-top: 1px solid var(--line); }
+      .phases { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2 L18 17 H2 Z" fill="#ededed"/></svg>
+        Swarm Sight
+      </div>
+      <span class="slash">/</span>
+      <span class="muted">Console</span>
+      <span class="conn"><span class="dot" id="connDot"></span><span id="connText">Connecting</span></span>
+      <span class="spacer"></span>
+      <a class="btn" href="/dashboard" target="_blank" rel="noopener">Open projector ↗</a>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="phases">
+      <div class="steps" id="steps"></div>
+      <span class="spacer"></span>
+      <span class="faint" style="font-size:12px"><kbd>1</kbd>–<kbd>5</kbd> phase &nbsp; <kbd>P</kbd> planner &nbsp; <kbd>F</kbd> flash</span>
+      <span class="timer" id="timer">00:00</span>
+    </section>
+
+    <section class="metrics">
+      <div class="metric"><div class="k">Phones live</div><div class="v" id="mLive">0</div></div>
+      <div class="metric"><div class="k">Placed</div><div class="v" id="mPlaced">0</div></div>
+      <div class="metric"><div class="k">Frames / s</div><div class="v" id="mFps">0</div></div>
+      <div class="metric"><div class="k">Latency p50</div><div class="v" id="mLat">–</div></div>
+      <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
+      <div class="metric" id="mCandBox"><div class="k">Candidate</div><div class="v" id="mCand">–</div></div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="card-h"><h2>Floor plan</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
+          <span class="faint" style="font-size:12px">Drag the candidate to move it</span></div>
+        <div id="mapWrap"><canvas id="map"></canvas></div>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <div class="card-h"><h2>Search</h2></div>
+          <div class="card-b">
+            <div class="row"><div><div class="label">Planner</div><div class="hint">Assign sectors and steer phones</div></div>
+              <button class="switch" id="plannerSw" aria-label="Planner"></button></div>
+            <div class="row"><div><div class="label">Coverage</div><div class="hint">Mark the whole room unsearched</div></div>
+              <button class="btn sm" id="resetCov">Reset</button></div>
+            <div class="row"><div><div class="label">Phones</div><div class="hint">Flash every screen</div></div>
+              <button class="btn sm" id="flashAll">Flash all</button></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2>Candidate</h2></div>
+          <div class="card-b">
+            <div class="status" id="candStatus">No candidate placed</div>
+            <div class="row" style="margin-top:16px"><div><div class="label">Responders</div><div class="hint">Nearest phones sent when found</div></div>
+              <div class="stepper"><button id="respMinus" aria-label="Fewer">−</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
+            <div class="divider"></div>
+            <button class="btn primary" id="candBtn" style="width:100%;justify-content:center">Place candidate</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid bottom">
+      <div class="card">
+        <div class="card-h"><h2>Phones</h2><span class="faint mono" id="phoneCount">0</span></div>
+        <div style="overflow:auto">
+          <table>
+            <thead><tr><th></th><th>#</th><th>Name</th><th>Position</th><th>Heading</th><th>FPS</th><th>Latency</th><th>Status</th><th></th></tr></thead>
+            <tbody id="phones"></tbody>
+          </table>
+          <div class="empty" id="phonesEmpty">No phones connected</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>Activity</h2></div>
+        <div id="log"><div class="empty">Nothing yet</div></div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/web/console.js"></script>
+</body>
+</html>

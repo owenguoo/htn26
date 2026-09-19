@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .coverage import Coverage
 from .planner import Planner
+from .target import Target
 from .protocol import now_ms, pack, unpack
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,6 +38,8 @@ PALETTE = [
 STALE_MS = 3000          # no frame for this long → tile shows "stale"
 EXTERNAL_POSE_TTL = 5000  # a pose from the positioning service overrides the seat for this long
 REAP_AFTER_MS = 30000    # forget disconnected phones after this long
+PHASES = ("lobby", "calibrate", "search", "found", "end")  # show flow, driven from /console
+SEARCH_PHASES = ("search", "found")  # coverage and candidate detection only run in these
 
 
 @dataclass
@@ -58,6 +61,7 @@ class Phone:
     external_pose: dict | None = None
     gps: dict | None = None          # latest browser geolocation fix
     debug: dict | None = None        # latest diagnostics the phone reported
+    hidden: bool = False             # operator hid this feed from the projector
     # latest frame (latest wins, never queued)
     frame: bytes | None = None
     frame_seq: int = -1
@@ -98,6 +102,7 @@ class Phone:
             "stale": self.frame is None or now - self.frame_at > STALE_MS,
             "frames": self.frames_total,
             "debug": self.debug,
+            "hidden": self.hidden,
             "gps": None if not self.gps else {**self.gps, "ageMs": round(now - self.gps["t"])},
         }
 
@@ -118,6 +123,10 @@ class Hub:
         self.join_url = ""
         self.coverage = Coverage(ROOM)
         self.planner = Planner(ROOM, self.coverage)
+        self.target = Target(ROOM, self.planner.note)
+        # "search" by default so the hub works without an operator; the show starts at "lobby"
+        self.phase = "search"
+        self.phase_started = now_ms()
 
     # ---- phone lifecycle -------------------------------------------------
     async def register(self, hello: dict, ws: WebSocket) -> Phone:
@@ -250,19 +259,42 @@ class Hub:
                 live = p.connected and p.frame is not None and now - p.frame_at <= STALE_MS
                 if live and pose and pose["heading"] is not None:
                     viewers[p.id] = (pose["x"], pose["y"], pose["heading"], p.pitch)
-            self.coverage.update(viewers)
-            cmds = self.planner.tick(viewers, now)
+            # Outside a search (lobby, calibrate, end) phones only show where they are:
+            # nothing counts as searched and nobody can find the candidate.
+            searching = self.phase in SEARCH_PHASES
+            if searching:
+                self.coverage.update(viewers)
+            busy = self.target.busy()  # responders are steered to the candidate, not by the planner
+            cmds = self.planner.tick({k: v for k, v in viewers.items() if k not in busy}, now)
+            cmds += self.target.tick(viewers if searching else {}, now)
             if cmds:
                 await asyncio.gather(*(self.phones[pid].send({"type": "command", **cmd})
                                        for pid, cmd in cmds if pid in self.phones))
+            if self.phase == "search" and self.target.found_by:
+                await self.set_phase("found")
             await asyncio.sleep(1 / hz)
+
+    async def set_phase(self, phase: str) -> None:
+        """Re-selecting the current phase re-applies its effects (e.g. turns the planner back on)."""
+        if phase not in PHASES:
+            return
+        if phase != self.phase:
+            self.phase, self.phase_started = phase, now_ms()
+            self.planner.note(f"Phase → {phase}")
+        if phase == "search":
+            self.planner.enabled = True
+        elif phase in ("lobby", "calibrate", "end"):
+            self.planner.enabled = False
+        await asyncio.gather(*(p.send({"type": "phase", "phase": phase}) for p in self.phones.values()))
 
     # ---- outbound ----------------------------------------------------------
     def state(self) -> dict:
         now = now_ms()
         phones = sorted(self.phones.values(), key=lambda p: p.index)
         return {"type": "state", "t": now, "phones": [p.summary(now) for p in phones],
-                "coverage": self.coverage.snapshot(), "planner": self.planner.snapshot()}
+                "coverage": self.coverage.snapshot(), "planner": self.planner.snapshot(),
+                "target": self.target.snapshot(now),
+                "phase": self.phase, "phaseStartedAt": self.phase_started}
 
     async def command(self, target: str, cmd: dict) -> None:
         phones = self.phones.values() if target == "all" else [self.phones.get(target)]
@@ -293,8 +325,9 @@ class FrameSubscriber:
     Latest-wins: if the socket is slow, intermediate frames are skipped, never queued.
     """
 
-    def __init__(self, ws: WebSocket, fps: float, with_state: bool) -> None:
+    def __init__(self, ws: WebSocket, fps: float, with_state: bool, skip_hidden: bool = False) -> None:
         self.ws = ws
+        self.skip_hidden = skip_hidden  # projector: never show feeds the operator hid
         self.min_interval = 1000 / max(fps, 0.1)
         self.with_state = with_state
         self.sent_seq: dict[str, int] = {}
@@ -313,7 +346,7 @@ class FrameSubscriber:
                 last_state = now
                 await self.send_json(hub.state())
             for p in list(hub.phones.values()):
-                if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq:
+                if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq or (self.skip_hidden and p.hidden):
                     continue
                 if now - self.sent_at.get(p.id, 0) < self.min_interval:
                     continue
@@ -335,7 +368,7 @@ async def ws_phone(ws: WebSocket) -> None:
         phone = await hub.register(hello, ws)
         await phone.send({
             "type": "welcome", "phoneId": phone.id, "index": phone.index,
-            "color": phone.color, "room": ROOM,
+            "color": phone.color, "room": ROOM, "phase": hub.phase,
         })
         pinger = asyncio.create_task(_ping_loop(phone, ws))
         while True:
@@ -365,9 +398,10 @@ async def _ping_loop(phone: Phone, ws: WebSocket) -> None:
         await asyncio.sleep(0.5 if phone.clock_offset is None else 2)
 
 
-async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: dict | None) -> None:
+async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: dict | None,
+                            skip_hidden: bool = False) -> None:
     await ws.accept()
-    sub = FrameSubscriber(ws, fps=fps, with_state=with_state)
+    sub = FrameSubscriber(ws, fps=fps, with_state=with_state, skip_hidden=skip_hidden)
     if hello:
         await sub.send_json(hello)
     pump = asyncio.create_task(sub.run())
@@ -381,6 +415,20 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                 hub.planner.reset()
             elif msg.get("type") == "planner":
                 hub.planner.enabled = bool(msg.get("enabled"))
+            elif msg.get("type") == "target":
+                if msg.get("remove"):
+                    hub.target.remove()
+                else:
+                    if "x" in msg and "y" in msg:
+                        hub.target.place(float(msg["x"]), float(msg["y"]))
+                    if "responders" in msg:
+                        hub.target.responders_wanted = max(0, int(msg["responders"]))
+            elif msg.get("type") == "phase":
+                await hub.set_phase(str(msg.get("phase")))
+            elif msg.get("type") == "hide":
+                phone = hub.phones.get(str(msg.get("phoneId")))
+                if phone:
+                    phone.hidden = bool(msg.get("hidden"))
     except (WebSocketDisconnect, RuntimeError, ValueError):
         pass
     finally:
@@ -389,8 +437,11 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
 
 @app.websocket("/ws/dashboard")
 async def ws_dashboard(ws: WebSocket) -> None:
+    """Projector and operator console. The console (role=console) still sees hidden feeds."""
     fps = float(ws.query_params.get("thumb_fps", 3))
-    await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url})
+    console = ws.query_params.get("role") == "console"
+    await _serve_subscriber(ws, fps, True, {"type": "hello", "room": ROOM, "joinUrl": hub.join_url},
+                            skip_hidden=not console)
 
 
 @app.websocket("/ws/frames")
@@ -431,6 +482,11 @@ def phone_page() -> FileResponse:
 @app.get("/dashboard")
 def dashboard_page() -> FileResponse:
     return FileResponse(WEB / "dashboard.html")
+
+
+@app.get("/console")
+def console_page() -> FileResponse:
+    return FileResponse(WEB / "console.html")
 
 
 app.mount("/web", StaticFiles(directory=WEB), name="web")

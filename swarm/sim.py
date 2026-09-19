@@ -1,10 +1,10 @@
 """Fake phones for load-testing the hub and rehearsing without an audience.
 
 Run:  uv run python -m swarm.sim --n 30
-Each fake phone sits at a random seat, sweeps its heading back and forth (or turns
-toward the sector the planner assigned it), streams
-generated JPEG frames, answers clock-sync pings, and turns its frames the flash
-color when the dashboard flashes it.
+Each fake phone sits at a random seat and sweeps its heading back and forth. It turns
+toward the sector the planner assigns it, and walks to a found candidate when it's
+dispatched as a responder. It streams generated JPEG frames, answers clock-sync pings,
+and turns its frames the flash color when the dashboard flashes it.
 """
 from __future__ import annotations
 
@@ -56,6 +56,7 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
     # When the planner assigns a sector, turn toward it and scan around it;
     # otherwise sweep back and forth on our own.
     aim = {"heading": base % 360, "target": None, "until": 0.0}
+    walk = {"distance": 0.0}  # responding to a found candidate: meters left to walk
 
     def heading() -> float:
         return aim["heading"]
@@ -88,9 +89,12 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
                         elif msg.get("type") == "command" and msg.get("cmd") == "guide":
                             if msg.get("clear"):
                                 aim["target"] = None
+                                walk["distance"] = 0.0
                             else:
                                 aim["target"] = (aim["heading"] + msg["delta"]) % 360
                                 aim["until"] = time.time() + 3
+                                responding = msg.get("kind") == "respond"
+                                walk["distance"] = (msg.get("distance") or 0.0) if responding else 0.0
                         elif msg.get("type") == "command" and msg.get("cmd") == "flash":
                             flash["color"] = msg.get("color") or welcome.get("color")
                             flash["until"] = time.time() + msg.get("ttlMs", 1500) / 1000
@@ -98,6 +102,14 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
                 async def orient() -> None:
                     while True:
                         step_heading()
+                        if walk["distance"] > 1.0 and aim["target"] is not None:
+                            # walk ~1.2 m/s along the direction the hub is steering us
+                            step = min(0.12, walk["distance"] - 1.0)
+                            b = math.radians(aim["target"])
+                            seat["x"] = round(seat["x"] + step * math.sin(b), 3)
+                            seat["y"] = round(seat["y"] - step * math.cos(b), 3)
+                            walk["distance"] -= step
+                            await ws.send(json.dumps({"type": "seat", "seat": seat}))
                         await ws.send(json.dumps({"type": "orient", "tCapture": now_ms(),
                                                   "heading": heading(), "pitch": 0, "calibrated": True}))
                         await asyncio.sleep(0.1)

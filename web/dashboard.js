@@ -17,6 +17,9 @@ const drawn = new Map();    // id → smoothed heading for the map
 let hoverId = null;
 let coverage = null;        // look-count grid from the hub
 let planner = null;         // sector assignments + log from the hub
+let target = null;          // mock candidate from the hub
+let phase = null;           // show phase from the hub
+let dragPos = null;         // candidate position while the operator drags it
 let frameCount = 0;         // thumbnails received, for a sanity check in the console
 
 // ---------------------------------------------------------------- socket
@@ -44,6 +47,8 @@ function onJson(msg) {
   } else if (msg.type === 'state') {
     coverage = msg.coverage || null;
     planner = msg.planner || null;
+    target = msg.target || null;
+    phase = msg.phase || null;
     renderPlanner();
     const seen = new Set();
     for (const p of msg.phones) {
@@ -106,6 +111,13 @@ function renderTiles() {
     if (!t) t = createTile(p);
     t.el.style.setProperty('--c', p.color);
     t.el.classList.toggle('offline', !p.connected);
+    if (p.hidden) {  // the operator hid this feed; the hub stops sending its frames here
+      t.img.removeAttribute('src');
+      t.placeholder.textContent = 'Hidden by operator';
+      t.placeholder.style.display = '';
+    } else if (t.placeholder.textContent === 'Hidden by operator') {
+      t.placeholder.textContent = 'waiting for video…';
+    }
     t.el.classList.toggle('hl', hoverId === p.id);
     t.who.innerHTML = `<i>#${p.index}</i> ${escapeHtml(p.name || (p.sim ? 'Sim' : 'Phone'))}`;
     const hd = p.pose?.heading;
@@ -121,6 +133,10 @@ function renderTiles() {
     if (!p.connected) tags.push(['OFFLINE', 'bad']);
     else if (p.stale) tags.push(['STALE', 'warn']);
     if (p.pitch != null && Math.abs(p.pitch) > 65) tags.push([p.pitch < 0 ? 'FLOOR' : 'CEILING', 'warn']); // not counted as coverage
+    if (target?.foundBy === p.id) tags.push(['FOUND IT', 'bad']);
+    if (target?.responders && p.id in target.responders) {
+      tags.push(target.responders[p.id] ? ['ARRIVED', 'ok'] : ['RESPONDING', 'bad']);
+    }
     const job = planner?.assignments?.[p.id];
     if (job) tags.push([`→ ${job.sector}`, job.onTarget ? 'ok' : 'warn']);
     if (p.pose?.source === 'slam') tags.push(['SLAM', 'ok']);
@@ -185,6 +201,10 @@ function renderStats() {
   const lats = live.map((p) => p.latencyMs).filter((x) => x != null).sort((a, b) => a - b);
   $('#sLat').textContent = lats.length ? `${lats[Math.floor(lats.length / 2)]}ms` : '–';
   $('#sSearched').textContent = coverage ? `${Math.round(coverage.searched * 100)}%` : '–';
+  const secs = target ? (target.searchMs / 1000).toFixed(1) : null;
+  $('#sCand').textContent = !target ? '–' : target.foundBy ? `FOUND ${secs}s` : `Searching ${Math.floor(secs)}s`;
+  $('#candStat').classList.toggle('found', !!target?.foundBy);
+  $('#candBtn').textContent = target ? 'Remove candidate' : 'Add candidate';
   const unplaced = live.filter((p) => !p.pose).length;
   $('#legend').innerHTML = [
     `<span><i class="sw" style="background:${COV_COLORS[0]}"></i>Not looked</span>`,
@@ -210,9 +230,105 @@ function resizeMap() {
 }
 new ResizeObserver(resizeMap).observe($('#mapWrap'));
 
+// ---- candidate: drag it around the floor plan
+let lastDragSend = 0;
+function candidatePx() {
+  const t = dragPos || target;
+  return t ? view.toPx(t.x, t.y) : null;
+}
+function roomPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  const [x, y] = view.toRoom(e.clientX - r.left, e.clientY - r.top);
+  return {
+    x: Math.max(-room.width / 2, Math.min(room.width / 2, x)),
+    y: Math.max(0, Math.min(room.depth, y)),
+  };
+}
+canvas.addEventListener('mousedown', (e) => {
+  const c = view && candidatePx();
+  if (!c) return;
+  const r = canvas.getBoundingClientRect();
+  if (Math.hypot(c[0] - (e.clientX - r.left), c[1] - (e.clientY - r.top)) <= 16) {
+    dragPos = roomPoint(e);
+    e.preventDefault();
+  }
+});
+window.addEventListener('mousemove', (e) => {
+  if (!dragPos) return;
+  dragPos = roomPoint(e);
+  const now = performance.now();
+  if (now - lastDragSend > 80) {
+    lastDragSend = now;
+    send({ type: 'target', ...dragPos });
+  }
+});
+window.addEventListener('mouseup', () => {
+  if (!dragPos) return;
+  send({ type: 'target', ...dragPos });
+  dragPos = null;
+});
+$('#candBtn').addEventListener('click', () => {
+  if (target) send({ type: 'target', remove: true });
+  else send({ type: 'target', x: 0, y: room.depth / 2, responders: Number($('#respN').value) });
+});
+$('#respN').addEventListener('change', (e) => send({ type: 'target', responders: Number(e.target.value) }));
+
+function drawCandidate() {
+  if (!target) return;
+  const t = dragPos || target;
+  const [cx, cy] = view.toPx(t.x, t.y);
+  ctx.save();
+  // responders: line to the candidate with distance
+  for (const [pid, arrived] of Object.entries(target.responders || {})) {
+    const p = phones.get(pid);
+    if (!p?.pose) continue;
+    const [px, py] = view.toPx(p.pose.x, p.pose.y);
+    ctx.strokeStyle = arrived ? '#7ae582' : '#ff5d73';
+    ctx.lineWidth = 2;
+    ctx.setLineDash(arrived ? [] : [6, 5]);
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(cx, cy); ctx.stroke();
+    ctx.setLineDash([]);
+    const d = Math.hypot(p.pose.x - t.x, p.pose.y - t.y);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.font = '700 11px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(arrived ? '✓' : `${d.toFixed(1)} m`, (px + cx) / 2, (py + cy) / 2 - 6);
+  }
+  if (target.foundBy) {
+    const pulse = (performance.now() / 900) % 1;
+    ctx.strokeStyle = `rgba(255,93,115,${1 - pulse})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(cx, cy, 10 + pulse * 28, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = '#ff5d73';
+    ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.fill();
+    const finder = phones.get(target.foundBy);
+    ctx.font = '800 12px ui-sans-serif, system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(`FOUND by #${finder?.index ?? '?'}`, cx, cy - 18);
+  } else {
+    // hidden candidate: only the operator knows where it is
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = '800 12px ui-sans-serif, system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('?', cx, cy + 1);
+    ctx.font = '600 10px ui-sans-serif, system-ui';
+    ctx.fillText('candidate · drag me', cx, cy - 18);
+  }
+  ctx.restore();
+}
+
 canvas.addEventListener('mousemove', (e) => {
   if (!view) return;
   const r = canvas.getBoundingClientRect();
+  const c = candidatePx();
+  canvas.style.cursor = dragPos ? 'grabbing'
+    : c && Math.hypot(c[0] - (e.clientX - r.left), c[1] - (e.clientY - r.top)) <= 16 ? 'grab' : '';
   let best = null, bestD = 14;
   for (const p of phones.values()) {
     if (!p.pose) continue;
@@ -259,7 +375,7 @@ function drawMap() {
   // cones first so dots and labels sit on top
   for (const p of list) {
     const target = p.pose.heading;
-    if (target == null) { drawn.delete(p.id); continue; }
+    if (target == null || phase === 'lobby') { drawn.delete(p.id); continue; } // lobby: locations only
     const prev = drawn.get(p.id);
     const hd = prev == null ? target : lerpAngle(prev, target, 0.25);
     drawn.set(p.id, hd);
@@ -286,6 +402,7 @@ function drawMap() {
     ctx.fillText(String(p.index), px + 8, py);
     ctx.globalAlpha = 1;
   }
+  drawCandidate();
 }
 
 function hexA(hex, a) {

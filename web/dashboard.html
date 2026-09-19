@@ -75,6 +75,9 @@
     .tools { display: flex; gap: 10px; align-items: center; }
     .mini { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px;
       font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--muted); }
+    .mini select { background: transparent; color: var(--text); border: 0; font: inherit; }
+    #candStat.found { border-color: var(--bad); background: rgba(255,93,115,0.15); }
+    #candStat.found b { color: var(--bad); }
     .mini:hover { color: var(--text); border-color: var(--accent); }
     #gpsMap { position: absolute; inset: 0; display: none; background: #0b1020; }
     #mapWrap.gps #gpsMap { display: block; }
@@ -108,6 +111,7 @@
       <div class="stat"><b id="sFps">0</b><span>Frames / sec in</span></div>
       <div class="stat"><b id="sLat">–</b><span>Median latency</span></div>
       <div class="stat"><b id="sSearched">0%</b><span>Area searched</span></div>
+      <div class="stat" id="candStat"><b id="sCand">–</b><span>Candidate</span></div>
     </div>
     <button class="btn" id="plannerBtn" title="Assign sectors to phones and steer them there">Planner: off</button>
     <button class="btn" id="flashAll" title="Flash every phone's screen">Flash all</button>
@@ -124,7 +128,7 @@
     <section class="panel">
       <h2>
         <span class="tabs"><button class="tab on" data-view="floor">Floor plan</button><button class="tab" data-view="gps">GPS</button></span>
-        <span class="tools"><span id="roomName"></span><button class="mini" id="resetCov" title="Mark the whole room unsearched again">Reset coverage</button></span>
+        <span class="tools"><span id="roomName"></span><button class="mini" id="candBtn" title="Place a mock candidate, then drag it on the map">Add candidate</button><label class="mini" title="How many nearest phones to dispatch when it's found">Responders <select id="respN"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label><button class="mini" id="resetCov" title="Mark the whole room unsearched again">Reset coverage</button></span>
       </h2>
       <div id="mapWrap"><canvas id="map"></canvas><div id="gpsMap"></div></div>
       <div id="plog"></div>

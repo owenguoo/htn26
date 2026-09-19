@@ -43,6 +43,7 @@
       font-size: 20px; background: rgba(255,183,3,0.95); color: #1a1200; box-shadow: 0 6px 24px rgba(0,0,0,0.4); }
     #guide.on { display: block; }
     #guide.ok { background: rgba(122,229,130,0.95); color: #04210a; }
+    #guide.alert { background: rgba(255,93,115,0.97); color: #fff; animation: pulse 0.7s ease-in-out infinite alternate; }
     .pill { background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
       padding: 7px 12px; font-size: 13px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
       display: flex; align-items: center; gap: 8px; white-space: nowrap; }
@@ -61,8 +62,20 @@
     .ghost.hot { background: var(--accent); color: #04121a; }
     #heading { font-variant-numeric: tabular-nums; }
 
+    /* show phases (lobby / calibrate / end) */
+    #phaseCard { position: absolute; left: 16px; right: 16px; top: 42%; transform: translateY(-50%); display: none;
+      background: rgba(0,0,0,0.82); border: 1px solid rgba(255,255,255,0.14); border-radius: 18px; padding: 22px;
+      text-align: center; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); z-index: 5; }
+    #phaseCard.on { display: block; }
+    #phaseCard.full { top: 0; left: 0; right: 0; bottom: 0; transform: none; border-radius: 0; display: none;
+      place-content: center; background: #000; }
+    #phaseCard.full.on { display: grid; }
+    #phaseCard h2 { margin: 0 0 6px; font-size: 24px; letter-spacing: -0.02em; }
+    #phaseCard p { margin: 0; color: var(--muted); }
+    #phaseCard button { margin-top: 16px; width: 100%; }
     #flash { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
-      font-size: 44px; font-weight: 900; text-align: center; padding: 24px; color: #04121a; z-index: 10; }
+      font-size: 44px; font-weight: 900; text-align: center; padding: 24px; color: #04121a; z-index: 10;
+      white-space: pre-line; }
     #flash.on { display: flex; animation: pulse 0.5s ease-in-out infinite alternate; }
     @keyframes pulse { from { opacity: 1; } to { opacity: 0.75; } }
   </style>
@@ -102,6 +115,7 @@
     </div>
   </section>
 
+  <div id="phaseCard"><h2 id="phaseTitle"></h2><p id="phaseText"></p><button class="primary" id="phaseBtn" hidden></button></div>
   <div id="flash"></div>
   <canvas id="capture" hidden></canvas>
 

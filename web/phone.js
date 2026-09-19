@@ -9,6 +9,8 @@ const QUALITY = Number(params.get('q')) || 0.6;       // JPEG quality
 const FAKE = params.has('fake');                     // no camera: send a generated test pattern
 const SLAM = params.has('slam') && !FAKE;             // 8th Wall world tracking for position + heading
 const SLAM_SCALE = params.get('slam') === 'responsive' ? 'responsive' : 'absolute';
+const SLAM_POS_SMOOTHING = 0.08;     // per tracker update (~30/s): ~0.4 s to settle
+const SLAM_HEADING_SMOOTHING = 0.25; // heading reacts faster than position
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -142,11 +144,14 @@ function connect() {
       if (state.gps) sendJson({ type: 'gps', ...state.gps });
       state.index = msg.index;
       state.color = msg.color;
+      setPhase(msg.phase);
       $('#badge').textContent = `#${msg.index}`;
       $('#badge').style.color = msg.color;
       drawSeatMap();
     } else if (msg.type === 'command') {
       onCommand(msg);
+    } else if (msg.type === 'phase') {
+      setPhase(msg.phase);
     }
   };
   ws.onclose = () => {
@@ -316,6 +321,7 @@ function calibrateSlam() {
   }
   const [fx, fz] = raw.flat;
   state.slam.origin = { px: raw.px, pz: raw.pz, f: [fx, fz], r: [-fz, fx], seat: { ...state.seat } };
+  state.slam.x = state.slam.y = state.slam.heading = null; // restart smoothing from the new anchor
   return true;
 }
 
@@ -333,9 +339,17 @@ function onSlamUpdate(reality) {
   const forward = dx * o.f[0] + dz * o.f[1];
   const right = dx * o.r[0] + dz * o.r[1];
   const [ux, uz] = s.raw.flat;
-  s.heading = ((Math.atan2(ux * o.r[0] + uz * o.r[1], ux * o.f[0] + uz * o.f[1]) * 180) / Math.PI + 360) % 360;
-  s.x = o.seat.x + right;
-  s.y = o.seat.y - forward; // toward the stage is -y on the floor plan
+  const heading = ((Math.atan2(ux * o.r[0] + uz * o.r[1], ux * o.f[0] + uz * o.f[1]) * 180) / Math.PI + 360) % 360;
+  const x = o.seat.x + right;
+  const y = o.seat.y - forward; // toward the stage is -y on the floor plan
+  // Smooth out hand shake: blend each tracker update into the running pose.
+  if (s.x === null) {
+    s.x = x; s.y = y; s.heading = heading;
+  } else {
+    s.x += SLAM_POS_SMOOTHING * (x - s.x);
+    s.y += SLAM_POS_SMOOTHING * (y - s.y);
+    s.heading = (s.heading + SLAM_HEADING_SMOOTHING * signedDiff(heading, s.heading) + 360) % 360;
+  }
   const now = Date.now();
   if (s.status === 'NORMAL' && now - s.lastSent > 100) {
     s.lastSent = now;
@@ -407,8 +421,12 @@ function setupSeatMap() {
     };
     store.set('swarm.seat', JSON.stringify(state.seat));
     sendJson({ type: 'seat', seat: state.seat });
+    renderPhase();
     const o = state.slam.origin, raw = state.slam.raw;
-    if (SLAM && o && raw) Object.assign(o, { px: raw.px, pz: raw.pz, seat: { ...state.seat } }); // "I'm here now"
+    if (SLAM && o && raw) { // "I'm here now": re-anchor, and jump the pin instead of gliding
+      Object.assign(o, { px: raw.px, pz: raw.pz, seat: { ...state.seat } });
+      state.slam.x = state.slam.y = null;
+    }
     drawSeatMap();
   };
   c.addEventListener('pointerdown', place);
@@ -452,6 +470,49 @@ function hexA(hex, a) {
   return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
+// ---------------------------------------------------------------- show phases
+// The operator console moves everyone through lobby → calibrate → search → found → end.
+let phase = null;
+function setPhase(next) {
+  phase = next;
+  renderPhase();
+}
+
+function renderPhase() {
+  const card = $('#phaseCard');
+  const btn = $('#phaseBtn');
+  card.classList.remove('on', 'full');
+  btn.hidden = true;
+  if (phase === 'lobby') {
+    $('#phaseTitle').textContent = `You're in${state.index ? ` · #${state.index}` : ''}`;
+    $('#phaseText').textContent = state.seat
+      ? 'Hang tight, the search starts soon.'
+      : 'Tap where you are on the map below, then hang tight.';
+    card.classList.add('on');
+  } else if (phase === 'calibrate') {
+    $('#phaseTitle').textContent = 'Point at the stage';
+    $('#phaseText').textContent = state.seat
+      ? 'Hold your phone up toward the stage, then tap the button.'
+      : 'First tap where you are on the map below.';
+    btn.textContent = "I'm pointing at the stage";
+    btn.hidden = !state.seat;
+    card.classList.add('on');
+  } else if (phase === 'end') {
+    $('#phaseTitle').textContent = 'Search complete';
+    $('#phaseText').textContent = 'Thanks for helping. You can close this page.';
+    card.classList.add('on', 'full');
+  }
+}
+
+$('#phaseBtn').addEventListener('click', () => {
+  $('#calBtn').click(); // same calibration as the sheet's button
+  if (state.calYaw !== null) {
+    $('#phaseTitle').textContent = 'Calibrated ✓';
+    $('#phaseText').textContent = 'Keep your phone up. The search starts soon.';
+    $('#phaseBtn').hidden = true;
+  }
+});
+
 // ---------------------------------------------------------------- commands
 let flashTimer = null;
 function onCommand(msg) {
@@ -460,7 +521,10 @@ function onCommand(msg) {
     const h = currentHeading();
     if (h === null) return;
     // store the target as a heading so the marker tracks turns between updates
-    state.guide = { sector: msg.sector, target: (h + msg.delta + 360) % 360, t: Date.now() };
+    state.guide = {
+      sector: msg.sector, target: (h + msg.delta + 360) % 360, t: Date.now(),
+      kind: msg.kind || 'search', distance: msg.distance ?? null,
+    };
     return;
   }
   if (msg.cmd === 'flash') {
@@ -531,7 +595,14 @@ function drawCompass() {
   const markers = [];
   if (rel !== null && state.calYaw !== null) markers.push({ off: signedDiff(0, rel), label: 'STAGE', color: '#4cc9f0' });
   const g = guideOffset();
-  if (g !== null) markers.push({ off: g, label: state.guide.sector, color: Math.abs(g) < 16 ? '#7ae582' : '#ffb703', big: true });
+  if (g !== null) {
+    const respond = state.guide.kind === 'respond';
+    markers.push({
+      off: g, big: true,
+      label: respond ? `CANDIDATE ${state.guide.distance}m` : state.guide.sector,
+      color: respond ? '#ff5d73' : Math.abs(g) < 16 ? '#7ae582' : '#ffb703',
+    });
+  }
   for (const m of markers) {
     const edge = Math.abs(m.off) > SPAN / 2 - 8;
     const x = edge ? (m.off > 0 ? w - 22 : 22) : w / 2 + m.off * ppd;
@@ -570,6 +641,16 @@ function updateGuideBanner() {
   const tilted = state.pitch !== null && Math.abs(state.pitch) > 65;
   const onTarget = Math.abs(off) < 16;
   el.classList.add('on');
+  if (state.guide.kind === 'respond') {
+    // walking to a found candidate: always red, direction + distance
+    el.classList.remove('ok');
+    el.classList.add('alert');
+    const dist = `${state.guide.distance} m`;
+    el.textContent = onTarget ? `↑ Candidate ahead · ${dist}`
+      : off > 0 ? `Turn right ${Math.round(off)}° → · ${dist}` : `← Turn left ${Math.round(-off)}° · ${dist}`;
+    return;
+  }
+  el.classList.remove('alert');
   el.classList.toggle('ok', onTarget && !tilted);
   el.textContent = tilted ? 'Hold your phone up'
     : onTarget ? `Scanning ${state.guide.sector}…`
