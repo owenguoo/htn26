@@ -337,3 +337,73 @@ struct ClockPairSimulator {
         return (Pong(id: id, t0: t0, t1: t1, t2: t2), t3)
     }
 }
+
+// MARK: - Session assembly
+
+/// A `ClockSync` already converged on a known offset, so a test can get past the
+/// "poses are not sent before the clock is synchronised" rule in one line.
+func syncedClock(offset: Double = 1_700_000_000.0) -> ClockSync {
+    var simulator = ClockPairSimulator(skew: offset, jitter: 0.004, seed: 0xBEEF)
+    var sync = ClockSync()
+    for id in 0..<12 {
+        let (pong, receivedAt) = simulator.exchange(id: UInt64(id), at: Double(id) * 0.1)
+        sync.ingest(pong, receivedAt: receivedAt)
+    }
+    return sync
+}
+
+/// Everything a replay-driven session test needs, assembled.
+struct ReplayHarness {
+    let machine: SessionMachine
+    let provider: MockPoseProvider
+    let trajectory: Trajectory
+    let venue: Venue
+
+    init(fixture: String,
+         configuration: SessionMachine.Configuration? = nil,
+         providerConfiguration: MockPoseProvider.Configuration = .immediate,
+         clockOffset: Double = 1_700_000_000.0) throws {
+        trajectory = try Fixtures.trajectory(fixture)
+        venue = try Venue.load(from: Fixtures.url("venue.json"))
+        provider = MockPoseProvider(trajectory: trajectory, configuration: providerConfiguration)
+        machine = SessionMachine(
+            configuration: configuration ?? SessionMachine.Configuration(deviceID: "phone-a"),
+            venue: venue,
+            provider: provider,
+            clock: syncedClock(offset: clockOffset))
+    }
+
+    /// Runs the whole replay and returns every event the machine emitted.
+    func run() async throws -> [SessionEvent] {
+        let stream = await machine.start()
+        let collector = Task {
+            var events: [SessionEvent] = []
+            for await event in stream { events.append(event) }
+            return events
+        }
+        try await machine.permissionsGranted()
+        return await collector.value
+    }
+}
+
+extension Array where Element == SessionEvent {
+    var poses: [PoseUpdate] {
+        compactMap { if case .pose(let update) = $0 { return update }; return nil }
+    }
+
+    var frames: [FrameTicket] {
+        compactMap { if case .captureFrame(let ticket) = $0 { return ticket }; return nil }
+    }
+
+    var depthChunks: [DepthTicket] {
+        compactMap { if case .captureDepthChunk(let ticket) = $0 { return ticket }; return nil }
+    }
+
+    var states: [SessionState] {
+        compactMap { if case .stateChanged(_, let to) = $0 { return to }; return nil }
+    }
+
+    var corrections: [String] {
+        compactMap { if case .correctionApplied(let id, _, _) = $0 { return id }; return nil }
+    }
+}

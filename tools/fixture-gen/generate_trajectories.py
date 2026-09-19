@@ -225,15 +225,20 @@ def build(name, seconds, seed, *, sweep_amplitude, loop_seconds, stationary,
         t = i / FPS
 
         if stationary:
-            # A phone held roughly still and swept: near-zero baseline, which is
-            # what Gate 5 must refuse to guess a scale from.
-            x, z = 0.15 * math.sin(t * 0.4), 3.0 + 0.12 * math.sin(t * 0.31)
+            # A phone held roughly still and swept: a couple of centimetres of
+            # hand drift and nothing else. Near-zero baseline, which is what
+            # Gate 5 must refuse to guess a scale from.
+            x, z = 0.02 * math.sin(t * 0.4), 3.0 + 0.018 * math.sin(t * 0.31)
         else:
             x, z = walk_path(t, loop_seconds, 3.6, 1.4, 6.4)
             x += 0.06 * math.sin(t * 2.1)  # lateral sway of a walking gait
 
         # Held at chest height with a gait bob at about 2 Hz.
-        y = 1.48 + 0.022 * math.sin(t * 2 * math.pi * 1.9) + 0.006 * math.sin(t * 5.3)
+        if stationary:
+            # Standing still: no gait, just breathing and a tiring arm.
+            y = 1.48 + 0.004 * math.sin(t * 2 * math.pi * 0.28)
+        else:
+            y = 1.48 + 0.022 * math.sin(t * 2 * math.pi * 1.9) + 0.006 * math.sin(t * 5.3)
 
         # Operators sweep: they are not seated and not pointing one way.
         yaw = sweep_amplitude * math.sin(t * 2 * math.pi / 7.3) + 0.4 * math.sin(t * 0.77)

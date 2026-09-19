@@ -40,16 +40,25 @@ public actor MockPoseProvider: PoseProvider {
         /// sighting N would not reach samples N+1 onward — which is exactly the
         /// behaviour a drift-correction test is trying to measure.
         public var lockstep: Bool
+        /// How many events the replay may get ahead of its consumer.
+        ///
+        /// A real `ARSession` delivers a frame and then the next one 16 ms later;
+        /// it cannot buffer thousands while the consumer catches up. That matters
+        /// because `setWorldOrigin` only affects *subsequent* frames: a replay
+        /// running far ahead would hand the consumer poses computed under the old
+        /// origin long after the correction, which no real session ever does.
+        public var deliveryDepth: Int
 
         public init(playbackRate: Double? = nil, loops: Int = 1, maxDuration: Double? = nil,
                     injections: [Int: [Injection]] = [:], emitRecordedMarkers: Bool = true,
-                    lockstep: Bool = false) {
+                    lockstep: Bool = false, deliveryDepth: Int = 1) {
             self.playbackRate = playbackRate
             self.loops = max(1, loops)
             self.maxDuration = maxDuration
             self.injections = injections
             self.emitRecordedMarkers = emitRecordedMarkers
             self.lockstep = lockstep
+            self.deliveryDepth = max(1, deliveryDepth)
         }
 
         public static let immediate = Configuration()
@@ -72,10 +81,11 @@ public actor MockPoseProvider: PoseProvider {
     }
 
     public func start() async throws -> AsyncStream<PoseProviderEvent> {
-        // Unbounded so a replay never silently loses samples: a throttling test
-        // that lost input would pass for the wrong reason. Bounded by the
-        // fixture length, which is a file on disk, not by anything at runtime.
-        let (stream, continuation) = AsyncStream<PoseProviderEvent>.makeStream(bufferingPolicy: .unbounded)
+        // Shallow and lossless: the producer retries rather than dropping, so a
+        // throttling test never passes because input went missing, and the replay
+        // cannot outrun the consumer the way an unbounded buffer would let it.
+        let (stream, continuation) = AsyncStream<PoseProviderEvent>
+            .makeStream(bufferingPolicy: .bufferingOldest(configuration.deliveryDepth))
         self.continuation = continuation
         task = Task { [weak self] in
             await self?.replay()
@@ -129,6 +139,37 @@ public actor MockPoseProvider: PoseProvider {
         return motionAccumulator
     }
 
+    /// Enqueues an event, waiting rather than dropping when the buffer is full.
+    /// `AsyncStream` has no backpressure of its own, so this supplies it.
+    ///
+    /// `make` is re-invoked on every attempt rather than the event being built
+    /// once up front. That is what makes `setWorldOrigin` behave the way ARKit's
+    /// does: a frame is expressed in whatever origin is current when the session
+    /// hands it over, not in the one that was current when it was captured. Build
+    /// the event once and a correction would appear to be ignored for exactly as
+    /// long as the consumer took to read the marker that caused it.
+    private func deliver(_ continuation: AsyncStream<PoseProviderEvent>.Continuation,
+                         _ make: () -> PoseProviderEvent) async {
+        var spins = 0
+        while !Task.isCancelled {
+            switch continuation.yield(make()) {
+            case .enqueued, .terminated:
+                return
+            case .dropped:
+                spins += 1
+                if spins < 8 {
+                    await Task.yield()
+                } else {
+                    // The consumer is genuinely busy; stop spinning at it.
+                    try? await Task.sleep(nanoseconds: 100_000)
+                    spins = 0
+                }
+            @unknown default:
+                return
+            }
+        }
+    }
+
     private func replay() async {
         guard let continuation, let firstSample = trajectory.samples.first else { return }
         var qualityOverride: TrackingQuality?
@@ -136,11 +177,14 @@ public actor MockPoseProvider: PoseProvider {
         var elapsed: Double = 0
         var loopOffset: Double = 0
         var markerIndex = 0
+        var interruptionIndex = 0
+        var interruptionOpen = false
 
         for pass in 0..<configuration.loops {
             if pass > 0 {
                 loopOffset += trajectory.duration + (1.0 / max(1, trajectory.sampleRate))
                 markerIndex = 0
+                interruptionIndex = 0
             }
             for (index, sample) in trajectory.samples.enumerated() {
                 if Task.isCancelled { return }
@@ -153,16 +197,36 @@ public actor MockPoseProvider: PoseProvider {
                     case .quality(let quality):
                         qualityOverride = quality
                     case .interrupted:
-                        continuation.yield(.interrupted)
+                        await deliver(continuation) { .interrupted }
                     case .interruptionEnded:
-                        continuation.yield(.interruptionEnded)
+                        await deliver(continuation) { .interruptionEnded }
                     case .marker(let sighting):
-                        continuation.yield(.marker(sighting))
+                        await deliver(continuation) { .marker(sighting) }
                     case .dropout(let count):
                         skipRemaining = count
                     case .failed(let reason):
-                        continuation.yield(.failed(reason))
+                        await deliver(continuation) { .failed(reason) }
                     }
+                }
+
+                // Interruptions the recording captured: a call, backgrounding,
+                // the camera being taken away. ARKit throws its map away across
+                // one of these, so they are events, not just a quality change.
+                while interruptionIndex < trajectory.interruptions.count {
+                    let window = trajectory.interruptions[interruptionIndex]
+                    if !interruptionOpen, window.startT + loopOffset <= sampleTime {
+                        interruptionOpen = true
+                        await deliver(continuation) { .interrupted }
+                        await waitForAdvance()
+                    }
+                    if interruptionOpen, window.endT + loopOffset <= sampleTime {
+                        interruptionOpen = false
+                        interruptionIndex += 1
+                        await deliver(continuation) { .interruptionEnded }
+                        await waitForAdvance()
+                        continue
+                    }
+                    break
                 }
 
                 if configuration.emitRecordedMarkers {
@@ -174,13 +238,15 @@ public actor MockPoseProvider: PoseProvider {
                         // A marker is reported in whatever frame is current, so
                         // the origin offset applies to sightings exactly as it
                         // applies to poses.
-                        let observed = originOffset * Pose(matrix: matrix)
-                        continuation.yield(.marker(MarkerSighting(
-                            markerID: event.markerID,
-                            observedTransform: observed.matrix,
-                            deviceTimestamp: event.t + loopOffset,
-                            isUpdate: event.isUpdate,
-                            estimatedPhysicalWidth: event.estimatedPhysicalWidth)))
+                        await deliver(continuation) {
+                            let observed = self.originOffset * Pose(matrix: matrix)
+                            return .marker(MarkerSighting(
+                                markerID: event.markerID,
+                                observedTransform: observed.matrix,
+                                deviceTimestamp: event.t + loopOffset,
+                                isUpdate: event.isUpdate,
+                                estimatedPhysicalWidth: event.estimatedPhysicalWidth))
+                        }
                         await waitForAdvance()
                     }
                 }
@@ -191,17 +257,18 @@ public actor MockPoseProvider: PoseProvider {
                 }
 
                 guard let recorded = sample.pose else { continue }
-                let pose = originOffset * recorded
-                if let last = lastPosition {
-                    motionAccumulator += simd_distance(last, pose.position)
+                let quality = qualityOverride ?? sample.quality
+                await deliver(continuation) {
+                    let pose = self.originOffset * recorded
+                    if let last = self.lastPosition {
+                        self.motionAccumulator += simd_distance(last, pose.position)
+                    }
+                    self.lastPosition = pose.position
+                    return .pose(PoseSample(pose: pose,
+                                            deviceTimestamp: sampleTime,
+                                            quality: quality,
+                                            intrinsics: self.trajectory.intrinsics))
                 }
-                lastPosition = pose.position
-
-                continuation.yield(.pose(PoseSample(
-                    pose: pose,
-                    deviceTimestamp: sampleTime,
-                    quality: qualityOverride ?? sample.quality,
-                    intrinsics: trajectory.intrinsics)))
                 emittedPoseCount += 1
                 await waitForAdvance()
 
