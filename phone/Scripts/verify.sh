@@ -17,10 +17,10 @@ echo
 echo "=== gate 2/2: xcodebuild, iOS Simulator ==="
 # This gate needs an accepted Xcode license and an installed iOS Simulator
 # runtime. Scripts/preflight.sh says which, if either, is missing.
-Scripts/preflight.sh >/dev/null 2>&1 || {
+Scripts/preflight.sh --core >/dev/null 2>&1 || {
   echo
   echo "the machine is not set up for this gate:"
-  Scripts/preflight.sh
+  Scripts/preflight.sh --core
   exit 1
 }
 xcodebuild -scheme SwarmSight -destination 'platform=iOS Simulator,name=iPhone 16' build

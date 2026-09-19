@@ -64,8 +64,9 @@ if [ -n "$xcode_version" ] && [ "$(printf '%s\n26.4\n' "$xcode_version" | sort -
 else
   echo "  TOO OLD: Xcode ${xcode_version:-none}; the Expo app needs >= 26.4."
   echo "  Update from the App Store or developer.apple.com/download."
-  # Only fatal once the Expo app exists; SwarmCore and the hub e2e do not need it.
-  if [ -d "$(dirname "$0")/../mobile" ]; then status=1; fi
+  # Fatal only for the Expo app. `--core` (what verify.sh passes) checks just
+  # what SwarmCore, the Swift shell and the hub e2e need.
+  if [ "${1:-}" != "--core" ]; then status=1; fi
 fi
 
 echo "=== node and pnpm ==="
