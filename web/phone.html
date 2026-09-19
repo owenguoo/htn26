@@ -33,7 +33,7 @@
     #live { position: fixed; inset: 0; display: none; }
     #live.on { display: block; }
     video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
-    #fakeCanvas, #xrCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+    #fakeCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
     #ar { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
     .lf { justify-self: center; display: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
     .lf.on { display: flex; }
@@ -48,7 +48,6 @@
     .ptext b { color: var(--text); }
     .pbar { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.1); overflow: hidden; }
     .pbar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .5s; }
-    .modeLink { color: var(--muted); font-size: 14px; text-align: center; }
     .hud { position: absolute; top: max(10px, env(safe-area-inset-top)); left: 10px; right: 10px; display: grid; gap: 8px; }
     .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     #compass { width: 100%; height: 56px; display: block; border-radius: 14px; background: var(--panel);
@@ -104,13 +103,11 @@
     <input id="name" maxlength="24" placeholder="Your name (optional)" autocomplete="off">
     <button id="joinBtn" class="primary">Join with camera</button>
     <div id="joinError"></div>
-    <a class="modeLink" id="modeLink" href="/?slam">Try precise tracking (8th Wall, beta) →</a>
   </section>
 
   <section id="live">
     <video id="video" playsinline muted autoplay></video>
     <canvas id="fakeCanvas"></canvas>
-    <canvas id="xrCanvas"></canvas>
     <canvas id="ar"></canvas>
     <div class="hud">
       <canvas id="compass"></canvas>
