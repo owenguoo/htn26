@@ -102,12 +102,12 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   draco.setWorkerLimit(1);
   loader.setDRACOLoader(draco);
   let transformKey = '', fitted = false, cutaway = true;
-  let cleanupWorker = null, cleanupEpoch = 0, cleanupEnabled = true;
+  let cleanupWorker = null, cleanupEpoch = 0, cleanupEnabled = false;
   const cutPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
 
   const toolbar = document.createElement('div');
   toolbar.className = 's3d-tools';
-  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="true">Cutaway</button><button type="button" data-view="clean" aria-pressed="true">Clean patches</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
+  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="true">Cutaway</button><button type="button" data-view="clean" aria-pressed="false">Clean patches</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
   host.appendChild(toolbar);
   toolbar.addEventListener('click', (e) => {
     const action = e.target.closest('button')?.dataset.view;

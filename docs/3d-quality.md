@@ -215,3 +215,7 @@ Frozen v15 validation: 32.1% of triangles hidden; 1151 ms worker time and
 The render loop reported 120 fps after completion. Same-camera visual comparison
 shows changed overlapping surfaces, but large misalignments and holes remain;
 triangle reduction is not evidence of metric accuracy or complete seam removal.
+
+Patch selection is disabled by default after visual review found it less clean.
+It remains an opt-in comparison; original surfaces are the default. Triangle
+reduction alone did not establish an improvement in visual quality.
