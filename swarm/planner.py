@@ -35,7 +35,7 @@ class Planner:
         self.enabled = False
         self.assignments: dict[str, dict] = {}  # phone id → {sector, t, onTarget, left, progress_t}
         self.skipped: dict[str, set[str]] = {}   # phone id → sectors it stalled on
-        self.log: deque[dict] = deque(maxlen=8)
+        self.log: deque[dict] = deque(maxlen=30)
         self.last_plan = 0.0
         self.last_guide = 0.0
         # sector name → [(cell index, x, y)] for every coverage cell inside it

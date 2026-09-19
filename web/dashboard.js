@@ -176,14 +176,6 @@ function createTile(p) {
     el, img: el.querySelector('img'), placeholder: el.querySelector('.placeholder'),
     who: el.querySelector('.who'), nums: el.querySelector('.nums'), tags: el.querySelector('.tags'), url: null,
   };
-  el.title = 'Click to flash this phone';
-  el.addEventListener('click', () => {
-    const ph = phones.get(p.id);
-    send({ type: 'command', target: p.id, cmd: { cmd: 'flash', color: ph?.color, text: `#${ph?.index}`, ttlMs: 1500 } });
-    el.classList.remove('flashing');
-    void el.offsetWidth;
-    el.classList.add('flashing');
-  });
   el.addEventListener('mouseenter', () => { hoverId = p.id; });
   el.addEventListener('mouseleave', () => { if (hoverId === p.id) hoverId = null; });
   tiles.set(p.id, t);
@@ -191,9 +183,6 @@ function createTile(p) {
   return t;
 }
 
-$('#flashAll').addEventListener('click', () => {
-  send({ type: 'command', target: 'all', cmd: { cmd: 'flash', ttlMs: 1500 } });
-});
 
 function renderStats() {
   const live = [...phones.values()].filter((p) => p.connected);

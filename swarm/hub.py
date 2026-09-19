@@ -46,6 +46,10 @@ PING_TTL_MS = 12000
 MESSAGE_TTL_MS = 8000
 WORLD_HZ = 2             # how often phones get the shared picture (mini-map, progress)
 LOOK_SECONDS = 20        # default time an operator "look" direction holds a phone
+GO_SECONDS = 90          # default time a "walk to" order stays active
+ARRIVE_M = 1.5           # a phone this close to a walk-to spot has arrived
+FOCUS_FPS = 8            # a phone expanded in a console captures and streams this fast
+FOCUS_INTERVAL_MS = 1000 / FOCUS_FPS
 
 
 @dataclass
@@ -69,6 +73,7 @@ class Phone:
     debug: dict | None = None        # latest diagnostics the phone reported
     hidden: bool = False             # operator hid this feed from the projector
     searched_cells: int = 0          # coverage cells this phone was first to look at
+    tilted_since: float | None = None  # when it started pointing at the floor/ceiling
     # latest frame (latest wins, never queued)
     frame: bytes | None = None
     frame_seq: int = -1
@@ -141,6 +146,8 @@ class Hub:
         # operator "look" directions: phone id → {label, until, sent, and compass | heading | point}
         self.directives: dict[str, dict] = {}
         self.directives_cleared: list[str] = []
+        self.mission_complete = False       # every responder reached the found candidate
+        self.boosted: set[str] = set()      # phones told to capture faster (expanded in a console)
         self.mission = None                 # Mission Control (LLM); created in main()
 
     # ---- phone lifecycle -------------------------------------------------
@@ -270,6 +277,8 @@ class Hub:
             now = now_ms()
             viewers = {}
             for p in self.phones.values():
+                tilted = p.pitch is not None and abs(p.pitch) > 65
+                p.tilted_since = (p.tilted_since or now) if tilted else None
                 pose = p.pose(now)
                 live = p.connected and p.frame is not None and now - p.frame_at <= STALE_MS
                 if live and pose and pose["heading"] is not None:
@@ -284,12 +293,23 @@ class Hub:
             busy = self.target.busy() | set(self.directives)
             cmds = self.planner.tick({k: v for k, v in viewers.items() if k not in busy}, now)
             cmds += self.target.tick(viewers if searching else {}, now)
+            for pid in self.target.busy() & set(self.directives):
+                del self.directives[pid]  # joining the find team replaces any earlier walk/look order
             cmds += self.directive_tick(now)
             if cmds:
                 await asyncio.gather(*(self.phones[pid].send({"type": "command", **cmd})
                                        for pid, cmd in cmds if pid in self.phones))
             if self.phase == "search" and self.target.found_by:
                 await self.set_phase("found")
+                if self.mission:
+                    self.mission.trigger()  # a find is exactly when the autonomy layer should look
+            done = self.target.complete()
+            if done and not self.mission_complete:  # the whole team is on target: stop searching
+                self.planner.enabled = False
+                released = self.clear_look(None)  # cancel walk/look orders still underway
+                self.planner.note("All responders on target: search complete"
+                                  + (f", released {', '.join(f'#{n}' for n in released)}" if released else ""))
+            self.mission_complete = done
             await asyncio.sleep(1 / hz)
 
     async def set_phase(self, phase: str) -> None:
@@ -299,6 +319,8 @@ class Hub:
         if phase != self.phase:
             self.phase, self.phase_started = phase, now_ms()
             self.planner.note(f"Phase → {phase}")
+            if self.mission:
+                self.mission.trigger()
         if phase == "search":
             self.planner.enabled = True
         elif phase in ("lobby", "calibrate", "end"):
@@ -350,17 +372,18 @@ class Hub:
 
     def look(self, phones: list[int] | None, label: str, seconds: float | None = None, *,
              compass: float | None = None, heading: float | None = None,
-             point: tuple[float, float] | None = None) -> list[int]:
-        """Point phones somewhere: a real compass bearing, a room heading (0 = stage), or a spot."""
+             point: tuple[float, float] | None = None, go: bool = False) -> list[int]:
+        """Point phones somewhere: a real compass bearing, a room heading (0 = stage), or a spot.
+        With go=True the phones walk to the spot instead, until they arrive."""
         now = now_ms()
-        until = now + 1000 * (seconds or LOOK_SECONDS)
+        until = now + 1000 * (seconds or (GO_SECONDS if go else LOOK_SECONDS))
         done = []
         for p in self.phones_by_index(phones):
             self.planner.assignments.pop(p.id, None)  # the operator overrides the plan
-            self.directives[p.id] = {"label": str(label)[:16], "until": until, "sent": 0.0,
+            self.directives[p.id] = {"label": str(label)[:16], "until": until, "sent": 0.0, "go": go,
                                      "compass": compass, "heading": heading, "point": point}
             done.append(p.index)
-        self.planner.note(f"Look {label} → " + ", ".join(f"#{i}" for i in done))
+        self.planner.note(f"{'Walk to' if go else 'Look'} {label} → " + ", ".join(f"#{i}" for i in done))
         return done
 
     def clear_look(self, phones: list[int] | None) -> list[int]:
@@ -380,9 +403,10 @@ class Hub:
                 del self.directives[pid]
                 out.append((pid, {"cmd": "guide", "clear": True}))
                 continue
-            if pid in self.target.busy() or now - d["sent"] < 1000:
+            if pid in self.target.busy() or now - d["sent"] < (500 if d["go"] else 1000):
                 continue  # responding to the candidate wins; otherwise refresh once a second
-            cmd = {"cmd": "guide", "kind": "look", "sector": d["label"], "untilMs": round(d["until"] - now)}
+            cmd = {"cmd": "guide", "kind": "go" if d["go"] else "look", "sector": d["label"],
+                   "untilMs": round(d["until"] - now)}
             if d["compass"] is not None:
                 cmd["compass"] = d["compass"] % 360
             elif d["heading"] is not None:
@@ -392,15 +416,46 @@ class Hub:
                 if not pose:
                     continue
                 x, y = d["point"]
+                dist = math.hypot(x - pose["x"], y - pose["y"])
+                if d["go"] and dist <= ARRIVE_M:
+                    del self.directives[pid]
+                    self.planner.note(f"arrived at {d['label']}", pid)
+                    out.append((pid, {"cmd": "guide", "clear": True}))
+                    out.append((pid, {"cmd": "flash", "color": "#7ae582", "text": "You're there ✓", "ttlMs": 1500}))
+                    continue
                 cmd["heading"] = math.degrees(math.atan2(x - pose["x"], -(y - pose["y"]))) % 360
-                cmd["distance"] = round(math.hypot(x - pose["x"], y - pose["y"]), 1)
+                cmd["distance"] = round(dist, 1)
             d["sent"] = now
             out.append((pid, cmd))
         return out
 
+    def task_of(self, pid: str) -> str | None:
+        """What a phone is busy doing, or None if it's free for a new order.
+        Routine planner sectors don't count: only explicit orders and the find team do."""
+        if pid in self.target.busy():
+            return "with the found candidate"
+        d = self.directives.get(pid)
+        if d:
+            return f"{'walking to' if d['go'] else 'looking at'} {d['label']}"
+        a = self.planner.assignments.get(pid)
+        if a and a.get("manual"):
+            return f"searching {a['sector']}"
+        return None
+
     def set_looking_for(self, text: str) -> None:
         self.looking_for = str(text)[:80]
         self.planner.note(f"Looking for: {self.looking_for or '(cleared)'}")
+
+    async def update_boost(self) -> None:
+        """Phones someone is viewing large in a console capture faster; the rest go back to normal."""
+        wanted = {c.focus for c in self.consoles if c.focus}
+        for pid in wanted - self.boosted:
+            if pid in self.phones:
+                await self.phones[pid].send({"type": "command", "cmd": "rate", "fps": FOCUS_FPS})
+        for pid in self.boosted - wanted:
+            if pid in self.phones:
+                await self.phones[pid].send({"type": "command", "cmd": "rate", "fps": None})
+        self.boosted = wanted
 
     async def emit(self, event: dict) -> None:
         """Push an event (e.g. Mission Control progress) to every open console/dashboard."""
@@ -431,7 +486,7 @@ class Hub:
                 "type": "world", "phase": self.phase, "phones": others,
                 "coverage": {k: cov[k] for k in ("cols", "rows", "cell", "x0", "cells")},
                 "searched": cov["searched"], "searchers": len(live),
-                "lookingFor": self.looking_for,
+                "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
                 "candidate": None if found is None else {"x": found[0], "y": found[1]},
             }
             sends = []
@@ -448,11 +503,14 @@ class Hub:
     def state(self) -> dict:
         now = now_ms()
         phones = sorted(self.phones.values(), key=lambda p: p.index)
-        return {"type": "state", "t": now, "phones": [p.summary(now) for p in phones],
+        cell_m2 = self.coverage.cell ** 2
+        return {"type": "state", "t": now,
+                "phones": [p.summary(now) | {"task": self.task_of(p.id), "searchedM2": round(p.searched_cells * cell_m2, 1)}
+                           for p in phones],
                 "coverage": self.coverage.snapshot(), "planner": self.planner.snapshot(),
                 "target": self.target.snapshot(now),
                 "phase": self.phase, "phaseStartedAt": self.phase_started,
-                "lookingFor": self.looking_for,
+                "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
                 "mission": self.mission.status() if self.mission else {"ready": False, "why": "not started"}}
 
@@ -488,6 +546,7 @@ class FrameSubscriber:
     def __init__(self, ws: WebSocket, fps: float, with_state: bool, skip_hidden: bool = False) -> None:
         self.ws = ws
         self.skip_hidden = skip_hidden  # projector: never show feeds the operator hid
+        self.focus: str | None = None   # phone shown large in the console: gets frames faster
         self.min_interval = 1000 / max(fps, 0.1)
         self.with_state = with_state
         self.sent_seq: dict[str, int] = {}
@@ -508,7 +567,8 @@ class FrameSubscriber:
             for p in list(hub.phones.values()):
                 if p.frame is None or self.sent_seq.get(p.id) == p.frame_seq or (self.skip_hidden and p.hidden):
                     continue
-                if now - self.sent_at.get(p.id, 0) < self.min_interval:
+                interval = FOCUS_INTERVAL_MS if p.id == self.focus else self.min_interval
+                if now - self.sent_at.get(p.id, 0) < interval:
                     continue
                 self.sent_seq[p.id] = p.frame_seq
                 self.sent_at[p.id] = now
@@ -587,6 +647,9 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                         hub.target.responders_wanted = max(0, int(msg["responders"]))
             elif msg.get("type") == "phase":
                 await hub.set_phase(str(msg.get("phase")))
+            elif msg.get("type") == "focus":
+                sub.focus = msg.get("phoneId") or None
+                await hub.update_boost()
             elif msg.get("type") == "hide":
                 phone = hub.phones.get(str(msg.get("phoneId")))
                 if phone:
@@ -595,11 +658,15 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                 await hub.ping(msg["x"], msg["y"], msg.get("label") or "Check here", msg.get("phones"))
             elif msg.get("type") == "mission" and hub.mission:
                 asyncio.create_task(hub.mission.run(str(msg.get("text", ""))))
+            elif msg.get("type") == "autonomy" and hub.mission:
+                hub.mission.set_autonomy(bool(msg.get("enabled")))
     except (WebSocketDisconnect, RuntimeError, ValueError, KeyError):
         pass
     finally:
         pump.cancel()
         hub.consoles.discard(sub)
+        if sub.focus:
+            await hub.update_boost()
 
 
 @app.websocket("/ws/dashboard")
@@ -727,6 +794,7 @@ def main() -> None:
         asyncio.create_task(hub.reaper())
         asyncio.create_task(hub.coverage_loop())
         asyncio.create_task(hub.world_loop())
+        asyncio.create_task(hub.mission.autonomy_loop())
         await asyncio.gather(*(uvicorn.Server(c).serve() for c in configs))
 
     try:

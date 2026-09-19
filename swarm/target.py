@@ -1,8 +1,9 @@
 """Mock candidate for rehearsing the find → respond flow.
 
 The operator places and drags a candidate on the dashboard. When a phone's camera cone
-covers it for DWELL_MS, it's found: the finder is told, and the RESPONDERS nearest other
-phones get live directions to it until they're within ARRIVE_M.
+covers it for DWELL_MS, it's found. The finder counts as the first responder (already there);
+the nearest other phones make up the rest of the team and get live directions to it until
+they're within ARRIVE_M. The whole team then stays with the candidate: nothing else steers them.
 """
 from __future__ import annotations
 
@@ -47,8 +48,12 @@ class Target:
         self.reset_search()
 
     def busy(self) -> set[str]:
-        """Phones currently responding (the planner leaves them alone)."""
-        return {pid for pid, r in self.responders.items() if not r["arrived"]}
+        """The find team (finder + responders, arrived or not): nothing else may steer them."""
+        return set(self.responders)
+
+    def complete(self) -> bool:
+        """Found, and the whole find team is with the candidate: the search is over."""
+        return bool(self.found_by and self.responders and all(r["arrived"] for r in self.responders.values()))
 
     def sees(self, x: float, y: float, heading: float, pitch: float | None) -> bool:
         tx, ty = self.pos
@@ -107,10 +112,11 @@ class Target:
         others = sorted(
             (math.hypot(tx - x, ty - y), pid) for pid, (x, y, _, _) in viewers.items() if pid != finder
         )
-        chosen = [pid for _, pid in others[: self.responders_wanted]]
-        self.responders = {pid: {"arrived": False} for pid in chosen}
+        # the finder is the first responder; the nearest others fill out the team
+        dispatched = others[: max(0, self.responders_wanted - 1)]
+        self.responders = {finder: {"arrived": True}} | {pid: {"arrived": False} for _, pid in dispatched}
         out = [(finder, {"cmd": "flash", "color": "#ff5d73", "text": "You found them!\nStay on them", "ttlMs": 2500})]
-        for d, pid in others[: self.responders_wanted]:
+        for d, pid in dispatched:
             self.note(f"dispatched ({d:.1f} m away)", pid)
             out.append((pid, {"cmd": "flash", "color": "#ff5d73", "text": "Candidate found!\nFollow the arrow", "ttlMs": 1800}))
         return out

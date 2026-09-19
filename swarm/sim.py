@@ -90,10 +90,12 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
                             if msg.get("clear"):
                                 aim["target"] = None
                                 walk["distance"] = 0.0
-                            elif msg.get("kind") == "look":
+                            elif msg.get("kind") in ("look", "go"):
                                 if msg.get("heading") is not None:  # sims have no compass: room headings only
                                     aim["target"] = msg["heading"] % 360
                                     aim["until"] = time.time() + 3
+                                    # "go": walk there (the hub clears the order on arrival)
+                                    walk["distance"] = (msg.get("distance") or 0.0) + 1.0 if msg.get("kind") == "go" else 0.0
                             else:
                                 aim["target"] = (aim["heading"] + msg["delta"]) % 360
                                 aim["until"] = time.time() + 3

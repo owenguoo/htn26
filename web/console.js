@@ -56,10 +56,12 @@ function onFrame(buf) {
   thumbs.set(phoneId, url);
   const img = document.querySelector(`img[data-thumb="${CSS.escape(phoneId)}"]`);
   if (img) img.src = url;
+  if (phoneId === viewing) { $('#vImg').src = url; $('#vNone').style.display = 'none'; }
 }
 
 // ---------------------------------------------------------------- render
 function render() {
+  renderViewer();
   renderPhases();
   renderMetrics();
   renderControls();
@@ -117,6 +119,7 @@ function renderControls() {
   $('#lookingFor').textContent = st.lookingFor ? `Looking for: ${st.lookingFor}` : '';
   const m = st.mission || {};
   $('#mcModel').textContent = m.ready ? m.model : (m.why || '');
+  renderAutonomy(m);
   $('#candBtn').textContent = t ? 'Remove candidate' : 'Place candidate';
   $('#candBtn').classList.toggle('primary', !t);
 }
@@ -149,7 +152,7 @@ function renderPhones() {
       tr.dataset.id = p.id;
       tr.innerHTML = `<td><img class="thumb" alt="" data-thumb="${escapeHtml(p.id)}"></td><td class="idx"></td><td class="name"></td>
         <td class="pos mono muted"></td><td class="hd mono muted"></td><td class="fps mono muted"></td><td class="lat mono muted"></td>
-        <td class="st"></td><td class="actions"><button class="btn sm" data-act="flash">Flash</button><button class="btn sm" data-act="hide"></button></td>`;
+        <td class="st"></td><td class="actions"><button class="btn sm" data-act="hide"></button></td>`;
       if (thumbs.has(p.id)) tr.querySelector('img').src = thumbs.get(p.id);
     }
     existing.delete(p.id);
@@ -170,16 +173,63 @@ function renderPhones() {
 }
 
 $('#phones').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-act]');
-  if (!b) return;
-  const p = phones.get(b.closest('tr').dataset.id);
+  const tr = e.target.closest('tr');
+  const p = tr && phones.get(tr.dataset.id);
   if (!p) return;
-  if (b.dataset.act === 'flash') {
-    send({ type: 'command', target: p.id, cmd: { cmd: 'flash', color: '#ffffff', text: `#${p.index}`, ttlMs: 1500 } });
-  } else {
-    send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
-  }
+  if (e.target.closest('[data-act]')) send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
+  else openViewer(p.id); // click anywhere else on the row: expand the feed
 });
+
+// ---------------------------------------------------------------- expanded feed
+let viewing = null; // phone id shown large
+
+function openViewer(id) {
+  viewing = id;
+  $('#vImg').removeAttribute('src');
+  $('#vNone').style.display = '';
+  if (thumbs.has(id)) { $('#vImg').src = thumbs.get(id); $('#vNone').style.display = 'none'; }
+  $('#viewer').classList.add('on');
+  send({ type: 'focus', phoneId: id }); // hub streams this phone faster while it's open
+  renderViewer();
+}
+
+function closeViewer() {
+  viewing = null;
+  $('#viewer').classList.remove('on');
+  send({ type: 'focus', phoneId: null });
+}
+
+function stepViewer(d) {
+  const list = [...phones.values()].sort((a, b) => a.index - b.index);
+  const i = list.findIndex((p) => p.id === viewing);
+  if (list.length) openViewer(list[(i + d + list.length) % list.length].id);
+}
+
+function renderViewer() {
+  if (!viewing) return;
+  const p = phones.get(viewing);
+  if (!p) { closeViewer(); return; }
+  $('#vNum').textContent = `#${p.index}`;
+  $('#vName').textContent = p.name || 'Phone';
+  $('#vDevice').textContent = p.device || '';
+  $('#vBadges').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
+  $('#vHide').textContent = p.hidden ? 'Show on projector' : 'Hide from projector';
+  const pose = p.pose;
+  $('#vTask').textContent = p.task || (st.planner?.assignments?.[p.id] ? `searching ${st.planner.assignments[p.id].sector}` : 'idle');
+  $('#vPos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : 'not placed';
+  $('#vHd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
+  $('#vPitch').textContent = p.pitch != null ? `${Math.round(p.pitch)}°` : '–';
+  $('#vFps').textContent = p.fps.toFixed(1);
+  $('#vLat').textContent = p.latencyMs != null ? `${p.latencyMs}ms` : '–';
+  $('#vM2').textContent = `${p.searchedM2 ?? 0} m²`;
+}
+
+$('#vClose').addEventListener('click', closeViewer);
+$('#vHide').addEventListener('click', () => {
+  const p = phones.get(viewing);
+  if (p) send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
+});
+$('#viewer').addEventListener('click', (e) => { if (e.target === $('#viewer')) closeViewer(); });
 
 function renderLog() {
   const log = [...(st.planner?.log || [])].reverse();
@@ -233,18 +283,43 @@ function onMission(ev) {
   }
 }
 
+// ---------------------------------------------------------------- autonomy
+let recsKey = '';
+
+function renderAutonomy(m) {
+  const on = !!m.autonomy;
+  $('#autoSw').classList.toggle('on', on);
+  $('#aiStatus').classList.add('on');
+  $('#aiPulse').classList.toggle('live', on && !!m.thinking);
+  const searching = st.phase === 'search' || st.phase === 'found';
+  $('#aiText').textContent = !on ? 'Autonomy paused'
+    : st.missionComplete ? 'Mission complete · all responders on target'
+    : !searching ? 'Autonomous · waiting for the search phase'
+    : m.thinking ? 'Analyzing the room…'
+    : `Autonomous${m.lastThinkMs ? ` · reviews take ${(m.lastThinkMs / 1000).toFixed(1)}s` : ''}`;
+  $('#aiUsage').textContent = `${m.calls || 0} calls · ${((m.tokens || 0) / 1000).toFixed(1)}k tokens`;
+
+  // live feed of what autonomy did (newest first, last minute)
+  const recs = (m.recs || []).filter((r) => r.ageS < 60).slice(0, 4);
+  const key = JSON.stringify(recs.map((r) => r.id));
+  if (key === recsKey) return; // unchanged: don't rebuild
+  recsKey = key;
+  $('#recs').innerHTML = recs.map((r) => `<div class="rec"><span class="sev ${r.severity}"></span>
+      <div><div class="t">${escapeHtml(r.title)}</div><div class="why">${escapeHtml(r.reason)}</div>
+      <div class="acts">${r.results.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join('')}</div></div>
+      <span class="state ${r.status === 'failed' ? '' : 'auto'}">${r.status === 'failed' ? '✕ failed' : '⚡ done'}</span></div>`).join('');
+}
+
+$('#autoSw').addEventListener('click', () => send({ type: 'autonomy', enabled: !st?.mission?.autonomy }));
+
 // ---------------------------------------------------------------- controls
 let respondersPref = 3;
 $('#plannerSw').addEventListener('click', () => send({ type: 'planner', enabled: !st?.planner?.enabled }));
 $('#resetCov').addEventListener('click', () => send({ type: 'reset_coverage' }));
-$('#flashAll').addEventListener('click', flashAll);
 $('#candBtn').addEventListener('click', toggleCandidate);
 $('#respMinus').addEventListener('click', () => setResponders(-1));
 $('#respPlus').addEventListener('click', () => setResponders(+1));
 
-function flashAll() {
-  send({ type: 'command', target: 'all', cmd: { cmd: 'flash', color: '#ffffff', ttlMs: 1200 } });
-}
 
 function toggleCandidate() {
   if (st?.target) send({ type: 'target', remove: true });
@@ -259,12 +334,17 @@ function setResponders(d) {
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && e.target === $('#mcInput')) { e.target.blur(); return; }
+  if (viewing && !e.target.closest?.('input, textarea')) {
+    if (e.key === 'Escape') { closeViewer(); return; }
+    if (e.key === 'ArrowRight') { stepViewer(1); return; }
+    if (e.key === 'ArrowLeft') { stepViewer(-1); return; }
+  }
   if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea')) return;
   if (e.key === '/') { e.preventDefault(); $('#mcInput').focus(); return; }
+  if (e.key === 'm' || e.key === 'M') { send({ type: 'autonomy', enabled: !st?.mission?.autonomy }); return; }
   const n = Number(e.key);
   if (n >= 1 && n <= PHASES.length) send({ type: 'phase', phase: PHASES[n - 1][0] });
   else if (e.key === 'p' || e.key === 'P') send({ type: 'planner', enabled: !st?.planner?.enabled });
-  else if (e.key === 'f' || e.key === 'F') flashAll();
 });
 
 // ---------------------------------------------------------------- map (monochrome)
@@ -409,14 +489,29 @@ function nearCandidate(e) {
 }
 canvas.addEventListener('mousedown', (e) => {
   if (e.altKey && view) { send({ type: 'ping', ...roomPoint(e) }); return; } // alt-click pings too
-  if (nearCandidate(e)) { dragPos = roomPoint(e); e.preventDefault(); }
+  if (nearCandidate(e)) { dragPos = roomPoint(e); e.preventDefault(); return; }
+  const p = phoneAt(e);
+  if (p) openViewer(p.id);
 });
+
+function phoneAt(e) {
+  if (!view) return null;
+  const r = canvas.getBoundingClientRect();
+  let best = null, bestD = 10;
+  for (const p of phones.values()) {
+    if (!p.pose) continue;
+    const [px, py] = view.toPx(p.pose.x, p.pose.y);
+    const d = Math.hypot(px - (e.clientX - r.left), py - (e.clientY - r.top));
+    if (d < bestD) { best = p; bestD = d; }
+  }
+  return best;
+}
 canvas.addEventListener('contextmenu', (e) => { // right-click: ping, like Valorant
   e.preventDefault();
   if (view) send({ type: 'ping', ...roomPoint(e) });
 });
 canvas.addEventListener('mousemove', (e) => {
-  canvas.style.cursor = dragPos ? 'grabbing' : nearCandidate(e) ? 'grab' : 'default';
+  canvas.style.cursor = dragPos ? 'grabbing' : nearCandidate(e) ? 'grab' : phoneAt(e) ? 'pointer' : 'default';
 });
 window.addEventListener('mousemove', (e) => {
   if (!dragPos) return;

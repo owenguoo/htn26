@@ -111,7 +111,7 @@ async function startLive() {
   state.room = await loadRoom();
   setupSeatMap();
   connect();
-  setInterval(captureFrame, 1000 / FPS);
+  setCaptureRate(FPS);
   setInterval(sendOrientation, 100);
   if (SLAM) setInterval(sendSlamDebug, 2000);
   requestAnimationFrame(tickUi);
@@ -193,6 +193,13 @@ function captureFrame() {
     grabInto(v, v.videoWidth, v.videoHeight);
   }
   sendCapture();
+}
+
+// The hub raises the rate while an operator watches this phone full-size, then resets it.
+let captureTimer = null;
+function setCaptureRate(fps) {
+  clearInterval(captureTimer);
+  captureTimer = setInterval(captureFrame, 1000 / Math.max(1, Math.min(10, fps)));
 }
 
 function grabInto(src, sw, sh) {
@@ -567,9 +574,9 @@ let flashTimer = null;
 function onCommand(msg) {
   if (msg.cmd === 'guide') {
     if (msg.clear) { state.guide = null; return; }
-    if (msg.kind === 'look') {
+    if (msg.kind === 'look' || msg.kind === 'go') {
       state.guide = {
-        kind: 'look', sector: msg.sector, compass: msg.compass ?? null, heading: msg.heading ?? null,
+        kind: msg.kind, sector: msg.sector, compass: msg.compass ?? null, heading: msg.heading ?? null,
         distance: msg.distance ?? null, t: Date.now(), until: Date.now() + (msg.untilMs ?? 20000),
       };
       return;
@@ -581,6 +588,10 @@ function onCommand(msg) {
       sector: msg.sector, target: (h + msg.delta + 360) % 360, t: Date.now(),
       kind: msg.kind || 'search', distance: msg.distance ?? null,
     };
+    return;
+  }
+  if (msg.cmd === 'rate') {
+    setCaptureRate(msg.fps || FPS);
     return;
   }
   if (msg.cmd === 'ping') {
@@ -617,7 +628,7 @@ function guideOffset() {
   const g = state.guide;
   const h = currentHeading();
   if (!g || h === null) return null;
-  if (g.kind === 'look') {
+  if (g.kind === 'look' || g.kind === 'go') {
     if (Date.now() > g.until) return null;
     if (g.compass !== null) {
       const abs = absoluteBearing(); // real-world direction needs this phone's compass
@@ -679,7 +690,8 @@ function drawCompass() {
     markers.push({
       off: g, big: true,
       label: respond ? `CANDIDATE ${state.guide.distance}m` : state.guide.sector,
-      color: respond ? '#ff5d73' : Math.abs(g) < 16 ? '#7ae582' : state.guide.kind === 'look' ? '#4cc9f0' : '#ffb703',
+      color: respond ? '#ff5d73' : Math.abs(g) < 16 ? '#7ae582'
+        : state.guide.kind === 'look' || state.guide.kind === 'go' ? '#4cc9f0' : '#ffb703',
     });
   }
   for (const t of worldTargets()) {
@@ -740,6 +752,14 @@ function updateGuideBanner() {
     return;
   }
   el.classList.remove('alert');
+  if (state.guide.kind === 'go') { // walk to a spot: direction + distance until the hub says we arrived
+    el.classList.remove('ok');
+    const dist = state.guide.distance != null ? ` · ${state.guide.distance} m` : '';
+    el.textContent = onTarget ? `↑ Walk to ${state.guide.sector}${dist}`
+      : off > 0 ? `Turn right ${Math.round(off)}° → · walk to ${state.guide.sector}${dist}`
+        : `← Turn left ${Math.round(-off)}° · walk to ${state.guide.sector}${dist}`;
+    return;
+  }
   if (state.guide.kind === 'look') {
     el.classList.toggle('ok', onTarget);
     const name = state.guide.sector;

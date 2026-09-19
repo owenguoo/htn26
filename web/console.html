@@ -89,6 +89,33 @@
       border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -1px; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* autonomy */
+    .autoSw { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--fg-2); flex: none; }
+    .autoSw.on { color: var(--fg); }
+    .autoSw.on .switch { background: var(--red); border-color: var(--red); }
+    .autoSw.on .switch::after { transform: translateX(16px); background: #fff; }
+    #aiStatus { display: none; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--line);
+      font: 12px var(--mono); color: var(--fg-3); }
+    #aiStatus.on { display: flex; }
+    .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); flex: none; }
+    .pulse.live { background: #fff; animation: breathe 1s ease-in-out infinite; }
+    @keyframes breathe { 50% { opacity: .25; } }
+    #recs:empty { display: none; }
+    #recs { border-top: 1px solid var(--line); }
+    .rec { display: grid; grid-template-columns: 8px 1fr auto; gap: 12px; align-items: start; padding: 12px 16px;
+      border-bottom: 1px solid var(--line); animation: recIn .25s ease-out; }
+    .rec:last-child { border-bottom: 0; }
+    @keyframes recIn { from { opacity: 0; transform: translateY(-4px); } }
+    .rec .sev { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--fg-3); }
+    .rec .sev.warn { background: var(--fg); }
+    .rec .sev.critical { background: var(--red); box-shadow: 0 0 0 3px rgba(255,77,77,0.18); }
+    .rec .t { font-weight: 500; }
+    .rec .why { color: var(--fg-2); font-size: 13px; margin-top: 2px; }
+    .rec .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .rec + .rec { opacity: .55; }
+    .rec .state { font: 12px var(--mono); color: var(--fg-3); white-space: nowrap; }
+    .rec .state.auto { color: var(--red); }
+
     /* metrics */
     .metrics { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line); border-radius: var(--r);
       background: var(--bg-1); margin-bottom: 16px; }
@@ -149,6 +176,31 @@
     .actions .btn + .btn { margin-left: 6px; }
     .empty { padding: 40px 16px; text-align: center; color: var(--fg-3); }
 
+    /* expanded feed */
+    tbody tr { cursor: pointer; }
+    .viewer { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; padding: 32px;
+      background: rgba(0,0,0,0.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+    .viewer.on { display: grid; }
+    .vbox { width: min(1040px, 100%); max-height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: 14px; overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0,0,0,0.6); animation: vIn .18s ease-out; }
+    @keyframes vIn { from { opacity: 0; transform: scale(.98); } }
+    .vh { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+    .vh .num { font: 500 13px var(--mono); padding: 2px 8px; border-radius: 6px; background: var(--bg-3); }
+    .vh b { font-weight: 600; }
+    .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 360px; }
+    .vimg img { display: block; max-width: 100%; max-height: min(66vh, 720px); object-fit: contain; }
+    .vimg .live { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px;
+      font: 500 11px var(--mono); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); }
+    .vimg .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: breathe 1s infinite; }
+    .vnone { position: absolute; color: var(--fg-3); font-size: 13px; }
+    .vstats { display: grid; grid-template-columns: 1.5fr 1.6fr repeat(5, 1fr); border-top: 1px solid var(--line); }
+    .vstats div { padding: 12px 16px; border-left: 1px solid var(--line); min-width: 0; }
+    .vstats div:first-child { border-left: 0; }
+    .vstats .k { font-size: 11px; color: var(--fg-3); }
+    .vstats .v { font: 500 14px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .vfoot { font-size: 12px; color: var(--fg-3); }
+
     /* activity */
     #log { max-height: 420px; overflow: auto; }
     .ev { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
@@ -185,7 +237,7 @@
     <section class="phases">
       <div class="steps" id="steps"></div>
       <span class="spacer"></span>
-      <span class="faint" style="font-size:12px"><kbd>1</kbd>–<kbd>5</kbd> phase &nbsp; <kbd>P</kbd> planner &nbsp; <kbd>F</kbd> flash</span>
+      <span class="faint" style="font-size:12px"><kbd>1</kbd>–<kbd>5</kbd> phase &nbsp; <kbd>P</kbd> planner &nbsp; <kbd>M</kbd> autonomy</span>
       <span class="timer" id="timer">00:00</span>
     </section>
 
@@ -194,8 +246,12 @@
         <span class="prompt">›</span>
         <input id="mcInput" placeholder="Tell Mission Control what to do — “send phones 3 and 5 to the back-left corner”" spellcheck="false">
         <span class="faint mono" style="font-size:12px" id="mcModel"></span>
+        <button type="button" class="autoSw" id="autoSw" title="Autonomy (M)"><span class="switch"></span>Autonomy</button>
         <kbd>/</kbd>
       </form>
+      <div id="aiStatus"><span class="pulse" id="aiPulse"></span><span id="aiText"></span><span class="spacer"></span>
+        <span id="aiUsage"></span></div>
+      <div id="recs"></div>
       <div id="mcFeed"></div>
     </section>
 
@@ -222,8 +278,6 @@
               <button class="switch" id="plannerSw" aria-label="Planner"></button></div>
             <div class="row"><div><div class="label">Coverage</div><div class="hint">Mark the whole room unsearched</div></div>
               <button class="btn sm" id="resetCov">Reset</button></div>
-            <div class="row"><div><div class="label">Phones</div><div class="hint">Flash every screen</div></div>
-              <button class="btn sm" id="flashAll">Flash all</button></div>
           </div>
         </div>
         <div class="card">
@@ -257,6 +311,28 @@
       </div>
     </section>
   </main>
+
+  <div class="viewer" id="viewer">
+    <div class="vbox">
+      <div class="vh">
+        <span class="num" id="vNum"></span><b id="vName"></b><span class="faint" id="vDevice"></span>
+        <span id="vBadges"></span><span class="spacer"></span>
+        <span class="vfoot"><kbd>←</kbd> <kbd>→</kbd> switch</span>
+        <button class="btn sm" id="vHide"></button><button class="btn sm" id="vClose">Close <kbd>Esc</kbd></button>
+      </div>
+      <div class="vimg"><img id="vImg" alt=""><div class="vnone" id="vNone">Waiting for video…</div>
+        <div class="live"><i></i>LIVE</div></div>
+      <div class="vstats">
+        <div><div class="k">Doing</div><div class="v" id="vTask"></div></div>
+        <div><div class="k">Position</div><div class="v" id="vPos"></div></div>
+        <div><div class="k">Heading</div><div class="v" id="vHd"></div></div>
+        <div><div class="k">Tilt</div><div class="v" id="vPitch"></div></div>
+        <div><div class="k">FPS</div><div class="v" id="vFps"></div></div>
+        <div><div class="k">Latency</div><div class="v" id="vLat"></div></div>
+        <div><div class="k">Searched</div><div class="v" id="vM2"></div></div>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="/web/console.js"></script>
 </body>
