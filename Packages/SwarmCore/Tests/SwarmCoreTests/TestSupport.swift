@@ -269,3 +269,71 @@ enum Sample {
         Command(id: "c7", serverTimestamp: 1_006, kind: .clear),
     ]
 }
+
+// MARK: - Deterministic randomness
+
+/// SplitMix64. Tests that assert on convergence need the same jitter every run,
+/// or a flake at 3am is indistinguishable from a regression.
+struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        self.state = seed
+    }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+
+    mutating func uniform(_ range: ClosedRange<Double>) -> Double {
+        Double.random(in: range, using: &self)
+    }
+
+    /// Box-Muller, so jitter distributions look like the ones in the field.
+    mutating func gaussian(mean: Double = 0, deviation: Double = 1) -> Double {
+        let u1 = max(1e-12, Double.random(in: 0...1, using: &self))
+        let u2 = Double.random(in: 0...1, using: &self)
+        return mean + deviation * (-2 * log(u1)).squareRoot() * cos(2 * .pi * u2)
+    }
+}
+
+/// A phone and a server whose clocks disagree, connected by a link with
+/// configurable delay in each direction.
+struct ClockPairSimulator {
+    /// serverClock − deviceClock, in seconds.
+    var skew: Double
+    /// One-way delay, before jitter.
+    var upBase: Double
+    var downBase: Double
+    /// Uniform jitter added to each direction, one-sided: delay is only ever
+    /// added, never subtracted.
+    var jitter: Double
+    /// How long the server holds the message before replying.
+    var serverDwell: Double
+    var generator: SeededGenerator
+
+    init(skew: Double, upBase: Double = 0.015, downBase: Double = 0.015,
+         jitter: Double = 0.080, serverDwell: Double = 0.002, seed: UInt64 = 0xC10C) {
+        self.skew = skew
+        self.upBase = upBase
+        self.downBase = downBase
+        self.jitter = jitter
+        self.serverDwell = serverDwell
+        self.generator = SeededGenerator(seed: seed)
+    }
+
+    /// Performs one exchange starting at device time `t0`, returning the pong and
+    /// the device time it arrived.
+    mutating func exchange(id: UInt64, at t0: Double) -> (pong: Pong, receivedAt: Double) {
+        let up = upBase + generator.uniform(0...jitter)
+        let down = downBase + generator.uniform(0...jitter)
+        let t1 = t0 + up + skew
+        let t2 = t1 + serverDwell
+        let t3 = t0 + up + serverDwell + down
+        return (Pong(id: id, t0: t0, t1: t1, t2: t2), t3)
+    }
+}
