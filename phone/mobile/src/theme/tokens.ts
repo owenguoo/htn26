@@ -43,16 +43,13 @@ export const colors = {
 } as const;
 
 /**
- * Chrome drawn over the live camera feed. Deliberately **not** adaptive: the
- * backdrop is arbitrary video, not a themed surface, so a semantic colour would
- * flip to dark-on-light and vanish against a bright frame. Legibility governs
- * here, not theme. Everything else in the app uses `colors` above.
+ * There is deliberately no HUD palette here. Chrome drawn over the live camera
+ * feed must be fixed light-on-dark in both themes — its backdrop is arbitrary
+ * video, so a semantic colour would flip and vanish against a bright frame —
+ * and every last piece of it now lives in SwiftUI, in
+ * `modules/swarm-sight/ios/Core/UI/`. Nothing in the Expo layer draws over the
+ * camera any more, and nothing here should start.
  */
-export const hud = {
-  ink: '#ffffff',
-  inkSecondary: 'rgba(255,255,255,0.72)',
-  scrim: 'rgba(0,0,0,0.55)',
-} as const;
 
 /**
  * A `foregroundStyle` shorthand for the system's own de-emphasis. Preferred
