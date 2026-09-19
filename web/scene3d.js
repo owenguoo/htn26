@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
 const EYE_H = 1.45;      // phones are held about here
@@ -22,6 +23,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   renderer.setClearColor(0x050505);
+  renderer.localClippingEnabled = true;
   renderer.domElement.className = 's3d-canvas';
   host.appendChild(renderer.domElement);
   const labels = new CSS2DRenderer();
@@ -35,7 +37,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   const edl = new THREE.ShaderMaterial({
     uniforms: {
       tColor: { value: rt.texture }, tDepth: { value: rt.depthTexture }, texel: { value: new THREE.Vector2() },
-      near: { value: 0.1 }, far: { value: 200 }, strength: { value: 1.0 }, radius: { value: 1.4 },
+      near: { value: 0.1 }, far: { value: 200 }, strength: { value: 0.18 }, radius: { value: 1.4 },
     },
     vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
     fragmentShader: `
@@ -52,7 +54,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
           for (int i = 0; i < 8; i++) {
             float a = float(i) * 0.785398;
             float dn = texture2D(tDepth, vUv + vec2(cos(a), sin(a)) * texel * radius).x;
-            sum += dn >= 1.0 ? 0.02 : max(0.0, l0 - logDepth(dn));  // nearer neighbors (or open sky) shade this pixel
+            sum += dn >= 1.0 ? 0.0 : min(0.04, max(0.0, l0 - logDepth(dn)));
           }
           gl_FragColor = vec4(color.rgb * exp(-sum / 8.0 * 300.0 * strength), color.a);
         }
@@ -65,14 +67,13 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x050505, 30, 60);
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
   camera.position.set(0, 13, room.depth + 11);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.set(0, 0, room.depth * 0.42);
   controls.enableDamping = true;
   controls.maxPolarAngle = Math.PI * 0.49;
-  controls.minDistance = 3;
+  controls.minDistance = 0.15;
   controls.maxDistance = 60;
   controls.update();
 
@@ -95,13 +96,77 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   // the scan: room.json's (the mock) until the live VGGT scan arrives, then each new version replaces it
   let scanStatus = 'none', scanObj = null, scanVersion = null, scanLabel = '';
   let heatMask = null; // which floor cells the live scan covers (the heatmap is only drawn there)
-  const fading = [];   // scans fading out after a newer version arrived
   const loader = new GLTFLoader();
-  const FADE_S = 0.8;
+  const draco = new DRACOLoader();
+  draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/');
+  draco.setWorkerLimit(1);
+  loader.setDRACOLoader(draco);
+  let transformKey = '', fitted = false, cutaway = false;
+  const cutPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 's3d-tools';
+  toolbar.innerHTML = '<button type="button" data-view="fit">Fit view</button><button type="button" data-view="top">Top view</button><button type="button" data-view="cut" aria-pressed="false">Cutaway</button><button type="button" data-view="heat" aria-pressed="false">Search heat</button>';
+  host.appendChild(toolbar);
+  toolbar.addEventListener('click', (e) => {
+    const action = e.target.closest('button')?.dataset.view;
+    if (action === 'fit' || action === 'top') fitView(action === 'top');
+    if (action === 'heat') {
+      heat.visible = !heat.visible;
+      e.target.setAttribute('aria-pressed', String(heat.visible));
+    }
+    if (action === 'cut') {
+      cutaway = !cutaway;
+      e.target.setAttribute('aria-pressed', String(cutaway));
+      updateCutaway();
+    }
+  });
+
+  function fitView(top = false) {
+    const bounds = scanObj ? new THREE.Box3().setFromObject(scanObj) : null;
+    if (!bounds || bounds.isEmpty()) {
+      camera.position.set(0, 13, room.depth + 11);
+      controls.target.set(0, 0, room.depth * .42);
+      return;
+    }
+    const center = bounds.getCenter(new THREE.Vector3());
+    const radius = Math.max(bounds.getSize(new THREE.Vector3()).length() / 2, .1);
+    const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2), tanH = tanV * camera.aspect;
+    const direction = new THREE.Vector3(top ? .001 : 1, top ? 1 : .85, top ? 0 : 1.2).normalize();
+    const right = new THREE.Vector3().crossVectors(camera.up, direction).normalize();
+    const up = new THREE.Vector3().crossVectors(direction, right);
+    let distance = .1;
+    for (const x of [bounds.min.x, bounds.max.x]) for (const y of [bounds.min.y, bounds.max.y]) for (const z of [bounds.min.z, bounds.max.z]) {
+      const corner = new THREE.Vector3(x, y, z).sub(center), depth = corner.dot(direction);
+      distance = Math.max(distance, depth + Math.abs(corner.dot(right)) / tanH, depth + Math.abs(corner.dot(up)) / tanV);
+    }
+    distance *= 1.1;
+    controls.target.copy(center);
+    camera.position.copy(center).addScaledVector(direction, distance);
+    controls.minDistance = radius * .08;
+    controls.maxDistance = distance * 6;
+    camera.near = Math.max(.005, radius / 300);
+    camera.far = Math.max(200, distance * 10);
+    camera.updateProjectionMatrix();
+    edl.uniforms.near.value = camera.near;
+    edl.uniforms.far.value = camera.far;
+    controls.update();
+  }
+
+  function updateCutaway() {
+    if (!scanObj) return;
+    const box = new THREE.Box3().setFromObject(scanObj);
+    cutPlane.constant = box.min.y + (box.max.y - box.min.y) * .67;
+    scanObj.traverse((o) => {
+      if (!o.material) return;
+      o.material.clippingPlanes = cutaway ? [cutPlane] : [];
+      o.material.needsUpdate = true;
+    });
+  }
 
   // round points (not squares), sized to the scan's point spacing
   function scanMaterial(size) {
-    const m = new THREE.PointsMaterial({ size, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0 });
+    const m = new THREE.PointsMaterial({ size, vertexColors: true, sizeAttenuation: true });
     m.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader.replace('#include <clipping_planes_fragment>',
         'vec2 pc = gl_PointCoord - 0.5; if (dot(pc, pc) > 0.25) discard;\n#include <clipping_planes_fragment>');
@@ -114,28 +179,47 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     obj.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); });
   }
 
+  function applyTransform(obj, tf) {
+    const s = tf.scale ?? 1;
+    obj.scale.setScalar(s);
+    obj.rotation.y = THREE.MathUtils.degToRad(tf.rotateYDeg ?? 0);
+    obj.position.fromArray(tf.offset ?? [0, 0, 0]);
+    obj.traverse((o) => { if (o.isPoints) o.material.size = o.userData.spacing * s; });
+    obj.updateMatrixWorld(true);
+    transformKey = JSON.stringify(tf);
+  }
+
   function loadScan(url, tf, label, version, live) {
     scanStatus = scanObj ? scanStatus : 'loading';
     loader.load(url, (gltf) => {
-      if (version !== scanVersion) return; // a newer one was requested meanwhile
       const obj = gltf.scene;
-      const s = tf.scale ?? 1;
+      if (version !== scanVersion) { dropScan(obj); return; }
+      obj.userData.scanVersion = version;
       obj.traverse((o) => {
-        if (!o.isPoints) return;
-        o.geometry.computeBoundingBox();
-        const size = new THREE.Vector3();
-        o.geometry.boundingBox.getSize(size);
-        // the worker downsamples to a grid of (largest extent / 350); points a bit bigger than that close the gaps
-        o.material = scanMaterial(Math.max(size.x, size.y, size.z) / 350 * s * 1.6);
+        if (!o.isPoints && !o.isMesh) return;
+        if (o.isMesh && !live) return; // retain the mock scene's authored materials/textures
+        o.material?.dispose?.();
+        if (o.isPoints) {
+          o.geometry.computeBoundingBox();
+          const size = o.geometry.boundingBox.getSize(new THREE.Vector3());
+          o.userData.spacing = Math.max(size.x, size.y, size.z) / 350 * 2;
+          o.material = scanMaterial(o.userData.spacing);
+        } else {
+          // Captured RGB already includes the room's lighting. Relighting it blows out
+          // pale walls and hides texture, so surfaces use the photograph's own color.
+          o.material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+        }
       });
-      obj.scale.setScalar(s);
-      obj.rotation.y = THREE.MathUtils.degToRad(tf.rotateYDeg ?? 0);
-      obj.position.fromArray(tf.offset ?? [0, 0, 0]);
-      if (scanObj) fading.push(scanObj); // crossfade: the old version fades out as this one fades in
+      // A fit adjustment can arrive while the file is loading.
+      applyTransform(obj, live ? (getState()?.scan?.last?.transform ?? tf) : tf);
+      if (scanObj) dropScan(scanObj);
       scene.add(obj);
       scanObj = obj;
       scanStatus = 'ready';
       scanLabel = label;
+      outline.visible = stage.visible = !live;
+      updateCutaway();
+      if (!fitted) { fitView(); fitted = true; }
       heatMask = live ? footprint(obj) : null;
       heatKey = ''; // redraw the heatmap with the new mask
     }, undefined, () => { if (!scanObj) scanStatus = 'failed'; });
@@ -148,7 +232,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     obj.updateMatrixWorld(true);
     const hit = new Uint8Array(cov.cols * cov.rows), v = new THREE.Vector3();
     obj.traverse((o) => {
-      if (!o.isPoints) return;
+      if (!o.isPoints && !o.isMesh) return;
       const pos = o.geometry.attributes.position;
       for (let i = 0; i < pos.count; i++) {
         v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
@@ -180,6 +264,11 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
       const a = live.alignment || {};
       loadScan(live.url, live.transform, `live scan v${live.version} · ${live.frames} views · ${a.method}`
         + (a.residualM != null ? ` (±${a.residualM} m)` : ''), live.version, true);
+    } else if (live && scanObj?.userData.scanVersion === live.version && JSON.stringify(live.transform) !== transformKey) {
+      applyTransform(scanObj, live.transform);
+      heatMask = footprint(scanObj);
+      heatKey = '';
+      updateCutaway();
     } else if (!live && typeof scanVersion === 'number') {
       // the live scan was reset: clear it and wait for the next one
       scanVersion = null;
@@ -187,11 +276,13 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
       heatMask = null;
       heatKey = '';
       scanStatus = 'waiting';
+      fitted = false;
     } else if (!live && st?.scan?.enabled && scanVersion === 'room') {
       // live scanning is on: take the mock away and wait for the real thing
       scanVersion = null;
       if (scanObj) { dropScan(scanObj); scanObj = null; }
       scanStatus = 'waiting';
+      fitted = false;
     } else if (!live && !st?.scan?.enabled && scanVersion === null && room.scene?.url) {
       scanVersion = 'room';
       loadScan(room.scene.url, room.scene, `mock scan: ${room.scene.url.split('/').pop()}`, 'room', false);
@@ -207,6 +298,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   heat.rotation.x = -Math.PI / 2;
   heat.position.set(0, 0.02, D / 2);
   heat.renderOrder = 1;
+  heat.visible = false;
   scene.add(heat);
   let heatKey = '';
 
@@ -342,7 +434,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
 
   // ---- per frame
   const clock = new THREE.Clock();
-  let running = false;
+  let running = false, frameId = null;
 
   function syncPeople(st) {
     const seen = new Set();
@@ -372,7 +464,7 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
 
   function frame() {
     if (!running) return;
-    requestAnimationFrame(frame);
+    frameId = requestAnimationFrame(frame);
     const dt = Math.min(0.1, clock.getDelta()), k = 1 - Math.exp(-dt * 8), t = clock.elapsedTime;
     const st = getState();
     syncScan(st);
@@ -397,18 +489,6 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     markers.traverse((o) => {
       if (o.userData.pulse) o.scale.setScalar(1 + 0.35 * (0.5 + 0.5 * Math.sin(t * 4)));
     });
-    // crossfade scan versions
-    const step = dt / FADE_S;
-    if (scanObj) scanObj.traverse((o) => { if (o.isPoints) o.material.opacity = Math.min(1, o.material.opacity + step); });
-    for (let i = fading.length - 1; i >= 0; i--) {
-      let gone = true;
-      fading[i].traverse((o) => {
-        if (!o.isPoints) return;
-        o.material.opacity = Math.max(0, o.material.opacity - step);
-        if (o.material.opacity > 0) gone = false;
-      });
-      if (gone) { dropScan(fading[i]); fading.splice(i, 1); }
-    }
     controls.update();
     renderer.setRenderTarget(rt);
     renderer.render(scene, camera);
@@ -445,13 +525,10 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
 
   return {
     show() { if (!running) { running = true; resize(); clock.getDelta(); frame(); } },
-    hide() { running = false; },
+    hide() { running = false; cancelAnimationFrame(frameId); frameId = null; },
     status: () => scanStatus,
     label: () => scanLabel,
-    resetView() {
-      camera.position.set(0, 13, room.depth + 11);
-      controls.target.set(0, 0, room.depth * 0.42);
-    },
+    resetView: () => fitView(),
   };
 }
 

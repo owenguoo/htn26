@@ -74,7 +74,8 @@ class Mapper:
         self.tunnel: asyncio.subprocess.Process | None = None
         self._restore()
         ssh = os.environ.get("MAP_WORKER_SSH")
-        self.url = os.environ.get("MAP_WORKER_URL") or (f"http://127.0.0.1:{LOCAL_PORT}" if ssh else None)
+        self.local_port = int(os.environ.get("MAP_WORKER_LOCAL_PORT", LOCAL_PORT))
+        self.url = os.environ.get("MAP_WORKER_URL") or (f"http://127.0.0.1:{self.local_port}" if ssh else None)
 
     def _restore(self) -> None:
         """Pick up where we left off after a hub restart: the latest scan and the views it was built from."""
@@ -165,10 +166,15 @@ class Mapper:
     def sample(self) -> None:
         now = now_ms()
         for p in list(self.hub.phones.values()):
-            pose = p.pose(now)
+            captured = p.scan_frame
+            pose = captured["pose"] if captured else p.pose(now)
+            jpeg = captured["jpeg"] if captured else p.frame
+            pitch = captured["pitch"] if captured else p.pitch
+            ori = captured["orientation"] if captured else p.frame_ori
+            at = captured["at"] if captured else p.frame_at
             if (not p.connected or (p.sim and not self.include_sims) or not p.frame
-                    or now - p.frame_at > FRESH_MS or not pose or pose.get("heading") is None
-                    or (p.pitch is not None and abs(p.pitch) > MAX_PITCH)):
+                    or now - at > (1800 if captured else FRESH_MS) or not pose or pose.get("heading") is None
+                    or (pitch is not None and abs(pitch) > MAX_PITCH)):
                 continue
             x, y, h = pose["x"], pose["y"], pose["heading"]
             mine = [k for k in self.keyframes if k["pid"] == p.id]
@@ -178,9 +184,9 @@ class Mapper:
                    for k in self.keyframes):
                 continue  # someone already has this view
             self.ids += 1
-            self.keyframes.append({"id": f"k{self.ids}", "pid": p.id, "index": p.index, "jpeg": p.frame,
-                                   "x": x, "y": y, "heading": h, "pitch": p.pitch or 0.0, "t": now,
-                                   "up": camera_up(p.frame_ori, p.pitch)})
+            self.keyframes.append({"id": f"k{self.ids}", "pid": p.id, "index": p.index, "jpeg": jpeg,
+                                   "x": x, "y": y, "heading": h, "pitch": pitch or 0.0, "t": at,
+                                   "up": camera_up(ori, pitch)})
             self.new_since_run += 1
         while len(self.keyframes) > MAX_KEYFRAMES:
             self._drop_most_redundant()
@@ -192,7 +198,9 @@ class Mapper:
             for j in range(i + 1, len(ks)):
                 d = math.dist((ks[i]["x"], ks[i]["y"]), (ks[j]["x"], ks[j]["y"])) + _turn(ks[i]["heading"], ks[j]["heading"]) / 30
                 if best is None or d < best:
-                    best, drop = d, i if ks[i]["t"] < ks[j]["t"] else j  # keep the newer of the pair
+                    # Keep the first reference view across updates. Replacing it needlessly
+                    # changes VGGT's reference frame and makes placement harder to stabilize.
+                    best, drop = d, j if i == 0 else (i if ks[i]["t"] < ks[j]["t"] else j)
         ks.pop(drop)
 
     # ---- rebuilds -------------------------------------------------------------------
@@ -238,6 +246,7 @@ class Mapper:
             return
         transform, alignment = align(meta["cameras"], {k["id"]: k for k in frames}, meta.get("medianDepth"))
         alignment["leveledBy"] = meta.get("leveledBy")
+        alignment["floorBy"] = meta.get("floorBy")
         transform, alignment["steadiedBy"] = steady(transform, meta["cameras"], self.placed)
         self.placed = place(transform, meta["cameras"])
         self.version += 1
@@ -251,6 +260,8 @@ class Mapper:
         self.last = {"version": self.version, "url": f"/web/models/live/{path.name}", "transform": self.display(transform),
                      "autoTransform": transform, "fit": dict(self.fit),
                      "alignment": alignment, "frames": meta["frames"], "points": meta["points"],
+                     "faces": meta.get("faces"), "representation": meta.get("representation", "points"),
+                     "colorSpace": meta.get("colorSpace"), "quality": meta.get("quality"),
                      "phones": len({k["pid"] for k in frames}), "seconds": secs,
                      "gpuSeconds": meta.get("totalSeconds"), "t": time.time(),
                      # typical distance to what the cameras saw, after scaling: a quick sanity check on scale
@@ -271,7 +282,7 @@ class Mapper:
         remote = os.environ.get("MAP_WORKER_PORT", "8765")
         self.tunnel = await asyncio.create_subprocess_exec(
             "ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
-            "-o", "StrictHostKeyChecking=accept-new", "-L", f"{LOCAL_PORT}:127.0.0.1:{remote}", "-p", port, ssh,
+            "-o", "StrictHostKeyChecking=accept-new", "-L", f"{self.local_port}:127.0.0.1:{remote}", "-p", port, ssh,
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         for _ in range(40):  # wait for the forward to come up
             await asyncio.sleep(0.25)

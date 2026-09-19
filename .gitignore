@@ -4,3 +4,5 @@ certs/
 .DS_Store
 .env
 web/models/live/
+.runtime/
+web/models/quality/

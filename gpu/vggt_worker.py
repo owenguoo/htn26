@@ -1,9 +1,7 @@
-"""Persistent VGGT-Omega worker for the GPU pod: load the model once, then turn batches of phone
-frames into a colored point cloud (GLB) plus where each frame's camera was and which way it faced.
+"""Persistent VGGT-Omega worker: phone images -> fused, colored, Draco-compressed surface GLB.
 
-The per-request pipeline is the same as the pod's reconstruct.py (filtering, leveling, voxel
-downsampling); the difference is the model stays loaded, so a request costs inference + post-
-processing (~1-3 s) instead of ~15 s of checkpoint loading every time.
+The model stays loaded between batches. --representation points retains the original point-cloud
+pipeline for comparison; the default surface pipeline needs requirements-surface.txt as well.
 
 Runs on 127.0.0.1 only; the hub reaches it through an SSH tunnel. Standard library HTTP, so it
 needs nothing beyond the pod's existing venv.
@@ -22,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import struct
 import sys
 import tempfile
@@ -36,13 +35,14 @@ import torch
 import trimesh
 
 ROOT = Path(__file__).resolve().parent.parent  # /workspace/swarm-map-test
-sys.path.insert(0, str(ROOT / "vggt-omega"))
+sys.path.insert(0, os.environ.get("VGGT_ROOT", str(ROOT / "vggt-omega")))
 from vggt_omega.models import VGGTOmega  # noqa: E402
 from vggt_omega.utils.load_fn import load_and_preprocess_images  # noqa: E402
 from vggt_omega.utils.pose_enc import encoding_to_camera  # noqa: E402
 
 MAX_FRAMES = 48
 model = None
+representation = 'surface'
 lock = threading.Lock()
 stats = {"runs": 0, "busy": False, "loadedSeconds": None}
 
@@ -85,6 +85,14 @@ def reconstruct(jpegs: list[bytes], ids: list[str], max_points: int, ups: list |
     depth, confidence = array(prediction["depth"])[..., 0], array(prediction["depth_conf"])
     confidence = confidence.reshape(depth.shape)
     rgb = np.transpose(array(prediction["images"]), (0, 2, 3, 1))
+    if representation == 'surface':
+        from surface import build_surface
+        meta, glb = build_surface(depth, confidence, rgb, extrinsic, intrinsic, ids, ups,
+                                  max_faces=max(20000, min(300000, max_points * 2)))
+        meta.update(source="VGGT-Omega-1B-512", inferenceSeconds=round(inference_s, 3),
+                    totalSeconds=round(time.monotonic() - started, 3), peakAllocatedGB=round(peak_gb, 2),
+                    units="unregistered scene units; Y up; floor estimate in floorBy")
+        return meta, glb
     n, h, w = depth.shape
     yy, xx = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")
     cam_pts = np.stack([(xx[None] - intrinsic[:, 0, 2, None, None]) / intrinsic[:, 0, 0, None, None] * depth,
@@ -162,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/health":
             return self._send(404, b"{}", "application/json")
-        body = {"ready": model is not None, "gpu": torch.cuda.get_device_name(), **stats}
+        body = {"ready": model is not None, "gpu": torch.cuda.get_device_name(), "representation": representation, **stats}
         self._send(200, json.dumps(body).encode(), "application/json")
 
     def do_POST(self):
@@ -200,7 +208,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--checkpoint", type=Path, default=ROOT / "model.pt")
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--representation", choices=['surface', 'points'], default='surface',
+                    help="surface fuses agreeing depth views; points preserves the original pipeline")
     a = ap.parse_args()
+    representation = a.representation
+    if representation == 'surface':
+        import surface  # fail at startup if optional GPU-worker dependencies are missing
     load(a.checkpoint)
     print(f"listening on 127.0.0.1:{a.port}", flush=True)
     ThreadingHTTPServer(("127.0.0.1", a.port), Handler).serve_forever()

@@ -156,6 +156,9 @@
     .s3d-tag .s3d-sees.hit { color: #ff8a95; }
     .s3d-mark { font: 600 11px var(--mono); padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.7); white-space: nowrap; }
     .s3d-status { position: absolute; left: 12px; bottom: 12px; font: 500 11px var(--mono); color: var(--fg-3); pointer-events: none; }
+    .s3d-tools { position: absolute; top: 12px; left: 12px; display: flex; gap: 6px; z-index: 2; }
+    .s3d-tools button { color: #ddd; background: #171717e8; border: 1px solid #444; border-radius: 6px; padding: 7px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+    .s3d-tools button:hover, .s3d-tools button[aria-pressed=true] { color: #fff; background: #393939; }
     .fitBar { position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 6px; font-size: 12px;
       padding: 6px 8px; border-radius: 8px; background: rgba(0,0,0,0.7); border: 1px solid var(--line-2); }
     .fitBar[hidden] { display: none; }

@@ -96,6 +96,7 @@ class Phone:
     frame_seq: int = -1
     frame_t: float = 0              # capture time, server clock
     frame_at: float = 0             # arrival time, server clock
+    scan_frame: dict | None = None  # crisp frame + its capture pose; not overwritten by preview frames
     frames_total: int = 0
     arrivals: deque = field(default_factory=lambda: deque(maxlen=120))  # (arrival ms, bytes)
     latency_ms: float | None = None
@@ -246,6 +247,11 @@ class Hub:
         phone.frame_seq = int(header.get("seq", phone.frame_seq + 1))
         phone.frame_at = now
         phone.frames_total += 1
+        if header.get("scanKeyframe") and self.mapper and self.mapper.enabled:
+            pose = phone.pose(now)
+            if pose:
+                phone.scan_frame = {"jpeg": jpeg, "pose": dict(pose), "pitch": phone.pitch,
+                                    "orientation": phone.frame_ori, "at": now}
 
     def on_message(self, phone: Phone, msg: dict) -> None:
         kind = msg.get("type")
@@ -604,6 +610,7 @@ class Hub:
             pings = self.active_pings(now)
             base = {
                 "type": "world", "phase": self.phase, "phones": others,
+                "scanning": bool(self.mapper and self.mapper.enabled and not self.mapper.paused()),
                 "coverage": {k: cov[k] for k in ("cols", "rows", "cell", "x0", "cells")},
                 "searched": cov["searched"], "searchers": len(live),
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
