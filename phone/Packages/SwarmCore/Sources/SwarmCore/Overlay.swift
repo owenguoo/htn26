@@ -174,6 +174,40 @@ public struct FlashCue: Sendable, Equatable {
     }
 }
 
+/// The angles that decide "you are facing it" and "your phone is pointed at the
+/// floor".
+///
+/// These existed three times with three different values, which meant the arrow,
+/// the banner and the console's marker colour could each disagree about whether
+/// the operator was on target — the arrow said yes, the pill stayed orange, and
+/// nobody could tell which was lying:
+///
+/// - the hub: `abs(delta) < half_fov * 0.6` (`swarm/planner.py`), which at
+///   `room.json`'s `cameraFovDeg: 55` is **16.5°**;
+/// - `ArrowCue.isOnTarget`: `0.35` rad, which is **20.05°**;
+/// - `HUDMirror`'s marker colour: **16°**, copied from `web/phone.js:723`.
+///
+/// **16° wins.** It is the web client's number, and matching the web client's
+/// feel is the goal; it is already what the console is told, so the phone and the
+/// console agree by construction; and it is within half a degree of the hub's own
+/// 16.5°, so the banner goes green essentially when the hub also thinks so. The
+/// 20.05° was the outlier — four degrees looser than everything else, for no
+/// reason anyone recorded.
+public enum GuideThresholds {
+    public static let onTargetDegrees: Double = 16
+    public static let onTargetRadians = Float(onTargetDegrees * .pi / 180)
+
+    /// Past this the phone is pointed at the floor or the ceiling and is
+    /// searching nothing. `web/phone.js:773` and `swarm/planner.py`'s
+    /// `MAX_PITCH` agree on 65.
+    public static let tiltedPitchDegrees: Double = 65
+
+    /// How far back out the operator must swing before "on target" can fire
+    /// again. Without it a `go` guide lasting 90 s buzzes every time someone
+    /// drifts a degree across the boundary and back.
+    public static let onTargetReleaseDegrees: Double = 22
+}
+
 public struct ArrowCue: Sendable, Equatable {
     /// Radians clockwise from straight ahead. Positive means turn right.
     public var bearingRadians: Float
@@ -195,20 +229,40 @@ public struct ArrowCue: Sendable, Equatable {
 
     /// Whether the target is already in front of the operator, within the usable
     /// part of the lens. The arrow can then say "here" rather than "turn".
-    public var isOnTarget: Bool { abs(bearingRadians) < 0.35 }
+    public var isOnTarget: Bool { abs(bearingRadians) < GuideThresholds.onTargetRadians }
 }
 
-/// The line of text that goes with a guide: "Turn left 42°", "door · 6.1 m".
+/// The line of text that goes with a guide: "← Turn left 42°",
+/// "↑ Walk to door · 6.1 m".
 public struct GuideBannerCue: Sendable, Equatable {
     /// "search", "respond", "look" or "go".
     public var kind: String
     public var text: String
+    /// Geometrically on target: the offset is inside
+    /// `GuideThresholds.onTargetDegrees`. Not the same thing as "show it green"
+    /// — see `tone`.
     public var onTarget: Bool
+    /// Pointed at the floor or the ceiling. Only `search` cares.
+    public var tilted: Bool
 
-    public init(kind: String, text: String, onTarget: Bool) {
+    public init(kind: String, text: String, onTarget: Bool, tilted: Bool = false) {
         self.kind = kind
         self.text = text
         self.onTarget = onTarget
+        self.tilted = tilted
+    }
+
+    /// The console's three pill colours, decided exactly as
+    /// `updateGuideBanner` in `web/phone.js` decides its CSS classes.
+    public var tone: String {
+        // Walking to a confirmed candidate is always the loud one.
+        if kind == "respond" { return "alert" }
+        // The web never greens a `go`: the operator is pointed the right way but
+        // has not arrived, and green would say they had. The hub sends its own
+        // green "You're there ✓" flash for that.
+        if kind == "go" { return "warn" }
+        if kind == "search" && tilted { return "warn" }
+        return onTarget ? "ok" : "warn"
     }
 }
 
@@ -332,9 +386,11 @@ public struct OverlayModel: Sendable {
     public private(set) var state = OverlayState()
 
     private enum Guide: Sendable, Equatable {
-        /// A room heading to turn to. `refreshed` is when the hub last said so.
+        /// A room heading to turn to. `text` is the hub's own wording, kept only
+        /// as the fallback for when this phone has no heading of its own and
+        /// cannot work out which way to turn.
         case heading(target: Double, kind: String, label: String?, text: String?, distance: Double?,
-                     onTarget: Bool, until: Double)
+                     until: Double)
         /// True-north bearing. This client has no compass (`.gravity`), so: text.
         case compass(kind: String, label: String?, bearing: Double, until: Double)
     }
@@ -389,17 +445,18 @@ public struct OverlayModel: Sendable {
             state.arrow = nil
             state.banner = nil
             wasOnTarget = false
-        case .guideTurn(let sector, let delta, let onTarget, let text, let kind, let distance):
+        case .guideTurn(let sector, let delta, _, let text, let kind, let distance):
             // Same as phone.js: without a heading there is nothing to anchor to.
             guard let heading else { return false }
+            // The hub's own `onTarget` is discarded, exactly as the web discards
+            // it. It describes where the phone was pointing when the hub last
+            // ticked, up to 200 ms ago; the live offset is recomputed every
+            // frame in `updateGuide`.
             guide = .heading(target: RoomMath.wrap360(heading + delta), kind: kind, label: sector,
-                             text: text, distance: distance, onTarget: onTarget,
-                             until: now + Self.turnGuideLifetime)
-            if onTarget && !wasOnTarget { cue(haptic: "onTarget", intensity: 0.6) }
-            wasOnTarget = onTarget
+                             text: text, distance: distance, until: now + Self.turnGuideLifetime)
         case .guideHeading(let kind, let sector, let target, let distance, let untilMs):
             guide = .heading(target: RoomMath.wrap360(target), kind: kind, label: sector, text: nil,
-                             distance: distance, onTarget: false, until: now + untilMs / 1000)
+                             distance: distance, until: now + untilMs / 1000)
         case .guideCompass(let kind, let sector, let compass, let untilMs):
             guide = .compass(kind: kind, label: sector, bearing: compass, until: now + untilMs / 1000)
         case .flash(let color, let text, let ttlMs):
@@ -472,16 +529,25 @@ public struct OverlayModel: Sendable {
         let roomPose = usablePose.flatMap { pose in alignment.map { $0.project(pose) } }
         state.roomPose = roomPose
 
-        updateGuide(heading: roomPose?.heading, now: now)
+        updateGuide(heading: roomPose?.heading, pitch: roomPose?.pitch, now: now)
         updatePings(pose: usablePose, roomPose: roomPose, alignment: alignment, intrinsics: intrinsics)
     }
 
-    private mutating func updateGuide(heading: Double?, now: Double) {
+    /// Rewrites the banner from the *live* offset, every tick.
+    ///
+    /// It used to echo the hub's `text` field verbatim, which meant the operator
+    /// read "Turn left 37°" for up to 200 ms after they had already turned — and
+    /// for a `look` or `go`, where the hub sends no `text` at all, they read a
+    /// line that never changed and never went green. `web/phone.js`
+    /// `updateGuideBanner` recomputes on every animation frame for exactly this
+    /// reason, and the wording here is its wording.
+    private mutating func updateGuide(heading: Double?, pitch: Double?, now: Double) {
         switch guide {
         case nil:
             state.arrow = nil
             state.banner = nil
-        case .heading(let target, let kind, let label, let text, let distance, let onTarget, let until):
+            wasOnTarget = false
+        case .heading(let target, let kind, let label, let text, let distance, let until):
             guard now <= until else {
                 guide = nil
                 state.arrow = nil
@@ -489,29 +555,56 @@ public struct OverlayModel: Sendable {
                 wasOnTarget = false
                 return
             }
-            state.banner = GuideBannerCue(kind: kind,
-                                          text: Self.bannerText(kind: kind, label: label, text: text,
-                                                                distance: distance),
-                                          onTarget: onTarget)
             // We do not know where the camera is looking, so we cannot say which
             // way to turn. Showing the last arrow would point at nothing.
+            //
+            // The web drops the banner outright here, but it has nothing else:
+            // it never stores the hub's wording, and its banner is the only
+            // place a directive appears. Dropping ours would blink the whole
+            // directive off for the second a stale pose takes to recover, and
+            // then back on — which reads as the hub having cancelled it. So say
+            // what was asked for without claiming a direction.
             guard let heading else {
                 state.arrow = nil
+                let fallback = text.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? Self.directionlessText(kind: kind, label: label, distance: distance)
+                state.banner = fallback.map { GuideBannerCue(kind: kind, text: $0, onTarget: false) }
+                wasOnTarget = false
                 return
             }
             let off = RoomMath.signedDiff(target, heading)
+            let onTarget = abs(off) < GuideThresholds.onTargetDegrees
+            let tilted = pitch.map { abs($0) > GuideThresholds.tiltedPitchDegrees } ?? false
+            state.banner = GuideBannerCue(
+                kind: kind,
+                text: Self.bannerText(kind: kind, offsetDegrees: off, label: label,
+                                      distance: distance, tilted: tilted),
+                onTarget: onTarget, tilted: tilted)
             state.arrow = ArrowCue(bearingRadians: Float(off * .pi / 180), label: label,
                                    distance: distance.map(Float.init), until: until)
+            // Edge-triggered, with a release band: a 90 s `go` would otherwise
+            // buzz every time the operator drifted a degree over the boundary.
+            if onTarget && !wasOnTarget {
+                cue(haptic: "onTarget", intensity: 0.6)
+                wasOnTarget = true
+            } else if abs(off) > GuideThresholds.onTargetReleaseDegrees {
+                wasOnTarget = false
+            }
         case .compass(let kind, let label, let bearing, let until):
             guard now <= until else {
                 guide = nil
                 state.banner = nil
+                wasOnTarget = false
                 return
             }
             state.arrow = nil
-            let name = label.map { "\($0) · " } ?? ""
+            // ARKit runs `.gravity`; this phone has no true north and cannot
+            // resolve a real-world bearing. It used to render
+            // "Look the door · 137° NE", which reads like a direction the
+            // operator could follow. The web's wording is the honest one.
+            _ = bearing
             state.banner = GuideBannerCue(kind: kind,
-                                          text: "\(kind == "go" ? "Walk" : "Look") \(name)\(Int(bearing.rounded()))° \(Self.cardinal(bearing))",
+                                          text: "Face \(label ?? "that way") (no compass on this phone)",
                                           onTarget: false)
         }
     }
@@ -553,20 +646,76 @@ public struct OverlayModel: Sendable {
         return ping
     }
 
-    static func bannerText(kind: String, label: String?, text: String?, distance: Double?) -> String {
-        if let text, !text.isEmpty { return text }
-        let metres = distance.map { String(format: " · %.1f m", $0) } ?? ""
+    /// The fourteen strings `updateGuideBanner` (`web/phone.js:763-805`) can
+    /// produce, transcribed including the arrow glyphs.
+    ///
+    /// The glyphs are not decoration: `←` and `→` sit on the side of the line
+    /// the operator has to turn toward, so the direction is readable at a glance
+    /// from a phone being swung around, before the degrees have been parsed.
+    ///
+    /// - Parameters:
+    ///   - offsetDegrees: live signed offset to the target. Positive = the target
+    ///     is clockwise of where the operator is facing, so turn right.
+    ///   - tilted: `|pitch| > 65`. Only `search` says anything about it, exactly
+    ///     as the web does — a `look`, `go` or `respond` never shows it.
+    static func bannerText(kind: String, offsetDegrees off: Double, label: String?,
+                           distance: Double?, tilted: Bool) -> String {
+        let onTarget = abs(off) < GuideThresholds.onTargetDegrees
+        let turn = off > 0 ? "Turn right \(degrees(off))° →" : "← Turn left \(degrees(-off))°"
+
         switch kind {
-        case "respond": return "Candidate found\(metres)"
-        case "go": return "Walk to \(label ?? "the spot")\(metres)"
-        case "look": return "Look \(label ?? "this way")\(metres)"
-        default: return (label ?? "") + metres
+        case "respond":
+            // The hub's responder guidance always carries a distance
+            // (`swarm/target.py`); drop the clause rather than print "null m" if
+            // a future one does not.
+            let dist = distance.map { " · \(metres($0)) m" } ?? ""
+            return onTarget ? "↑ Candidate ahead\(dist)" : turn + dist
+        case "go":
+            let name = label ?? "the spot"
+            let dist = distance.map { " · \(metres($0)) m" } ?? ""
+            return onTarget ? "↑ Walk to \(name)\(dist)" : "\(turn) · walk to \(name)\(dist)"
+        case "look":
+            let name = label ?? "that way"
+            if onTarget { return "Facing \(name) ✓ hold it" }
+            return off > 0 ? "Face \(name) · turn right \(degrees(off))° →"
+                           : "← Face \(name) · turn left \(degrees(-off))°"
+        default:
+            // `search` — the planner's sweep, and anything unrecognised, which
+            // `phone.js` also funnels here via `msg.kind || 'search'`.
+            if tilted { return "Hold your phone up" }
+            return onTarget ? "Scanning \(label ?? "the area")…" : turn
         }
     }
 
-    static func cardinal(_ degrees: Double) -> String {
-        let names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
-        return names[Int((RoomMath.wrap360(degrees) + 22.5) / 45) % 8]
+    /// What the directive is, with no claim about which way to turn — for when
+    /// this phone has no heading of its own. Nothing here says "left", "right"
+    /// or "ahead", because at this point we do not know.
+    static func directionlessText(kind: String, label: String?, distance: Double?) -> String? {
+        let dist = distance.map { " · \(metres($0)) m" } ?? ""
+        switch kind {
+        case "respond": return "Candidate found\(dist)"
+        case "go": return "Walk to \(label ?? "the spot")\(dist)"
+        case "look": return "Face \(label ?? "that way")"
+        default:
+            // `search`: the planner always sends `text`, so this is the case
+            // that should not arise. With no label there is nothing to say.
+            return label.map { "Searching \($0)" }
+        }
+    }
+
+    /// `Math.round` on a positive number, as a string. The web prints whole
+    /// degrees.
+    private static func degrees(_ value: Double) -> String {
+        String(Int(value.rounded()))
+    }
+
+    /// The hub rounds a distance to one decimal place and JavaScript prints the
+    /// result as `6`, not `6.0`. Matching the web's wording means matching that
+    /// too, or every whole-metre readout differs from the browser's by a
+    /// trailing zero.
+    private static func metres(_ value: Double) -> String {
+        let rounded = (value * 10).rounded() / 10
+        return rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%.1f", rounded)
     }
 
     /// Takes the pending haptic, clearing it. A haptic fires once.

@@ -114,7 +114,7 @@ public enum HUDMirror {
                 ? "CANDIDATE" + (arrow.distance.map { String(format: " %.1fm", $0) } ?? "")
                 : (arrow.label ?? "TARGET")
             let color = responding ? alertColor
-                : abs(off) < 16 ? onTargetColor
+                : abs(off) < GuideThresholds.onTargetDegrees ? onTargetColor
                 : (kind == "look" || kind == "go") ? directedColor : turnColor
             markers.append(.init(off: off, label: label, color: color, big: true))
         }
@@ -129,10 +129,10 @@ public enum HUDMirror {
             HubHUDMirror.Compass(center: $0, abs: false, markers: markers)
         }
 
-        let banner = overlay.banner.map {
-            HubHUDMirror.Banner(text: $0.text,
-                                tone: $0.kind == "respond" ? "alert" : $0.onTarget ? "ok" : "warn")
-        }
+        // The tone rules live on the cue, next to the wording they colour, so the
+        // console pill and the phone banner cannot disagree about whether the
+        // operator is there yet.
+        let banner = overlay.banner.map { HubHUDMirror.Banner(text: $0.text, tone: $0.tone) }
 
         let searching = overlay.phase == "search" || overlay.phase == "found"
         let lookingFor = overlay.world?.lookingFor.flatMap { $0.isEmpty || !searching ? nil : $0 }

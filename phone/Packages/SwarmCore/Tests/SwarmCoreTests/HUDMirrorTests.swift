@@ -47,7 +47,8 @@ struct HUDMirrorTests {
         #expect(isClose(marker.off, 40, within: 1e-2))
         #expect(marker.label == "b2", "the hub's own sector text, untouched")
         #expect(marker.color == HUDMirror.turnColor)
-        #expect(hud.banner == .init(text: "Turn right 40°", tone: "warn"))
+        // Recomputed from the live pose, not echoed from the hub's `text`.
+        #expect(hud.banner == .init(text: "Turn right 40° →", tone: "warn"))
     }
 
     @Test func tonesMatchTheConsolesThreePills() {
