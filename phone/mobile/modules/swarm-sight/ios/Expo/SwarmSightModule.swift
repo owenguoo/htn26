@@ -88,7 +88,11 @@ public class SwarmSightModule: Module {
     /// read as a broken switch.
     Function("setTheme") { (theme: String) in
       ThemeController.store(theme)
-      Task { @MainActor in ThemeController.applyStored() }
+      // Applies the value it was handed, not the one it can read back. A
+      // `-SwarmSightTheme light` launch argument lands in `NSArgumentDomain`,
+      // which outranks anything `store` writes — so re-reading would silently
+      // ignore the tap for the whole of that run.
+      Task { @MainActor in ThemeController.apply(theme) }
     }
 
     /// QR / typed text / deep link → the hub's phone socket, or null.

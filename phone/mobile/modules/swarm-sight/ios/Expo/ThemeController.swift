@@ -45,17 +45,14 @@ enum ThemeController {
     }
 
     static func apply(_ theme: String) {
-        let style = style(for: theme)
-        for scene in UIApplication.shared.connectedScenes {
-            guard let windowScene = scene as? UIWindowScene else { continue }
-            for window in windowScene.windows { window.overrideUserInterfaceStyle = style }
-        }
+        applied = style(for: theme)
+        paint()
     }
 
     /// The module is created before the React root window is, so a single
     /// `apply` at launch would style nothing and the first frame would be the
     /// system appearance — a white flash on a dark-mode-by-default app. Every
-    /// window that becomes visible afterwards gets the stored style too.
+    /// window that becomes visible afterwards gets the same style.
     static func followNewWindows() {
         guard observer == nil else { return }
         observer = NotificationCenter.default.addObserver(
@@ -64,10 +61,23 @@ enum ThemeController {
             // Posted on the main queue, so the isolation is real. Re-styling
             // every window is cheaper than reading the notification's payload,
             // which is not `Sendable`.
-            MainActor.assumeIsolated { applyStored() }
+            MainActor.assumeIsolated { paint() }
         }
     }
 
+    private static func paint() {
+        guard let applied else { return }
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows { window.overrideUserInterfaceStyle = applied }
+        }
+    }
+
+    /// The style the app last chose — not what `stored` reads back. They differ
+    /// whenever a `-SwarmSightTheme …` launch argument is in play, because
+    /// `NSArgumentDomain` outranks anything `store` writes; re-reading would
+    /// undo every tap for the rest of that run.
+    private static var applied: UIUserInterfaceStyle?
     private static var observer: (any NSObjectProtocol)?
 
     private static func style(for theme: String) -> UIUserInterfaceStyle {
