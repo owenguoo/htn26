@@ -19,6 +19,12 @@ can get into it.
       people forget.
 - [ ] Markers printed on matte stock, high contrast, non-repetitive. No glossy
       paper.
+- [ ] **At least two markers on the same wall**, close enough together to be in
+      frame at once (about 1.5 m apart works at normal viewing distance).
+      Co-visible markers are what make averaging worth anything: two independent
+      detection errors partly cancel, and a misdetection shows up as
+      disagreement rather than being applied. Markers on separate walls can
+      never do that for each other.
 - [ ] **Every marker measured with a tape after printing** and the measured width
       typed into `Fixtures/venue.json`. Printers scale. A marker declared 2 cm
       wider than it is makes every distance in the venue wrong by that ratio,
@@ -93,6 +99,10 @@ Walk away from a marker in a straight line, sighting it, and note where
       changes are the usual killers.
 - [ ] If the numbers are much worse than this, put up more markers rather than
       trying to tune anything.
+- [ ] Stand where two markers are both in frame. The dashboard should show one
+      correction naming both (`marker-primary+marker-stage-left`), not two
+      separate ones. If it never does, they are not actually co-visible — move
+      them closer together.
 
 ## 5. Re-lock time after walking out and back
 

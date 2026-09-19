@@ -128,6 +128,9 @@ public struct SessionDiagnostics: Sendable, Equatable {
     public var framesSuppressedForOriginChange: Int = 0
     public var corrections: Int = 0
     public var rejectedCorrections: Int = 0
+    /// Corrections built from more than one marker seen at once. Averaging
+    /// several is the whole argument for putting up more than one marker.
+    public var averagedSightings: Int = 0
     public var thermalState: ThermalState = .nominal
     public var isBlockedOnClockSync: Bool = true
     /// Metres of device motion accumulated while tracking was unusable. A
@@ -244,6 +247,12 @@ public actor SessionMachine {
     /// this runs for thirty minutes and a growing array is a memory leak with a
     /// schedule.
     private var recentFrames: [DepthChunk.FrameRef] = []
+    /// Sightings seen in the same instant, held so they can be averaged into one
+    /// correction rather than applied as several. ARKit delivers every anchor it
+    /// updated in a single `didUpdate` callback, so they share a timestamp
+    /// exactly; this batch closes as soon as anything with a different one
+    /// arrives, which at 60 Hz is within 17 ms.
+    private var pendingSightings: [MarkerSighting] = []
     /// Counts down after the world origin moves. See
     /// `framesSuppressedAfterOriginChange`.
     private var framesSuppressed = 0
@@ -285,6 +294,7 @@ public actor SessionMachine {
     }
 
     public func stop() async {
+        pendingSightings.removeAll()
         pumpTask?.cancel()
         pumpTask = nil
         await provider.stop()
@@ -363,15 +373,22 @@ public actor SessionMachine {
     private func handle(_ event: PoseProviderEvent) async {
         switch event {
         case .pose(let sample):
+            await flushPendingSightings()
             await handlePose(sample)
         case .marker(let sighting):
-            await handleMarker(sighting)
+            if let open = pendingSightings.first,
+               abs(open.deviceTimestamp - sighting.deviceTimestamp) > 1e-6 {
+                await flushPendingSightings()
+            }
+            pendingSightings.append(sighting)
         case .interrupted:
             // ARKit pauses on backgrounding, a call, the camera being taken away.
             advance(to: now)
             transition(to: .lost)
         case .interruptionEnded:
-            // The map is gone. Nothing is trustworthy until a marker is seen.
+            // The map is gone. Nothing is trustworthy until a marker is seen,
+            // including anything sighted just before the interruption.
+            pendingSightings.removeAll()
             calibration.invalidateOrigin()
             transition(to: .recalibrating)
         case .failed(let reason):
@@ -392,9 +409,18 @@ public actor SessionMachine {
         emitIfDue()
     }
 
-    private func handleMarker(_ sighting: MarkerSighting) async {
-        advance(to: sighting.deviceTimestamp)
-        let outcome = calibration.evaluate(sighting)
+    private func flushPendingSightings() async {
+        guard !pendingSightings.isEmpty else { return }
+        let batch = pendingSightings
+        pendingSightings.removeAll(keepingCapacity: true)
+        await apply(sightings: batch)
+    }
+
+    private func apply(sightings: [MarkerSighting]) async {
+        guard let latest = sightings.map(\.deviceTimestamp).max() else { return }
+        advance(to: latest)
+        guard let outcome = calibration.evaluate(sightings) else { return }
+        if sightings.count > 1 { diagnostics.averagedSightings += 1 }
         switch outcome {
         case .originEstablished(let correction), .corrected(let correction):
             await provider.setWorldOrigin(relativeTransform: correction.relativeTransform)
@@ -421,7 +447,8 @@ public actor SessionMachine {
             }
         case .rejected(let rejection):
             diagnostics.rejectedCorrections += 1
-            continuation?.yield(.correctionRejected(markerID: sighting.markerID,
+            let markerID = sightings.map(\.markerID).sorted().joined(separator: "+")
+            continuation?.yield(.correctionRejected(markerID: markerID,
                                                     reason: String(describing: rejection)))
         case .noChangeNeeded:
             break

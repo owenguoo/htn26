@@ -314,6 +314,92 @@ struct CalibrationTests {
         }
     }
 
+    // MARK: - Batched sightings
+
+    /// Several markers seen at once produce one averaged correction, not several
+    /// sequential ones. This is the whole argument for putting up more than one
+    /// marker: each sighting's detection error is independent.
+    @Test func severalSightingsAtOnceBecomeOneAveragedCorrection() throws {
+        var engine = CalibrationEngine(venue: venue())
+        let primary = try #require(venue().marker(id: "primary")?.pose)
+        let east = try #require(venue().marker(id: "east")?.pose)
+        let trueOrigin = rigid(x: 1.4, y: 0, z: -0.8, yaw: 0.7)
+
+        let outcome = engine.evaluate([
+            MarkerSighting(markerID: "primary", observedTransform: (trueOrigin * primary).matrix,
+                           deviceTimestamp: 10, isUpdate: false),
+            MarkerSighting(markerID: "east", observedTransform: (trueOrigin * east).matrix,
+                           deviceTimestamp: 10, isUpdate: false),
+        ])
+        guard case .originEstablished(let correction) = outcome else {
+            Issue.record("expected one correction, got \(String(describing: outcome))")
+            return
+        }
+        #expect(engine.acceptedCount == 1, "two sightings produced \(engine.acceptedCount) corrections")
+        #expect(correction.markerID == "east+primary", "the correction does not name both markers")
+        let applied = Pose(matrix: correction.relativeTransform)
+        #expect(isClose(Geometry.distance(applied.position, trueOrigin.position), 0, within: 1e-3))
+    }
+
+    /// A misdetection alongside good sightings must be discarded *before* the
+    /// average, or it drags the result instead of being thrown away.
+    @Test func anOutlierIsRejectedBeforeItCanDragTheAverage() throws {
+        var engine = CalibrationEngine(venue: venue())
+        let primary = try #require(venue().marker(id: "primary")?.pose)
+        let east = try #require(venue().marker(id: "east")?.pose)
+        let trueOrigin = rigid(x: 0.3, y: 0, z: 0.1, yaw: 0.05)
+
+        _ = engine.evaluate(MarkerSighting(markerID: "primary",
+                                           observedTransform: primary.matrix,
+                                           deviceTimestamp: 0, isUpdate: false))
+
+        // "east" is seen nine metres from where it should be: a mirrored print,
+        // or the wrong marker entirely.
+        let bogusOrigin = rigid(x: 9, y: 0, z: 0, yaw: 0)
+        let outcome = engine.evaluate([
+            MarkerSighting(markerID: "primary", observedTransform: (trueOrigin * primary).matrix,
+                           deviceTimestamp: 10, isUpdate: true),
+            MarkerSighting(markerID: "east", observedTransform: (bogusOrigin * east).matrix,
+                           deviceTimestamp: 10, isUpdate: true),
+        ])
+        guard case .corrected(let correction) = outcome else {
+            Issue.record("expected a correction from the good marker, got \(String(describing: outcome))")
+            return
+        }
+        #expect(correction.markerID == "primary", "the bogus marker survived into the average")
+        #expect(engine.rejectedCount == 1)
+        // The applied correction is clamped, so check the direction rather than
+        // the magnitude: it must move toward the true origin, not toward 9 m.
+        let applied = Pose(matrix: correction.relativeTransform)
+        #expect(applied.position.x < 0.4, "the average was dragged to \(applied.position.x) m")
+    }
+
+    @Test func aBatchOfOnlyOutliersIsRejectedEntirely() throws {
+        var engine = CalibrationEngine(venue: venue())
+        let primary = try #require(venue().marker(id: "primary")?.pose)
+        _ = engine.evaluate(MarkerSighting(markerID: "primary", observedTransform: primary.matrix,
+                                           deviceTimestamp: 0, isUpdate: false))
+        let bogus = rigid(x: 12, y: 0, z: 0, yaw: 0) * primary
+        let outcome = engine.evaluate([
+            MarkerSighting(markerID: "primary", observedTransform: bogus.matrix,
+                           deviceTimestamp: 10, isUpdate: true),
+            MarkerSighting(markerID: "unknown-poster", observedTransform: bogus.matrix,
+                           deviceTimestamp: 10, isUpdate: true),
+        ])
+        guard case .rejected = outcome else {
+            Issue.record("a batch of nothing but outliers was accepted: \(String(describing: outcome))")
+            return
+        }
+        #expect(engine.acceptedCount == 1, "only the original origin should have been accepted")
+    }
+
+    @Test func anEmptyBatchIsNotACorrection() {
+        var engine = CalibrationEngine(venue: venue())
+        #expect(engine.evaluate([]) == nil)
+        #expect(engine.acceptedCount == 0)
+        #expect(engine.rejectedCount == 0)
+    }
+
     // MARK: - Against the replayed fixture
 
     /// The real claim: replaying a recorded walk with corrections enabled ends

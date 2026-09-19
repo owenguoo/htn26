@@ -155,60 +155,103 @@ public struct CalibrationEngine: Sendable {
     /// both first-class here; the difference is only that `didAdd` on an
     /// uncalibrated session establishes the origin.
     public mutating func evaluate(_ sighting: MarkerSighting) -> Calibration.Outcome {
-        guard let marker = venue.marker(id: sighting.markerID) else {
-            rejectedCount += 1
-            return .rejected(.unknownMarker(sighting.markerID))
-        }
-        guard let markerPose = marker.pose else {
-            rejectedCount += 1
-            return .rejected(.malformedMarker(sighting.markerID))
+        evaluate([sighting]) ?? .noChangeNeeded(markerID: sighting.markerID)
+    }
+
+    /// Evaluates several sightings seen in the same instant as one correction.
+    ///
+    /// Averaging is the entire argument for putting up more than one marker:
+    /// each sighting's detection error is independent, so averaging four of them
+    /// beats trusting any one. Outliers are rejected *before* the average, or a
+    /// single misdetection would drag the result rather than being discarded.
+    ///
+    /// Returns nil when there was nothing to evaluate.
+    public mutating func evaluate(_ sightings: [MarkerSighting]) -> Calibration.Outcome? {
+        guard let representative = sightings.first else { return nil }
+
+        var candidates: [(sighting: MarkerSighting, origin: Pose, position: Float, degrees: Float)] = []
+        var firstRejection: Calibration.Rejection?
+
+        for sighting in sightings {
+            guard let marker = venue.marker(id: sighting.markerID) else {
+                rejectedCount += 1
+                firstRejection = firstRejection ?? .unknownMarker(sighting.markerID)
+                continue
+            }
+            guard let markerPose = marker.pose else {
+                rejectedCount += 1
+                firstRejection = firstRejection ?? .malformedMarker(sighting.markerID)
+                continue
+            }
+            let observed = Pose(matrix: sighting.observedTransform)
+            let origin = Calibration.worldOriginTransform(observed: observed, markerVenue: markerPose)
+            let position = simd_length(origin.position)
+            let degrees = Geometry.angle(between: origin.orientation,
+                                         and: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)) * 180 / .pi
+
+            if hasOrigin,
+               position > venue.thresholds.rejectPositionMeters
+                || degrees > venue.thresholds.rejectRotationDegrees {
+                // A misdetection, a mirrored print, or the wrong marker entirely.
+                // Discarding it before the average is the point.
+                rejectedCount += 1
+                firstRejection = firstRejection
+                    ?? .disagreesBeyondThreshold(positionMeters: position, rotationDegrees: degrees)
+                continue
+            }
+            candidates.append((sighting, origin, position, degrees))
         }
 
-        let observed = Pose(matrix: sighting.observedTransform)
-        let full = Calibration.worldOriginTransform(observed: observed, markerVenue: markerPose)
-        let positionError = simd_length(full.position)
-        let rotationRadians = Geometry.angle(between: full.orientation, and: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))
-        let rotationDegrees = rotationRadians * 180 / .pi
+        guard !candidates.isEmpty else {
+            return .rejected(firstRejection ?? .unknownMarker(representative.markerID))
+        }
+        guard let averaged = Calibration.average(candidates.map(\.origin)) else {
+            return .rejected(firstRejection ?? .malformedMarker(representative.markerID))
+        }
+
+        // Report the worst disagreement any one marker saw, not the average of
+        // them: the point of the number is to notice when something is wrong.
+        let worstPosition = candidates.map(\.position).max() ?? 0
+        let worstDegrees = candidates.map(\.degrees).max() ?? 0
+        let markerID = candidates.count == 1
+            ? candidates[0].sighting.markerID
+            : candidates.map(\.sighting.markerID).sorted().joined(separator: "+")
+        let timestamp = candidates.map(\.sighting.deviceTimestamp).max() ?? representative.deviceTimestamp
 
         guard hasOrigin else {
             // Nothing to disagree with yet: the frame was arbitrary until now.
             hasOrigin = true
             acceptedCount += 1
-            lastCorrectionTime = sighting.deviceTimestamp
-            lastCorrectionMarker = sighting.markerID
+            lastCorrectionTime = timestamp
+            lastCorrectionMarker = markerID
             return .originEstablished(Calibration.Correction(
-                markerID: sighting.markerID, relativeTransform: full.matrix,
-                measuredPositionError: positionError, measuredRotationDegrees: rotationDegrees,
-                wasClamped: false, deviceTimestamp: sighting.deviceTimestamp))
+                markerID: markerID, relativeTransform: averaged.matrix,
+                measuredPositionError: worstPosition, measuredRotationDegrees: worstDegrees,
+                wasClamped: false, deviceTimestamp: timestamp))
         }
 
-        if positionError > venue.thresholds.rejectPositionMeters
-            || rotationDegrees > venue.thresholds.rejectRotationDegrees {
-            rejectedCount += 1
-            return .rejected(.disagreesBeyondThreshold(positionMeters: positionError,
-                                                       rotationDegrees: rotationDegrees))
+        let averagedPosition = simd_length(averaged.position)
+        let averagedDegrees = Geometry.angle(between: averaged.orientation,
+                                             and: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)) * 180 / .pi
+        if averagedPosition < configuration.noChangePositionMeters
+            && averagedDegrees < configuration.noChangeRotationDegrees {
+            return .noChangeNeeded(markerID: markerID)
         }
-
-        if positionError < configuration.noChangePositionMeters
-            && rotationDegrees < configuration.noChangeRotationDegrees {
-            return .noChangeNeeded(markerID: sighting.markerID)
-        }
-
-        if let last = lastCorrectionTime, sighting.deviceTimestamp - last < configuration.minimumInterval {
-            return .noChangeNeeded(markerID: sighting.markerID)
+        if let last = lastCorrectionTime, timestamp - last < configuration.minimumInterval {
+            return .noChangeNeeded(markerID: markerID)
         }
 
         let (clampedPose, wasClamped) = Calibration.clamp(
-            full,
+            averaged,
             maxMeters: venue.thresholds.maxStepMeters,
             maxRadians: venue.thresholds.maxStepDegrees * .pi / 180)
         acceptedCount += 1
-        lastCorrectionTime = sighting.deviceTimestamp
-        lastCorrectionMarker = sighting.markerID
+        lastCorrectionTime = timestamp
+        lastCorrectionMarker = markerID
         return .corrected(Calibration.Correction(
-            markerID: sighting.markerID, relativeTransform: clampedPose.matrix,
-            measuredPositionError: positionError, measuredRotationDegrees: rotationDegrees,
-            wasClamped: wasClamped, deviceTimestamp: sighting.deviceTimestamp))
+            markerID: markerID, relativeTransform: clampedPose.matrix,
+            measuredPositionError: worstPosition, measuredRotationDegrees: worstDegrees,
+            wasClamped: wasClamped, deviceTimestamp: timestamp))
     }
 
     /// Clears the origin, e.g. after `sessionInterruptionEnded`, when ARKit has

@@ -317,6 +317,28 @@ struct SessionMachineTests {
         }
     }
 
+    /// The fixture sights several markers in the same instant when the operator
+    /// stands where more than one is visible. Those must arrive as one averaged
+    /// correction rather than several sequential re-origins.
+    @Test func simultaneousSightingsInTheReplayAreAveraged() async throws {
+        let trajectory = try Fixtures.trajectory("trajectory-walk-2min.json")
+        var byTimestamp: [Double: Int] = [:]
+        for event in trajectory.markerEvents { byTimestamp[event.t, default: 0] += 1 }
+        let simultaneous = byTimestamp.values.filter { $0 > 1 }.count
+        try #require(simultaneous > 0,
+                     "the fixture never sights two markers at once, so this proves nothing")
+
+        let harness = try ReplayHarness(fixture: "trajectory-walk-2min.json")
+        let events = try await harness.run()
+        let diagnostics = await harness.machine.currentDiagnostics()
+        #expect(diagnostics.averagedSightings > 0,
+                "\(simultaneous) simultaneous sightings in the fixture, none averaged")
+        #expect(events.corrections.contains { $0.contains("+") },
+                "no correction named more than one marker")
+        // One correction per instant, never one per marker.
+        #expect(diagnostics.corrections <= trajectory.markerEvents.count)
+    }
+
     // MARK: - Soak
 
     /// Thirty minutes of replay. Nothing internal may grow with session length:

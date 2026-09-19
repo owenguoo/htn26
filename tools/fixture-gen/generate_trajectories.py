@@ -129,6 +129,12 @@ def quat_from_matrix(m):
 MARKERS = [
     # id, centre, outward normal, measured width, primary
     ("marker-primary", (0.000, 1.600, 0.000), (0, 0, 1), 0.2965, True),
+    # A second marker on the *same* wall, close enough to the primary to be in
+    # frame at the same time. Co-visible markers are what make averaging worth
+    # anything: two independent detection errors partly cancel, and a
+    # misdetection is visible as disagreement rather than being applied.
+    # Markers on separate walls can never do this.
+    ("marker-stage-left", (-1.420, 1.585, 0.010), (0, 0, 1), 0.2100, False),
     ("marker-east", (4.980, 1.550, 3.020), (-1, 0, 0), 0.2100, False),
     ("marker-west", (-5.010, 1.520, 3.050), (1, 0, 0), 0.2095, False),
     ("marker-rear", (0.020, 1.580, 7.950), (0, 0, -1), 0.2970, False),
@@ -219,7 +225,13 @@ def build(name, seconds, seed, *, sweep_amplitude, loop_seconds, stationary,
 
     drift_x = drift_z = drift_yaw = 0.0
     samples, truth, marker_events = [], [], []
-    last_sighting = {}
+    # ARKit delivers every anchor it updated in a single didUpdate callback, so
+    # the throttle is per callback, not per marker. Rate-limiting each marker
+    # independently would drift them out of phase and they would never appear in
+    # the same batch — which is exactly the case multi-marker averaging exists
+    # for.
+    last_batch = None
+    seen_markers = set()
 
     for i in range(count):
         t = i / FPS
@@ -289,7 +301,10 @@ def build(name, seconds, seed, *, sweep_amplitude, loop_seconds, stationary,
         # Marker sightings: near enough, inside the lens, and not edge-on.
         if state == "notAvailable":
             continue
+        if last_batch is not None and t - last_batch < 0.25:
+            continue
         forward = (-math.sin(yaw) * math.cos(pitch), math.sin(pitch), -math.cos(yaw) * math.cos(pitch))
+        batch_emitted = False
         for marker_id, centre, normal, width, _ in MARKERS:
             to_marker = (centre[0] - x, centre[1] - y, centre[2] - z)
             distance = math.sqrt(sum(c * c for c in to_marker))
@@ -300,9 +315,6 @@ def build(name, seconds, seed, *, sweep_amplitude, loop_seconds, stationary,
                 continue  # outside the usable part of the lens
             if sum(-a * b for a, b in zip(direction, normalize(normal))) < math.cos(math.radians(55)):
                 continue  # too oblique to detect reliably
-            previous = last_sighting.get(marker_id)
-            if previous is not None and t - previous < 0.25:
-                continue
             # Detection noise grows with distance and obliquity.
             noise = 0.004 + 0.006 * (distance / 4.5)
             observed = mat_mul(drift, mat_mul(S, marker_matrix(centre, normal)))
@@ -314,10 +326,13 @@ def build(name, seconds, seed, *, sweep_amplitude, loop_seconds, stationary,
                 "t": round(t0 + t, 5),
                 "markerID": marker_id,
                 "transform": column_major(observed),
-                "isUpdate": previous is not None,
+                "isUpdate": marker_id in seen_markers,
                 "estimatedPhysicalWidth": round(width * rng.uniform(0.97, 1.03), 5),
             })
-            last_sighting[marker_id] = t
+            seen_markers.add(marker_id)
+            batch_emitted = True
+        if batch_emitted:
+            last_batch = t
 
     interruptions = []
     if interruption:
