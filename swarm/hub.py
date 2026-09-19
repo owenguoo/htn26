@@ -387,7 +387,6 @@ class Hub:
             return False
         self._phase_generation += 1
         generation = self._phase_generation
-        confirmation = self.search.confirmation
         changed = phase != self.phase
         if changed:
             # The audit keeps its original revision while live callbacks are invalidated.
@@ -396,15 +395,13 @@ class Hub:
             self.planner.note(f"Phase → {phase}")
             if self.mission:
                 self.mission.trigger()
-        revision = self.search.revision
         if phase == "search":
             self.planner.enabled = True
         elif phase in ("lobby", "calibrate", "end"):
             self.planner.enabled = False
 
         def current() -> bool:
-            return (generation == self._phase_generation and revision == self.search.revision
-                    and (not confirmed_visual or confirmation is not None and self.search.confirmation is confirmation))
+            return generation == self._phase_generation
 
         async def publish(phone: Phone) -> None:
             # Recheck after the send lock: another transition can overtake a waiting sender.

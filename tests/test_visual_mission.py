@@ -186,8 +186,8 @@ def test_real_mode_preserves_planner_scanning_and_coverage(monkeypatch):
     assert not hub.mission_complete
 
 
-@pytest.mark.parametrize('newer', ['search', 'rehearsal', 'threshold'])
-def test_superseded_confirmation_does_not_publish_found_or_success(monkeypatch, newer):
+@pytest.mark.parametrize('newer', ['search', 'rehearsal', 'threshold', 'reference'])
+def test_invalidated_confirmation_keeps_authoritative_phase_without_success(monkeypatch, newer):
     import httpx
     from swarm.hub import Phone
 
@@ -228,11 +228,14 @@ def test_superseded_confirmation_does_not_publish_found_or_success(monkeypatch, 
                 await hub.set_phase('search')
             elif newer == 'rehearsal':
                 assert (await client.post('/api/search/rehearsal')).status_code == 200
+            elif newer == 'reference':
+                assert (await client.delete('/api/search/reference')).status_code == 200
             else:
                 assert (await client.put('/api/search/threshold', json={'threshold': .8})).status_code == 200
             resume.set()
             response = await confirmation
-        assert 'found' not in phases
+        assert phases == [hub.phase]
+        assert hub.phase == ('search' if newer in ('search', 'rehearsal') else 'found')
         assert response.status_code == 409
         assert hub.search.confirmation is None
         assert not any('Operator confirmed' in note for note in notes)
@@ -278,5 +281,40 @@ def test_phase_send_rechecks_transition_after_phone_lock(monkeypatch):
         assert hub.phase == 'search'
         assert phases == ['search']
         assert hub.planner.enabled
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('edit', ['threshold', 'reference'])
+def test_ordinary_phase_publication_survives_search_edit(monkeypatch, edit):
+    from swarm.hub import Phone
+
+    async def run():
+        hub = Hub()
+        phone = Phone('p', 1)
+        phases = []
+        paused, resume = asyncio.Event(), asyncio.Event()
+
+        class Socket:
+            async def send_json(self, message):
+                phases.append(message['phase'])
+
+        async def clear():
+            paused.set()
+            await resume.wait()
+
+        phone.ws = Socket()
+        hub.phones['p'] = phone
+        monkeypatch.setattr(hub, 'clear_detection_overlays', clear)
+        transition = asyncio.create_task(hub.set_phase('end'))
+        await paused.wait()
+        if edit == 'threshold':
+            hub.search.set_threshold(.8)
+        else:
+            hub.search.set_reference('replacement')
+        resume.set()
+        assert await transition
+        assert phases == [hub.phase] == ['end']
+        assert not hub.planner.enabled
 
     asyncio.run(run())
