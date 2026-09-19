@@ -92,7 +92,7 @@ class SearchState:
     def __init__(self) -> None:
         self.revision = str(uuid.uuid4())
         self.target_version: str | None = None
-        self.threshold = .75
+        self.threshold = .70
         self.streams: dict[str, str] = {}
         self.frames: dict[str, OrderedDict[int, FrameSnapshot]] = {}
         self.latest: dict[str, AcceptedResult] = {}

@@ -109,3 +109,80 @@ def test_subscriber_keeps_header_and_jpeg_atomic_while_waiting_for_lock(monkeypa
     header, data = sent[0]
     assert header['seq'] == 0
     assert data == first
+
+
+def test_overlapping_registration_keeps_newest_socket_and_stream():
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class HeldClose(Socket):
+            async def close(self):
+                entered.set()
+                await release.wait()
+
+        hub = module.Hub()
+        old, middle, newest = HeldClose(), Socket(), Socket()
+        phone = await hub.register({'phoneId': 'phone'}, old)
+        pending = asyncio.create_task(hub.register({'phoneId': 'phone'}, middle))
+        await entered.wait()
+        await hub.register({'phoneId': 'phone'}, newest)
+        newest_stream = phone.stream_id
+        release.set()
+        await pending
+        assert phone.ws is newest
+        assert phone.stream_id == newest_stream
+        assert hub.search.streams['phone'] == newest_stream
+
+    asyncio.run(run())
+
+
+def test_overlapping_welcome_only_reaches_its_own_connection(monkeypatch):
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class HeldClose(Socket):
+            async def close(self):
+                entered.set()
+                await release.wait()
+
+        class EndpointSocket(Socket):
+            def __init__(self):
+                self.messages = []
+                self.welcomed = asyncio.Event()
+
+            async def accept(self):
+                pass
+
+            async def receive_json(self):
+                return {'phoneId': 'phone'}
+
+            async def send_json(self, message):
+                self.messages.append(message)
+                if message['type'] == 'welcome':
+                    self.welcomed.set()
+
+            async def receive(self):
+                await asyncio.Event().wait()
+
+        hub = module.Hub()
+        monkeypatch.setattr(module, 'hub', hub)
+        await hub.register({'phoneId': 'phone'}, HeldClose())
+        middle, newest = EndpointSocket(), EndpointSocket()
+        pending = asyncio.create_task(module.ws_phone(middle))
+        await entered.wait()
+        current = asyncio.create_task(module.ws_phone(newest))
+        await newest.welcomed.wait()
+        stream = newest.messages[0]['streamId']
+        release.set()
+        await asyncio.sleep(0)
+        try:
+            assert hub.phones['phone'].ws is newest
+            assert hub.phones['phone'].stream_id == stream
+            assert [message for message in newest.messages if message['type'] == 'welcome'] == [newest.messages[0]]
+            assert not middle.messages
+        finally:
+            pending.cancel()
+            current.cancel()
+            await asyncio.gather(pending, current, return_exceptions=True)
+
+    asyncio.run(run())

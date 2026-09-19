@@ -166,14 +166,8 @@ class Hub:
             phone = Phone(id=pid, index=self.next_index)
             self.next_index += 1
             self.phones[pid] = phone
-        elif phone.ws is not None and phone.ws is not ws:
-            # same phone reconnected (refresh, second tab): drop the old socket
-            old = phone.ws
-            phone.ws = None
-            try:
-                await old.close()
-            except Exception:
-                pass
+        old = phone.ws
+        # Install ownership before awaiting closure so overlapping reconnects keep arrival order.
         phone.stream_id = str(uuid.uuid4())
         phone.frame = None
         phone.frame_seq = -1
@@ -193,6 +187,11 @@ class Hub:
         phone.name = str(hello.get("name") or "")[:24]
         if isinstance(hello.get("seat"), dict):
             phone.seat = _seat(hello["seat"])
+        if old is not None and old is not ws:
+            try:
+                await old.close()
+            except Exception:
+                pass
         return phone
 
     def disconnect(self, phone: Phone, ws: WebSocket) -> None:
@@ -639,7 +638,9 @@ async def ws_phone(ws: WebSocket) -> None:
     try:
         hello = await ws.receive_json()
         phone = await hub.register(hello, ws)
-        await phone.send({
+        if phone.ws is not ws:
+            return
+        await ws.send_json({
             "type": "welcome", "phoneId": phone.id, "index": phone.index, "streamId": phone.stream_id,
             "color": phone.color, "room": ROOM, "phase": hub.phase,
         })

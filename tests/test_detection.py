@@ -120,3 +120,11 @@ def test_worker_identifiers_ignore_arbitrary_phone_id():
     frame = FrameSnapshot('!' * 500, 'b7bac91a-b903-424a-9d11-4d7ab5e03ed2', 0, 1000, 480, 640, None)
     assert frame.worker_phone_id == frame.stream_id
     assert frame.worker_frame_id == frame.stream_id + ':0'
+
+
+def test_default_threshold_accepts_similarity_between_point_seven_and_point_seven_five():
+    state, result = setup_state()
+    result['boxes'][0]['similarity'] = .72
+    assert state.accept_result(result, now_ms=1200)
+    assert state.latest['phone'].matched
+    assert state.threshold == .70
