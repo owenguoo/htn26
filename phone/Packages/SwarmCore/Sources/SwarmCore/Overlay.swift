@@ -419,8 +419,9 @@ public struct OverlayModel: Sendable {
             state.toast = ToastCue(text: text, until: now + ttlMs / 1000)
             cue(haptic: "message", intensity: 0.8)
             cue(sound: "message")
-        case .detections(let boxes, let ttlMs):
-            state.detections = DetectionsCue(boxes: boxes, until: now + ttlMs / 1000)
+        case .detections(let detections):
+            state.detections = DetectionsCue(boxes: detections.boxes,
+                                             until: now + detections.ttlMs / 1000)
         case .rate, .hud, .unknown:
             return false
         }
