@@ -77,5 +77,7 @@ export type OperatorViewProps = {
   showDebug?: boolean;
   showMiniMap?: boolean;
   onRequestLeave?: () => void;
+  /** The gear beside the leave button in the native chrome. */
+  onRequestSettings?: () => void;
   style?: StyleProp<ViewStyle>;
 };

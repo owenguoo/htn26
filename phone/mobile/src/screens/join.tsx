@@ -19,6 +19,7 @@ import {
   font,
   foregroundStyle,
   keyboardType,
+  onAppear,
   onSubmit,
   submitLabel,
   textContentType,
@@ -45,18 +46,47 @@ async function tapSeat(seat: { x: number; y: number }) {
 }
 
 /**
+ * Text a SwiftUI `TextField` should be showing, pushed in imperatively.
+ *
+ * The fields are **uncontrolled**. `@expo/ui`'s `TextField` only accepts a
+ * `text` prop as an `ObservableState` from `useNativeState`, and that pulls in
+ * `react-native-worklets` — present in node_modules but not a declared
+ * dependency, which is not something a Release build should rest on. So the
+ * field owns its own text, `onTextChange` mirrors it into React for
+ * validation, and prefills go through `TextFieldRef.setText`.
+ *
+ * The catch, and the reason this hook exists: a `Host`'s SwiftUI tree is built
+ * after React's effects run, so a `setText` from `useEffect` rejects with
+ * `SwiftUIViewNotFound<TextFieldView>`. Seeding is therefore queued and flushed
+ * from the field's own `onAppear`, by which point the view certainly exists.
+ * Prefills that arrive later — a deep link, a QR scan — go straight through.
+ */
+function useSeededField(initial: string) {
+  const ref = useRef<TextFieldRef>(null);
+  const pending = useRef<string | null>(initial || null);
+  const appeared = useRef(false);
+
+  const set = useCallback((text: string) => {
+    if (appeared.current) void ref.current?.setText(text);
+    else pending.current = text;
+  }, []);
+
+  const flush = useCallback(() => {
+    appeared.current = true;
+    const text = pending.current;
+    pending.current = null;
+    if (text) void ref.current?.setText(text);
+  }, []);
+
+  return { ref, set, flush };
+}
+
+/**
  * A real SwiftUI `Form` — `Section`, `TextField`, `Button` — hosted in `Host`.
  * The screen used to hand-build a grouped form out of `View`s painted with
  * Apple's dark palette copied by eye; none of that survives. React still owns
  * the deep link, the QR scan and the hub call, which is the part the e2e
  * harness drives.
- *
- * The fields are **uncontrolled**: `@expo/ui`'s `TextField` only takes a
- * `text` prop as an `ObservableState` from `useNativeState`, and that pulls in
- * `react-native-worklets`, which is present in node_modules but is not a
- * declared dependency. So the field owns its own text, `onTextChange` mirrors
- * it into React for validation, and every prefill — stored config, deep link,
- * QR scan — goes in imperatively through `TextFieldRef.setText`.
  */
 export default function Join() {
   const params = useLocalSearchParams<{ hub?: string; replay?: string; markers?: string; seat?: string }>();
@@ -66,8 +96,8 @@ export default function Join() {
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
   const autoJoined = useRef(false);
-  const hubField = useRef<TextFieldRef>(null);
-  const nameField = useRef<TextFieldRef>(null);
+  const hubField = useSeededField(stored.lastHubURL || stored.venueHubURL);
+  const nameField = useSeededField(stored.name);
 
   const valid = SwarmSight.resolveHubURL(hub) !== null;
 
@@ -84,13 +114,6 @@ export default function Join() {
     }
   }, []);
 
-  // The SwiftUI fields start empty; seed them once from the stored config.
-  useEffect(() => {
-    const startHub = stored.lastHubURL || stored.venueHubURL;
-    if (startHub) void hubField.current?.setText(startHub);
-    if (stored.name) void nameField.current?.setText(stored.name);
-  }, [stored]);
-
   // A deep link (swarmsight://join?hub=…) or the launch-argument test hook prefills
   // the form. Only `replay=1` joins without a tap.
   useEffect(() => {
@@ -102,12 +125,12 @@ export default function Join() {
     if (!link) return;
     autoJoined.current = true;
     setHub(link.hub);
-    void hubField.current?.setText(link.hub);
+    hubField.set(link.hub);
     if (link.replay) {
       SwarmSight.configure({ poseSource: 'replay', replayMarkers: link.markers });
       void join(link.hub, name || 'sim').then(() => (link.seat ? tapSeat(link.seat) : undefined));
     }
-  }, [params.hub, params.replay, params.markers, params.seat, stored.launchJoin, join, name]);
+  }, [params.hub, params.replay, params.markers, params.seat, stored.launchJoin, join, name, hubField]);
 
   // Apple's own scanner sheet (DataScanner): nothing of ours to render or get wrong.
   const scan = useCallback(async () => {
@@ -115,7 +138,7 @@ export default function Join() {
       const link = parseJoinLink(data);
       if (!link) return;
       setHub(link.hub);
-      void hubField.current?.setText(link.hub);
+      hubField.set(link.hub);
       setError(null);
       void CameraView.dismissScanner();
     });
@@ -126,7 +149,7 @@ export default function Join() {
     } finally {
       setTimeout(() => subscription.remove(), 30_000);
     }
-  }, []);
+  }, [hubField]);
 
   const submit = useCallback(() => void join(hub, name), [join, hub, name]);
 
@@ -145,7 +168,7 @@ export default function Join() {
             </Text>
           }>
           <TextField
-            ref={hubField}
+            ref={hubField.ref}
             testID="hub"
             placeholder="http://10.0.0.5:8000/"
             onTextChange={setHub}
@@ -156,6 +179,7 @@ export default function Join() {
               textContentType('URL'),
               submitLabel('join'),
               onSubmit(submit),
+              onAppear(hubField.flush),
             ]}
           />
           <Button label="Scan the dashboard QR" systemImage="qrcode.viewfinder" onPress={scan} testID="scan" />
@@ -163,7 +187,7 @@ export default function Join() {
 
         <Section title="You">
           <TextField
-            ref={nameField}
+            ref={nameField.ref}
             testID="name"
             placeholder="Your name"
             maxLength={24}
@@ -173,6 +197,7 @@ export default function Join() {
               textInputAutocapitalization('words'),
               submitLabel('join'),
               onSubmit(submit),
+              onAppear(nameField.flush),
             ]}
           />
         </Section>
