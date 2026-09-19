@@ -31,8 +31,12 @@ public final class CameraPreviewSource {
     /// aim; it does not need to be smooth, and every millisecond it takes is a
     /// millisecond stolen from the latency budget that does matter.
     private let targetHz: Double = 15
-    /// Small enough that the render is cheap, large enough to aim by.
-    private let targetWidth = 480
+    /// Roughly a phone screen's width in points times its scale, so the preview
+    /// is not visibly upscaled. 480 was cheap and looked it: blown up to a
+    /// 1200-point-wide screen it is a 2.5x upscale, which reads as "the camera
+    /// is bad" when it is only the preview. The render is on the GPU and
+    /// throttled, so the extra pixels cost little.
+    private let targetWidth = 1_170
 
     init() {
         let options: [CIContextOption: Any] = [.cacheIntermediates: false]

@@ -15,6 +15,12 @@ struct OverlayView: View {
             // a camera they cannot see through.
             CameraPreviewView(source: coordinator.preview)
 
+            // Where the venue thinks the markers are. If these outlines sit on
+            // the printed markers and stay there as you walk, calibration is
+            // good; if they slide off, that is the drift.
+            MarkerOverlayView(projections: coordinator.markerProjections,
+                              captureSize: coordinator.captureSize)
+
             if let arrow = coordinator.overlay.arrow {
                 // A scrim, so white chevrons stay legible over a bright room.
                 Color.black.opacity(0.35).ignoresSafeArea()

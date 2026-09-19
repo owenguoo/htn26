@@ -24,6 +24,7 @@ import base64
 import hashlib
 import json
 import os
+import math
 import socket
 import struct
 import sys
@@ -48,6 +49,22 @@ class WebSocket:
         self.closed = False
         self.send_lock = threading.Lock()
 
+    def request_path(self):
+        """The path from the request line, e.g. /device or /viewer."""
+        try:
+            first = self.buffer.split(b"\r\n", 1)[0].decode("latin-1")
+            return first.split(" ")[1]
+        except (IndexError, UnicodeDecodeError):
+            return "/"
+
+    def serve_file(self, path, content_type):
+        body = open(path, "rb").read()
+        self.connection.sendall(
+            ("HTTP/1.1 200 OK\r\n"
+             f"Content-Type: {content_type}\r\n"
+             f"Content-Length: {len(body)}\r\n"
+             "Connection: close\r\n\r\n").encode() + body)
+
     def handshake(self):
         while b"\r\n\r\n" not in self.buffer:
             chunk = self.connection.recv(4096)
@@ -62,6 +79,8 @@ class WebSocket:
                 headers[name.strip().lower()] = value.strip()
         key = headers.get("sec-websocket-key")
         if not key:
+            # A plain browser request. Serve the debug page rather than dropping
+            # the connection, so the URL the server prints is one you can open.
             return False
         accept = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
         self.connection.sendall(
@@ -143,6 +162,30 @@ class Device:
         self.frames = 0
         self.depth_chunks = 0
         self.last_pose = None
+        self.first_pose_at = None
+        self.client_latencies = []
+
+    def pose_rate(self):
+        if not self.first_pose_at or self.poses < 2:
+            return None
+        elapsed = time.time() - self.first_pose_at
+        return self.poses / elapsed if elapsed > 0 else None
+
+    def record_latency(self, milliseconds):
+        self.client_latencies.append(milliseconds)
+        # Bounded: this runs for the whole demo.
+        if len(self.client_latencies) > 500:
+            del self.client_latencies[:-500]
+
+    def latency_summary(self):
+        if not self.client_latencies:
+            return {}
+        ordered = sorted(self.client_latencies)
+        def pick(fraction):
+            return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
+        return {"last": self.client_latencies[-1], "median": pick(0.5), "p95": pick(0.95),
+                "count": len(self.client_latencies),
+                "overBudget": sum(1 for v in self.client_latencies if v > 50)}
 
     def send(self, message_type, data):
         self.seq += 1
@@ -151,13 +194,95 @@ class Device:
 
 DEVICES = {}
 DEVICES_LOCK = threading.Lock()
+VIEWERS = []
+VIEWERS_LOCK = threading.Lock()
+VENUE = {"markers": []}
+DASHBOARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
+
+
+def quaternion_yaw(q):
+    """Rotation about venue +Y, measured from -Z toward +X, matching
+    Geometry.yaw(of:) so the wedge on the plan points where the phone looks."""
+    x, y, z, w = q
+    # The camera's forward is local -Z rotated by q.
+    fx = -2 * (x * z + w * y)
+    fz = -(1 - 2 * (x * x + y * y))
+    return math.atan2(fx, -fz)
+
+
+def viewer_state():
+    with DEVICES_LOCK:
+        devices = {}
+        for device_id, device in DEVICES.items():
+            pose = device.last_pose or {}
+            latency = device.latency_summary()
+            devices[device_id] = {
+                "position": pose.get("position"),
+                "yaw": quaternion_yaw(pose["quaternion"]) if pose.get("quaternion") else None,
+                "state": pose.get("trackingState"),
+                "confidence": pose.get("confidence"),
+                "fix": pose.get("lastCorrectionAge"),
+                "stale": pose.get("stale", True),
+                "poseHz": device.pose_rate(),
+                "latency": latency,
+            }
+    return {"devices": devices, "markers": VENUE.get("markers", [])}
+
+
+def broadcast_state():
+    payload = json.dumps(viewer_state())
+    with VIEWERS_LOCK:
+        stale = []
+        for viewer in VIEWERS:
+            try:
+                viewer._send_frame(payload.encode())
+            except OSError:
+                stale.append(viewer)
+        for viewer in stale:
+            VIEWERS.remove(viewer)
+
+
+def viewer_pump():
+    """The plan view redraws at a steady rate rather than on every pose, so a
+    phone at 10 Hz does not turn into 10 browser repaints a second."""
+    while True:
+        time.sleep(0.2)
+        try:
+            broadcast_state()
+        except Exception:
+            pass
 
 
 def handle(connection, address, verbose):
     socket_wrapper = WebSocket(connection, address)
     device = Device(socket_wrapper)
     try:
+        # Read enough to see the request line before deciding what this is.
+        while b"\r\n" not in socket_wrapper.buffer:
+            chunk = connection.recv(4096)
+            if not chunk:
+                return
+            socket_wrapper.buffer += chunk
+        path = socket_wrapper.request_path()
+
+        if path in ("/", "/index.html", "/dashboard"):
+            socket_wrapper.serve_file(DASHBOARD, "text/html; charset=utf-8")
+            return
+
         if not socket_wrapper.handshake():
+            return
+
+        if path == "/viewer":
+            with VIEWERS_LOCK:
+                VIEWERS.append(socket_wrapper)
+            try:
+                socket_wrapper._send_frame(json.dumps(viewer_state()).encode())
+                while socket_wrapper.receive() is not None:
+                    pass
+            finally:
+                with VIEWERS_LOCK:
+                    if socket_wrapper in VIEWERS:
+                        VIEWERS.remove(socket_wrapper)
             return
         while True:
             payload = socket_wrapper.receive()
@@ -201,6 +326,8 @@ def handle_envelope(device, envelope, verbose):
 
     elif message_type == "pose":
         device.poses += 1
+        if device.first_pose_at is None:
+            device.first_pose_at = time.time()
         device.last_pose = data
         if verbose or device.poses % 50 == 1:
             position = data.get("position", [])
@@ -218,6 +345,7 @@ def handle_envelope(device, envelope, verbose):
         stamps = {stamp["stage"]: stamp["t"] for stamp in trace.get("stamps", [])}
         if "capture" in stamps and "sent" in stamps:
             client_ms = (stamps["sent"] - stamps["capture"]) * 1000
+            device.record_latency(client_ms)
             budget_note = "" if client_ms <= 50 else "  <- over the 50 ms client budget"
             print(f"  frame #{data.get('frameID')} {data.get('width')}x{data.get('height')} "
                   f"client {client_ms:.1f} ms{budget_note}")
@@ -366,13 +494,23 @@ def main():
                         help="cycle through every command kind once a device connects")
     arguments = parser.parse_args()
 
+    venue_path = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "Fixtures", "venue.json")
+    try:
+        VENUE.update(json.load(open(venue_path)))
+    except OSError:
+        print(f"could not read {venue_path}; the plan view will show no markers")
+
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind((arguments.host, arguments.port))
     listener.listen(8)
 
-    print(f"stub orchestrator on ws://{outbound_address()}:{arguments.port}/device")
-    print("this is NOT the real orchestrator; if they disagree, the real one wins")
+    address = outbound_address()
+    print(f"stub orchestrator on ws://{address}:{arguments.port}/device")
+    print(f"debug plan view:   http://{address}:{arguments.port}/")
+    print("this is NOT the real orchestrator or its dashboard; if they disagree, "
+          "the real one wins")
 
     if sys.stdin.isatty():
         threading.Thread(target=command_console, daemon=True).start()
@@ -381,6 +519,7 @@ def main():
               "Use --demo to cycle commands automatically.")
     if arguments.demo:
         threading.Thread(target=demo_loop, daemon=True).start()
+    threading.Thread(target=viewer_pump, daemon=True).start()
 
     while True:
         connection, peer = listener.accept()

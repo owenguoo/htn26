@@ -14,6 +14,10 @@ import simd
 @Observable
 public final class AppCoordinator {
     public private(set) var overlay = OverlayState()
+    /// Where the venue believes each marker is, in captured-image pixels.
+    public private(set) var markerProjections: [Projection.MarkerProjection] = []
+    /// The resolution the projections are expressed in.
+    public private(set) var captureSize = CGSize(width: 1_920, height: 1_440)
     public private(set) var lastError: String?
     public private(set) var isRunning = false
 
@@ -148,6 +152,7 @@ public final class AppCoordinator {
                 latestPose = update.venuePose
                 await transport.send(.pose(update))
             case .captureFrame(let ticket):
+                latestIntrinsics = ticket.intrinsics ?? latestIntrinsics
                 await handle(frameTicket: ticket, transport: transport, pipeline: pipeline)
             case .captureDepthChunk(let ticket):
                 await handle(depthTicket: ticket, transport: transport)
@@ -257,6 +262,7 @@ public final class AppCoordinator {
                 let state = await transport.currentState()
                 clockOffset = await session.clockOffset()
                 latestPose = await session.latestVenuePose()
+                updateMarkerProjections()
                 model.update(pose: latestPose, diagnostics: diagnostics, transport: stats,
                              transportState: state, now: serverNow)
                 overlay = model.state
@@ -280,6 +286,19 @@ public final class AppCoordinator {
     }
 
     private var latestPose: Pose?
+    private var latestIntrinsics: CameraIntrinsics?
+
+    /// Recomputed every overlay tick, because the outlines only mean anything
+    /// relative to where the camera is right now.
+    private func updateMarkerProjections() {
+        guard let latestPose, let intrinsics = latestIntrinsics else {
+            markerProjections = []
+            return
+        }
+        captureSize = CGSize(width: intrinsics.imageWidth, height: intrinsics.imageHeight)
+        markerProjections = Projection.visibleMarkers(in: venue, camera: latestPose,
+                                                      intrinsics: intrinsics)
+    }
 
     private var serverNow: Double {
         CACurrentMediaTime() + (clockOffset ?? 0)
