@@ -10,4 +10,5 @@ dependencies = [
     "pillow>=10.1",
     "segno>=1.6",
     "openai>=3.16.2",
+    "opencv-python-headless>=4.10,<5",
 ]

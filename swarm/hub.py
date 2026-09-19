@@ -97,6 +97,7 @@ class Phone:
     frame_t: float = 0              # capture time, server clock
     frame_at: float = 0             # arrival time, server clock
     scan_frame: dict | None = None  # crisp frame + its capture pose; not overwritten by preview frames
+    scan_candidates: deque = field(default_factory=lambda: deque(maxlen=4))
     frames_total: int = 0
     arrivals: deque = field(default_factory=lambda: deque(maxlen=120))  # (arrival ms, bytes)
     latency_ms: float | None = None
@@ -249,9 +250,9 @@ class Hub:
         phone.frames_total += 1
         if header.get("scanKeyframe") and self.mapper and self.mapper.enabled:
             pose = phone.pose(now)
-            if pose:
-                phone.scan_frame = {"jpeg": jpeg, "pose": dict(pose), "pitch": phone.pitch,
-                                    "orientation": phone.frame_ori, "at": now}
+            phone.scan_frame = {"jpeg": jpeg, "pose": dict(pose) if pose else None, "pitch": phone.pitch,
+                                "orientation": phone.frame_ori, "at": now}
+            phone.scan_candidates.append(phone.scan_frame)
 
     def on_message(self, phone: Phone, msg: dict) -> None:
         kind = msg.get("type")
@@ -623,7 +624,9 @@ class Hub:
                         for pg in pings if pg["phones"] is None or p.id in pg["phones"]]
                 stats = {"m2": round(p.searched_cells * cell_m2, 1),
                          "rank": ranked.index(p) + 1, "of": len(ranked)}
-                sends.append(p.send({**base, "me": p.id, "pings": mine, "stats": stats}))
+                sends.append(p.send({**base, "me": p.id, "pings": mine, "stats": stats,
+                                     "scanHint": self.mapper.selection_hints.get(p.id, "Slowly capture overlapping room views")
+                                     if base["scanning"] else None}))
             await asyncio.gather(*sends)
 
     # ---- outbound ----------------------------------------------------------

@@ -1,19 +1,8 @@
-"""Live 3D scan: sample phone frames into a bounded keyframe set, and rebuild the room's point cloud
-with VGGT on the GPU pod whenever enough new views have come in.
+"""Live 3D scan: visually select overlapping keyframes without requiring phone poses.
 
-- Sampling: a phone's frame becomes a keyframe only when it shows something new: that phone has
-  turned or moved enough since its last keyframe, and no keyframe (from any phone) already has
-  nearly the same view. Frames pointed at the floor or ceiling are skipped.
-- Bounded: VGGT has to see every view in one pass (separate runs don't share a coordinate frame),
-  so each rebuild uses the whole keyframe set. The set is capped: when it's full, the most
-  redundant keyframe (the one closest in position and heading to another) is dropped. Rebuild time
-  stays flat however long the search runs.
-- Rebuild: once RUN_AFTER_NEW new keyframes have arrived (and no rebuild is running), they go to
-  the GPU worker (gpu/vggt_worker.py) through an SSH tunnel; the GLB comes back in the reply.
-- Alignment: VGGT's output has arbitrary scale and orientation. It also says where each frame's
-  camera was and which way it faced, and we know each phone's room position and heading when the
-  frame was taken. Headings give the rotation, positions (or camera height vs. eye height when
-  everyone stood still) give the scale, and positions give the offset.
+A short per-phone candidate window feeds a bounded archive of clear connected views.
+Each reconstruction uses a connected subset with old coverage and shared references.
+VGGT still runs a fresh reconstruction for every batch; this is not persistent fusion.
 
 Configure in .env (off until the operator turns it on in the console):
     MAP_WORKER_SSH=root@154.54.102.55     # pod's direct SSH (RUNPOD_PUBLIC_IP)
@@ -33,12 +22,10 @@ import urllib.request
 from pathlib import Path
 
 from .protocol import now_ms
+from .keyframes import VisualSelector, working_batch, MAX_ARCHIVE, MAX_BATCH, WINDOW_MS
 
-KEEP_TURN_DEG = 25        # a phone's next keyframe needs this much turn...
-KEEP_MOVE_M = 0.8         # ...or this much walking since its last one
-SAME_VIEW = (0.5, 15)     # any keyframe within 0.5 m and 15° already covers this view
-MAX_PITCH = 50            # skip frames of the floor/ceiling
-MAX_KEYFRAMES = 32
+MAX_KEYFRAMES = MAX_BATCH
+MAX_WAIT_MS = 10000       # flush small pending updates; also back off failed requests
 RUN_AFTER_NEW = 6         # rebuild once this many new keyframes have arrived
 PAUSED_PHASES = ("lobby",)  # people are still joining: don't sample or rebuild
 MIN_FRAMES = 6            # don't bother with fewer
@@ -60,7 +47,15 @@ class Mapper:
         self.include_sims = os.environ.get("MAP_INCLUDE_SIMS") == "1"  # sim frames are drawings: off
         self.keyframes: list[dict] = []
         self.ids = 0
-        self.new_since_run = 0
+        self.pending: set[str] = set()
+        self.previous_batch: list[str] = []
+        self.selector = VisualSelector()
+        self.selection_hints: dict[str, str] = {}
+        self.sample_times: dict[str, float] = {}
+        self.pending_since = 0
+        self.last_attempt = 0
+        self.batch_size = 0
+        self.selection_ms = 0
         self.running = False
         self.version = 0
         self.generation = 0     # bumped by reset(): results from before it are thrown away
@@ -81,15 +76,19 @@ class Mapper:
         """Pick up where we left off after a hub restart: the latest scan and the views it was built from."""
         try:
             saved = json.loads((self.out_dir / "last.json").read_text())
-            if (self.out_dir / Path(saved["last"]["url"]).name).exists():
+            if saved.get("last") and (self.out_dir / Path(saved["last"]["url"]).name).exists():
                 self.last, self.version = saved["last"], saved["last"]["version"]
                 self.placed = {k: tuple(v) for k, v in saved.get("placed", {}).items()}
                 self.fit = saved.get("fit") or self.fit
                 self.last.setdefault("autoTransform", self.last["transform"])
+            self.previous_batch = saved.get("previousBatch", [])
             for k in saved.get("keyframes", []):
                 jpeg = self.out_dir / "views" / f"{k['id']}.jpg"
                 if jpeg.exists():
                     self.keyframes.append(k | {"jpeg": jpeg.read_bytes()})
+            self.pending = set(saved.get("pending", [])) & {k["id"] for k in self.keyframes}
+            if self.pending:
+                self.pending_since = now_ms()
             self.ids = max([int(k["id"][1:]) for k in self.keyframes] + [0])
         except (OSError, ValueError, KeyError):
             pass
@@ -105,9 +104,13 @@ class Mapper:
         for f in views.glob("*.jpg"):
             if f.name not in keep:
                 f.unlink(missing_ok=True)
-        (self.out_dir / "last.json").write_text(json.dumps({
+        saved = self.out_dir / "last.json.tmp"
+        saved.write_text(json.dumps({
             "last": self.last, "placed": self.placed, "fit": self.fit,
-            "keyframes": [{key: v for key, v in k.items() if key != "jpeg"} for k in self.keyframes]}))
+            "previousBatch": self.previous_batch, "pending": sorted(self.pending),
+            "keyframes": [{key: v for key, v in k.items() if key != "jpeg" and not key.startswith("_")}
+                          for k in self.keyframes]}))
+        saved.replace(self.out_dir / "last.json")
 
     # ---- controls -------------------------------------------------------------------
     def set_enabled(self, on: bool) -> None:
@@ -118,7 +121,14 @@ class Mapper:
     def reset(self) -> None:
         """Start the scan over: forget every view and the current model (a rebuild in flight is discarded)."""
         self.keyframes.clear()
-        self.new_since_run = 0
+        self.pending.clear()
+        self.previous_batch.clear()
+        self.selection_hints.clear()
+        self.sample_times.clear()
+        self.pending_since = 0
+        for p in self.hub.phones.values():
+            p.scan_candidates.clear()
+            p.scan_frame = None
         self.generation += 1
         self.placed = {}
         self.fit = {"scale": 1.0, "turnDeg": 0.0}
@@ -157,51 +167,71 @@ class Mapper:
 
     def status(self) -> dict:
         return {"enabled": self.enabled, "configured": bool(self.url), "workerOk": self.worker_ok,
-                "running": self.running, "keyframes": len(self.keyframes), "maxKeyframes": MAX_KEYFRAMES,
-                "newSince": self.new_since_run, "runAfter": RUN_AFTER_NEW, "error": self.error,
+                "running": self.running, "keyframes": len(self.keyframes), "maxKeyframes": MAX_ARCHIVE,
+                "batchSize": self.batch_size, "maxBatch": MAX_BATCH,
+                "selectionMs": self.selection_ms,
+                "selectionHints": {p.id: {"name": p.name or f"Phone {p.index}", "message": self.selection_hints[p.id]}
+                                   for p in self.hub.phones.values() if p.connected and p.id in self.selection_hints},
+                "newSince": len(self.pending), "runAfter": RUN_AFTER_NEW, "error": self.error,
                 "paused": self.paused(),
                 "last": self.last}
 
     # ---- sampling -------------------------------------------------------------------
-    def sample(self) -> None:
+    async def sample(self) -> None:
         now = now_ms()
+        groups = {}
         for p in list(self.hub.phones.values()):
-            captured = p.scan_frame
-            pose = captured["pose"] if captured else p.pose(now)
-            jpeg = captured["jpeg"] if captured else p.frame
-            pitch = captured["pitch"] if captured else p.pitch
-            ori = captured["orientation"] if captured else p.frame_ori
-            at = captured["at"] if captured else p.frame_at
-            if (not p.connected or (p.sim and not self.include_sims) or not p.frame
-                    or now - at > (1800 if captured else FRESH_MS) or not pose or pose.get("heading") is None
-                    or (pitch is not None and abs(pitch) > MAX_PITCH)):
+            if not p.connected or (p.sim and not self.include_sims):
                 continue
-            x, y, h = pose["x"], pose["y"], pose["heading"]
-            mine = [k for k in self.keyframes if k["pid"] == p.id]
-            if mine and _turn(mine[-1]["heading"], h) < KEEP_TURN_DEG and math.dist((mine[-1]["x"], mine[-1]["y"]), (x, y)) < KEEP_MOVE_M:
-                continue  # this phone hasn't shown anything new
-            if any(math.dist((k["x"], k["y"]), (x, y)) < SAME_VIEW[0] and _turn(k["heading"], h) < SAME_VIEW[1]
-                   for k in self.keyframes):
-                continue  # someone already has this view
-            self.ids += 1
-            self.keyframes.append({"id": f"k{self.ids}", "pid": p.id, "index": p.index, "jpeg": jpeg,
-                                   "x": x, "y": y, "heading": h, "pitch": pitch or 0.0, "t": at,
-                                   "up": camera_up(ori, pitch)})
-            self.new_since_run += 1
-        while len(self.keyframes) > MAX_KEYFRAMES:
-            self._drop_most_redundant()
+            if now - self.sample_times.get(p.id, 0) < 2000:
+                continue
+            # Keep modern clients' sharp captures separate from preview traffic.
+            candidates = [dict(c) for c in p.scan_candidates if now - c["at"] <= WINDOW_MS]
+            if not candidates and p.scan_frame is None and p.frame and now - p.frame_at <= FRESH_MS:
+                candidates = [{"jpeg": p.frame, "pose": p.pose(now), "pitch": p.pitch,
+                               "orientation": p.frame_ori, "at": p.frame_at}]
+            if not candidates:
+                self.selection_hints[p.id] = 'Waiting for fresh camera frames'
+                continue
+            # Give the first modern frame time to gain a sharper alternative.
+            if p.scan_frame and len(candidates) == 1 and now - candidates[0]["at"] < 1000:
+                continue
+            self.sample_times[p.id] = now
+            p.scan_candidates.clear()
+            groups[p.id] = []
+            for c in candidates:
+                pose = c.get("pose") or {}
+                self.ids += 1
+                groups[p.id].append({"id": f"k{self.ids}", "pid": p.id, "index": p.index,
+                    "jpeg": c["jpeg"], "x": pose.get("x"), "y": pose.get("y"),
+                    "heading": pose.get("heading"), "pitch": c.get("pitch"), "t": c["at"],
+                    "up": camera_up(c.get("orientation"), c.get("pitch"))})
+        if not groups:
+            return
+        gen = self.generation
+        start = time.monotonic()
+        # CPU image decoding/matching must not interrupt phone/WebSocket traffic.
+        archive, added, hints = await asyncio.to_thread(
+            self.selector.choose, groups, list(self.keyframes), set(self.previous_batch))
+        if gen != self.generation:
+            return
+        self.selection_ms = round((time.monotonic() - start) * 1000, 1)
+        self.keyframes = archive
+        self.selection_hints.update(hints)
+        retained = {k["id"] for k in archive}
+        for k in added:
+            if k["id"] not in retained:
+                self.selection_hints[k["pid"]] = 'Map archive full; capture overlapping views nearer the mapped area'
+        if added and not self.pending:
+            self.pending_since = now_ms()
+        self.pending = (self.pending | {k["id"] for k in added}) & retained
 
-    def _drop_most_redundant(self) -> None:
-        best, drop = None, None
-        ks = self.keyframes
-        for i in range(len(ks)):
-            for j in range(i + 1, len(ks)):
-                d = math.dist((ks[i]["x"], ks[i]["y"]), (ks[j]["x"], ks[j]["y"])) + _turn(ks[i]["heading"], ks[j]["heading"]) / 30
-                if best is None or d < best:
-                    # Keep the first reference view across updates. Replacing it needlessly
-                    # changes VGGT's reference frame and makes placement harder to stabilize.
-                    best, drop = d, j if i == 0 else (i if ks[i]["t"] < ks[j]["t"] else j)
-        ks.pop(drop)
+    def ready_to_rebuild(self, now):
+        if self.running or len(self.keyframes) < MIN_FRAMES or not self.pending:
+            return False
+        if now - self.last_attempt < MAX_WAIT_MS:
+            return False
+        return len(self.pending) >= RUN_AFTER_NEW or now - self.pending_since >= MAX_WAIT_MS
 
     # ---- rebuilds -------------------------------------------------------------------
     async def loop(self) -> None:
@@ -209,10 +239,12 @@ class Mapper:
             await asyncio.sleep(0.5)
             if not self.enabled or not self.url or self.paused():
                 continue
-            self.sample()
-            if self.running or len(self.keyframes) < MIN_FRAMES:
+            try:
+                await self.sample()
+            except Exception as e:
+                self.error = f"Frame selection: {_short(e)}"
                 continue
-            if self.new_since_run >= RUN_AFTER_NEW or (self.last is None and len(self.keyframes) >= MIN_FRAMES):
+            if self.ready_to_rebuild(now_ms()):
                 asyncio.create_task(self.rebuild())
 
     def paused(self) -> bool:
@@ -222,9 +254,28 @@ class Mapper:
         if self.running or len(self.keyframes) < 2 or self.paused():
             return
         self.running = True
-        frames = list(self.keyframes)
         gen = self.generation
-        self.new_since_run = 0
+        try:
+            await self._rebuild()
+        except Exception as e:
+            if gen == self.generation:
+                self.error = _short(e)
+                self.hub.planner.note(f"Scan update failed: {self.error}")
+        finally:
+            self.running = False
+
+    async def _rebuild(self) -> None:
+        frames = working_batch(self.keyframes, self.previous_batch, self.pending)
+        self.batch_size = len(frames)
+        self.last_attempt = now_ms()
+        if len(frames) < 2:
+            self.error = "Need overlapping views before rebuilding"
+            self.running = False
+            return
+        if self.pending and not self.pending.intersection(k["id"] for k in frames):
+            self.error = "New views need a shorter overlap path to the mapped area"
+            return
+        gen = self.generation
         t0 = time.time()
         try:
             await self._ensure_tunnel()
@@ -249,6 +300,9 @@ class Mapper:
         alignment["floorBy"] = meta.get("floorBy")
         transform, alignment["steadiedBy"] = steady(transform, meta["cameras"], self.placed)
         self.placed = place(transform, meta["cameras"])
+        self.previous_batch = [k["id"] for k in frames]
+        self.pending.difference_update(self.previous_batch)
+        self.pending_since = now_ms() if self.pending else 0
         self.version += 1
         self.out_dir.mkdir(parents=True, exist_ok=True)
         path = self.out_dir / f"scan-{self.version}.glb"
@@ -305,9 +359,14 @@ def align(cameras: list[dict], frames: dict[str, dict], depth: float | None = No
     """Similarity transform (scale, rotation about vertical, offset) taking the scan into room meters.
     Output matches room.json's "scene" transform: scale, then rotate about Y, then offset [x, height, y].
     three.js rotation.y = θ adds θ to a direction's angle atan2(X, Z)."""
-    pairs = [(c, frames[c["id"]]) for c in cameras if c["id"] in frames]
+    pairs = [(c, frames[c["id"]]) for c in cameras if c["id"] in frames
+             and all(frames[c["id"]].get(k) is not None for k in ("x", "y", "heading"))]
     if not pairs:
-        return {"scale": 1, "rotateYDeg": 0, "offset": [0, 0, 0]}, {"method": "unaligned", "residualM": None}
+        heights = sorted(c["position"][1] for c in cameras)
+        height = heights[len(heights) // 2] if heights else 0
+        scale = max(.05, min(200., EYE_H / height)) if height > .01 else 1.
+        return {"scale": round(scale, 4), "rotateYDeg": 0, "offset": [0, 0, 7]}, {
+            "method": "visual map · estimated scale, not registered to phone positions", "residualM": None}
     # rotation: room heading h faces (X, Z) = (sin h, -cos h), i.e. angle atan2(X, Z) = π - h
     sx = sy = 0.0
     for c, k in pairs:

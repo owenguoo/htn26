@@ -811,6 +811,8 @@ function myPos() {
 
 function onWorld(msg) {
   state.world = msg;
+  $('#scanFeedback').hidden = !msg.scanning;
+  $('#scanFeedback').textContent = msg.scanHint || 'Slowly capture overlapping room views';
   for (const pg of msg.pings || []) {
     if (!state.pings.has(pg.id)) {
       state.pings.set(pg.id, { x: pg.x, y: pg.y, label: pg.label, until: Date.now() + 12000 - pg.ageMs });

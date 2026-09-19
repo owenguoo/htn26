@@ -116,12 +116,14 @@ function renderControls() {
     $('#scanSw').classList.toggle('on', sc.enabled);
     const l = sc.last;
     $('#scanHint').textContent = !sc.configured ? 'Set MAP_WORKER_SSH in .env'
-      : sc.running ? `Rebuilding from ${sc.keyframes} views…`
+      : sc.running ? `Rebuilding from ${sc.batchSize} views…`
       : sc.error ? `Error: ${sc.error}`
       : !sc.enabled ? 'VGGT on the GPU, from phone frames'
       : sc.paused ? `Paused in the lobby · ${sc.keyframes} views kept`
-      : `${sc.keyframes}/${sc.maxKeyframes} views · ${sc.newSince}/${sc.runAfter} new`
+      : `${sc.keyframes}/${sc.maxKeyframes} archived · batch ≤${sc.maxBatch} · ${sc.newSince} pending`
         + (l ? ` · v${l.version} in ${l.seconds}s` : '');
+    $('#scanSelection').textContent = sc.enabled ? Object.values(sc.selectionHints || {})
+      .map(h => `${h.name}: ${h.message}`).join(' · ') : '';
   }
   const t = st.target;
   const s = $('#candStatus');

@@ -14,6 +14,51 @@ Built from `live-3d-scan-and-vision` at `e08c9fc3e38d9113602013f938b51433a533dd5
 
 The binary worker request/response contract is unchanged. `points` now counts mesh vertices; new fields include `faces`, `representation`, `colorSpace`, `compression`, `floorBy`, filter/fusion timing, and supported pixel counts. `--representation points` retains the original output path. Deploy the updated viewer before enabling surface output.
 
+## Live visual frame selection
+
+The hub now selects inputs using images instead of requiring a tapped position, heading,
+or SLAM pose. Standard camera mode can contribute reconstruction frames while walking.
+This does **not** add automatic movement to the phone markers. Without registration,
+the map uses camera-height-based estimated scale and the dashboard labels it accordingly.
+
+- Each phone retains at most four sharp capture candidates, expiring after 2.5 seconds.
+  Approximately every two seconds the selector chooses its sharpest eligible candidate.
+  Preview traffic cannot replace mapping candidates; older clients retain a preview fallback.
+- Small grayscale copies (640px longest side) undergo exposure, blur, and texture checks.
+  SIFT matches verified with homography/epipolar RANSAC establish overlap; matching points must span
+  multiple image regions. Nearly identical views are rejected. Original JPEGs go to VGGT.
+  These are conservative heuristics, not semantic foreground rejection or proof of accuracy.
+- New phones must overlap the retained map. Phone and dashboard hints explain blur, duplicate
+  views, missing overlap, and acceptance. No-overlap candidates expire rather than accumulating.
+- The archive holds at most 96 connected accepted views. It protects the reference and the
+  preceding batch, evicts redundant removable views, and retains connecting views. If a chain
+  cannot be shortened safely, new additions are declined rather than disconnecting the map.
+- Each worker batch contains at most 32 views: shared references, new views balanced across
+  phones, and older coverage. Shortest paths through matching views preserve connections.
+  This is view-based coverage, not a measured global spatial coverage guarantee.
+- Six new views trigger a build. Once at least six views exist, smaller pending updates flush
+  after ten seconds. One request runs at a time; selection continues during GPU work. Failed
+  requests retain pending frames and back off ten seconds. There is no unbounded job queue.
+- CPU selection runs off the WebSocket event loop. Selection latency is exposed as `selectionMs`.
+  The archive, graph, and pending IDs persist with saved maps; descriptors are regenerated on load.
+
+The model still reconstructs each batch from scratch and replaces the mesh. Persistent geometry
+fusion, robust rejection of poorly aligned completed batches, and person masks remain future work.
+The existing alignment smoothing remains in place; it is not a correctness gate.
+
+For a repeatable test through the hub's binary frame ingestion and actual GPU worker, with two
+replayed phone identities and no positions/headings:
+
+```sh
+python gpu/quality/replay_live.py --url http://127.0.0.1:18766 \
+  --input .runtime/capture-4220-4241 --output .runtime/live-replay-new
+```
+
+Use a fresh output directory. This replay stores its own map and report and does not replace
+`web/models/live`. It simulates phone arrivals using saved photos; real multi-phone Safari testing
+is still necessary. Sparse photos with big viewpoint jumps can be rejected: live users should pan
+slowly and capture intermediate overlapping views, especially when joining an existing scan.
+
 ## Run it
 
 Deploy `gpu/vggt_worker.py`, `gpu/surface.py`, and `gpu/mesh_glb.py` together. Install `gpu/requirements-surface.txt` **inside a separate worker environment** that already has VGGT-Omega and its dependencies. Do not install into someone else's running experiment environment.
@@ -79,3 +124,11 @@ Tests cover mismatched depths, discontinuity bridging, camera coordinate convent
 This is an observed surface reconstruction, not a watertight or photorealistic model. Moving people, glass, thin objects, and unseen areas can leave holes. It does not invent the missing geometry. Monocular scale still needs the existing phone-position registration or manual fit. The 16-photo check is one room; larger multi-phone captures may need different sampling and performance budgets. This change does not fix phone SLAM tracking or relocalization.
 
 The implementation follows [Open3D RGB-D integration](https://www.open3d.org/docs/release/tutorial/pipelines/rgbd_integration.html) and the [glTF Draco extension](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_draco_mesh_compression).
+
+Visual-selection verification (September 19, 2026): replaying IMG_4220–4241 through two
+phone identities without poses accepted 7/22 images. The remaining frames were rejected
+for sharpness or insufficient verified overlap. This conservative selection does not claim
+full coverage of the original capture. Median selection time was 19.25 ms/frame, maximum
+48.2 ms in this small archive. Real worker updates succeeded at 6 views (5.3 s round trip)
+and 7 views (6.2 s). These are individual replay measurements, not a crowded live-phone test
+or a latency guarantee at the 96-view archive limit.
