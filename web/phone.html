@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#070a14">
+  <title>Swarm Sight</title>
+  <style>
+    :root {
+      --bg: #070a14; --panel: rgba(12, 17, 32, 0.82); --line: rgba(255,255,255,0.12);
+      --text: #eef2ff; --muted: #8b93b0; --accent: #4cc9f0; --ok: #7ae582; --bad: #ff5d73;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+      font: 16px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif; overflow: hidden; }
+    button { font: inherit; color: inherit; border: 0; cursor: pointer; }
+
+    /* join screen */
+    #join { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center;
+      padding: 24px max(24px, env(safe-area-inset-left)); gap: 18px;
+      background: radial-gradient(120% 80% at 50% 0%, #13204a 0%, var(--bg) 60%); }
+    #join h1 { margin: 0; font-size: 34px; letter-spacing: -0.02em; }
+    #join p { margin: 0; color: var(--muted); }
+    #join input { width: 100%; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line);
+      background: rgba(255,255,255,0.05); color: var(--text); font: inherit; }
+    .primary { padding: 16px; border-radius: 14px; background: var(--accent); color: #04121a;
+      font-weight: 700; font-size: 18px; }
+    .primary:disabled { opacity: 0.5; }
+    #joinError { color: var(--bad); min-height: 1.4em; font-size: 14px; }
+
+    /* live screen */
+    #live { position: fixed; inset: 0; display: none; }
+    #live.on { display: block; }
+    video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+    #fakeCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+    .top { position: absolute; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px;
+      display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .pill { background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+      padding: 7px 12px; font-size: 13px; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+    .dot.ok { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+    #badge { font-weight: 800; }
+
+    .sheet { position: absolute; left: 10px; right: 10px; bottom: max(10px, env(safe-area-inset-bottom));
+      background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 12px;
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); display: grid; gap: 10px; }
+    .sheet.collapsed .expand { display: none; }
+    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+    .label { font-size: 13px; color: var(--muted); }
+    #seatMap { width: 100%; height: 150px; border-radius: 12px; background: rgba(0,0,0,0.35); touch-action: none; }
+    .ghost { padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,0.08); font-size: 14px; font-weight: 600; }
+    .ghost.hot { background: var(--accent); color: #04121a; }
+    #heading { font-variant-numeric: tabular-nums; }
+
+    #flash { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+      font-size: 44px; font-weight: 900; text-align: center; padding: 24px; color: #04121a; z-index: 10; }
+    #flash.on { display: flex; animation: pulse 0.5s ease-in-out infinite alternate; }
+    @keyframes pulse { from { opacity: 1; } to { opacity: 0.75; } }
+  </style>
+</head>
+<body>
+  <section id="join">
+    <h1>Swarm Sight</h1>
+    <p>Your phone's camera joins a shared search team. Frames are only used live and are not stored.</p>
+    <input id="name" maxlength="24" placeholder="Your name (optional)" autocomplete="off">
+    <button id="joinBtn" class="primary">Join with camera</button>
+    <div id="joinError"></div>
+  </section>
+
+  <section id="live">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="fakeCanvas"></canvas>
+    <div class="top">
+      <div class="pill"><span id="connDot" class="dot"></span><span id="badge">#–</span><span id="connText">Connecting…</span></div>
+      <div class="pill"><span id="stats">0 sent</span></div>
+    </div>
+    <div class="sheet" id="sheet">
+      <div class="row">
+        <span class="label" id="seatHint">Tap where you are on the map</span>
+        <button class="ghost" id="toggleSheet">Hide</button>
+      </div>
+      <canvas id="seatMap" class="expand"></canvas>
+      <div class="row">
+        <button class="ghost" id="calBtn">Point at stage, then tap</button>
+        <span class="pill" id="heading">heading –</span>
+      </div>
+    </div>
+  </section>
+
+  <div id="flash"></div>
+  <canvas id="capture" hidden></canvas>
+
+  <script type="module" src="/web/phone.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "name": "Main hall",
+  "width": 20,
+  "depth": 15,
+  "stage": { "width": 8, "depth": 2.5 },
+  "cameraFovDeg": 55,
+  "coneLength": 5
+}
