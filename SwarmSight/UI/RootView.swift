@@ -3,7 +3,7 @@ import SwarmCore
 
 struct RootView: View {
     @Bindable var launch: LaunchState
-    @AppStorage("orchestratorURL") private var orchestratorURL = "ws://192.168.1.10:8765/device"
+    @AppStorage("orchestratorURL") private var orchestratorURL = "ws://127.0.0.1:8765/device"
 
     var body: some View {
         Group {

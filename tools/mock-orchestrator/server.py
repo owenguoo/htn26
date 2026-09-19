@@ -26,6 +26,7 @@ import json
 import os
 import socket
 import struct
+import sys
 import threading
 import time
 
@@ -237,24 +238,61 @@ def handle_envelope(device, envelope, verbose):
         print(f"  ? unhandled message type {message_type!r}")
 
 
+COUNTER = [0]
+
+
+def build_command(verb, args, expires_ms=1500):
+    """Returns a command payload, or None if the verb is not understood."""
+    if verb == "flash":
+        kind = {"flash": {"r": 1.0, "g": 0.2, "b": 0.0, "durationMs": int(args[0]) if args else 500}}
+    elif verb == "arrow" and len(args) == 3:
+        kind = {"arrow": {"target": [float(value) for value in args],
+                          "bearingRadians": None, "label": "backpack"}}
+    elif verb == "bearing" and len(args) >= 1:
+        label = args[1] if len(args) > 1 else "target"
+        kind = {"arrow": {"target": None, "bearingRadians": float(args[0]), "label": label}}
+    elif verb == "buzz":
+        kind = {"haptic": {"pattern": "sharp", "intensity": 1.0}}
+    elif verb == "clear":
+        kind = {"clear": {}}
+    elif verb == "rates" and args:
+        kind = {"setRates": {"poseHz": float(args[0]), "frameFPS": 1.5, "depthHz": 0.3}}
+    else:
+        return None
+    COUNTER[0] += 1
+    return {"id": f"cmd-{COUNTER[0]}", "serverTimestamp": server_now(),
+            "kind": kind, "expiresInMs": expires_ms}
+
+
+def broadcast(payload):
+    with DEVICES_LOCK:
+        targets = list(DEVICES.values())
+    for device in targets:
+        try:
+            device.send("command", payload)
+        except OSError:
+            pass
+    return len(targets)
+
+
 def command_console():
     """A tiny REPL, so somebody can poke a phone by hand.
 
-    Commands: flash, arrow <x> <y> <z>, buzz, clear, rates <hz>, list
+    Only started when stdin is a terminal. Reading stdin unconditionally meant
+    that running the server with its input redirected — from a script, from CI,
+    from anything in the background — hit EOF immediately and exited, which
+    looked exactly like the server refusing connections.
     """
-    print("\ncommands: flash | arrow <x> <y> <z> | buzz | clear | rates <poseHz> | list | quit\n")
-    counter = 0
+    print("\ncommands: flash [ms] | arrow <x> <y> <z> | bearing <rad> [label] | buzz | "
+          "clear | rates <poseHz> | list | quit\n")
     while True:
         try:
             line = input("> ").strip().split()
         except (EOFError, KeyboardInterrupt):
-            os._exit(0)
+            return
         if not line:
             continue
         verb, args = line[0], line[1:]
-        counter += 1
-        command_id = f"console-{counter}"
-        now = server_now()
 
         if verb == "quit":
             os._exit(0)
@@ -265,30 +303,39 @@ def command_console():
                           f"{device.poses} poses")
             continue
 
-        if verb == "flash":
-            kind = {"flash": {"r": 1.0, "g": 0.2, "b": 0.0, "durationMs": 500}}
-        elif verb == "arrow" and len(args) == 3:
-            kind = {"arrow": {"target": [float(value) for value in args],
-                              "bearingRadians": None, "label": "target"}}
-        elif verb == "buzz":
-            kind = {"haptic": {"pattern": "sharp", "intensity": 1.0}}
-        elif verb == "clear":
-            kind = {"clear": {}}
-        elif verb == "rates" and args:
-            kind = {"setRates": {"poseHz": float(args[0]), "frameFPS": 1.5, "depthHz": 0.3}}
-        else:
+        payload = build_command(verb, args)
+        if payload is None:
             print("  ?")
             continue
+        print(f"  sent {verb} to {broadcast(payload)} device(s)")
 
-        payload = {"id": command_id, "serverTimestamp": now, "kind": kind, "expiresInMs": 1500}
+
+def demo_loop():
+    """Cycles through every command kind, so the UI can be seen without typing.
+
+    Useful for a screenshot pass and for checking a phone end to end before the
+    demo: if all four show up on the handset, the command path works.
+    """
+    steps = [
+        ("flash", ["4000"], 6),
+        ("clear", [], 2),
+        ("bearing", ["1.05", "backpack"], 6),
+        ("clear", [], 2),
+        ("buzz", [], 3),
+        ("arrow", ["3", "1.5", "-2"], 6),
+        ("clear", [], 3),
+    ]
+    while True:
         with DEVICES_LOCK:
-            targets = list(DEVICES.values())
-        for device in targets:
-            try:
-                device.send("command", payload)
-            except OSError:
-                pass
-        print(f"  sent {verb} to {len(targets)} device(s)")
+            connected = bool(DEVICES)
+        if not connected:
+            time.sleep(1)
+            continue
+        for verb, args, hold in steps:
+            payload = build_command(verb, args, expires_ms=hold * 1000)
+            if payload is not None:
+                print(f"  [demo] {verb} -> {broadcast(payload)} device(s)")
+            time.sleep(hold)
 
 
 def main():
@@ -296,6 +343,8 @@ def main():
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--verbose", action="store_true", help="print every pose")
+    parser.add_argument("--demo", action="store_true",
+                        help="cycle through every command kind once a device connects")
     arguments = parser.parse_args()
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -307,7 +356,14 @@ def main():
     print(f"stub orchestrator on ws://{address}:{arguments.port}/device")
     print("this is NOT the real orchestrator; if they disagree, the real one wins")
 
-    threading.Thread(target=command_console, daemon=True).start()
+    if sys.stdin.isatty():
+        threading.Thread(target=command_console, daemon=True).start()
+    else:
+        print("stdin is not a terminal, so the command console is off. "
+              "Use --demo to cycle commands automatically.")
+    if arguments.demo:
+        threading.Thread(target=demo_loop, daemon=True).start()
+
     while True:
         connection, peer = listener.accept()
         threading.Thread(target=handle, args=(connection, peer, arguments.verbose),

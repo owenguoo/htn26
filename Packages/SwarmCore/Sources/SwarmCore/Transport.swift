@@ -430,6 +430,27 @@ public final class URLSessionWebSocketChannel: WebSocketChannel {
         task.resume()
     }
 
+    /// Blocks until the server has completed the WebSocket handshake.
+    ///
+    /// `resume()` returns immediately, long before anything has connected, so a
+    /// transport that treated that as success reported "online" while pointed at
+    /// an address with nothing on it. On stage that sends somebody to debug the
+    /// wrong thing — the same failure mode as a status pill blaming the clock
+    /// for a missing marker.
+    func waitUntilOpen() async throws {
+        // A ping only completes once the handshake has, and needs no cooperation
+        // from the application protocol on the far side.
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            task.sendPing { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
     public func send(_ data: Data) async throws {
         try await task.send(.data(data))
     }
@@ -461,6 +482,10 @@ public struct URLSessionWebSocketChannelFactory: WebSocketChannelFactory {
 
     public func connect(to url: URL) async throws -> any WebSocketChannel {
         let session = URLSession(configuration: configuration)
-        return URLSessionWebSocketChannel(task: session.webSocketTask(with: url))
+        let channel = URLSessionWebSocketChannel(task: session.webSocketTask(with: url))
+        // Not connected until the handshake lands. Returning before that makes
+        // every downstream connection indicator a lie.
+        try await channel.waitUntilOpen()
+        return channel
     }
 }
