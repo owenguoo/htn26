@@ -11,6 +11,18 @@ export type ConfigureOptions = {
   replayMarkers?: boolean;
 };
 
+/**
+ * The appearance the operator chose. `'system'` follows the device.
+ *
+ * Stored natively in `UserDefaults` under `SwarmSightTheme`, **defaulting to
+ * `'dark'`** — so the app is dark out of the box even though `app.json` is
+ * `"userInterfaceStyle": "automatic"`. It has to be native: only setting
+ * `overrideUserInterfaceStyle` on the windows moves `UITraitCollection`, which
+ * is what SwiftUI, `PlatformColor` and `OperatorView` all read. RN's
+ * `Appearance.setColorScheme` sets a JS-side string and nothing else.
+ */
+export type ThemePreference = 'system' | 'light' | 'dark';
+
 export type StoredConfig = {
   phoneId: string;
   name: string;
@@ -20,6 +32,7 @@ export type StoredConfig = {
   poseSource: PoseSource;
   /** Test hook: a join link passed as a launch argument. Empty in normal use. */
   launchJoin: string;
+  theme: ThemePreference;
 };
 
 export type Alignment = 'none' | 'seat' | 'marker';

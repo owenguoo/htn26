@@ -1,0 +1,210 @@
+import { Host } from '@expo/ui';
+import {
+  Button,
+  Form,
+  HStack,
+  Label,
+  ProgressView,
+  Section,
+  Spacer,
+  Text,
+  TextField,
+  type TextFieldRef,
+} from '@expo/ui/swift-ui';
+import {
+  autocorrectionDisabled,
+  buttonStyle,
+  controlSize,
+  disabled,
+  font,
+  foregroundStyle,
+  keyboardType,
+  onSubmit,
+  submitLabel,
+  textContentType,
+  textInputAutocapitalization,
+  textSelection,
+} from '@expo/ui/swift-ui/modifiers';
+import { CameraView } from 'expo-camera';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { StyleSheet } from 'react-native';
+
+import SwarmSight from '../../modules/swarm-sight';
+import { parseJoinLink } from '../joinLink';
+import { colors, secondaryStyle, textStyles } from '../theme/tokens';
+
+/** Test hook: what an operator does in the native seat picker, through the JS API. */
+async function tapSeat(seat: { x: number; y: number }) {
+  await SwarmSight.setSeat(seat.x, seat.y);
+  // Needs a first pose to anchor to, as an operator would wait for the camera.
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (await SwarmSight.calibrateFacingStage()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/**
+ * A real SwiftUI `Form` — `Section`, `TextField`, `Button` — hosted in `Host`.
+ * The screen used to hand-build a grouped form out of `View`s painted with
+ * Apple's dark palette copied by eye; none of that survives. React still owns
+ * the deep link, the QR scan and the hub call, which is the part the e2e
+ * harness drives.
+ *
+ * The fields are **uncontrolled**: `@expo/ui`'s `TextField` only takes a
+ * `text` prop as an `ObservableState` from `useNativeState`, and that pulls in
+ * `react-native-worklets`, which is present in node_modules but is not a
+ * declared dependency. So the field owns its own text, `onTextChange` mirrors
+ * it into React for validation, and every prefill — stored config, deep link,
+ * QR scan — goes in imperatively through `TextFieldRef.setText`.
+ */
+export default function Join() {
+  const params = useLocalSearchParams<{ hub?: string; replay?: string; markers?: string; seat?: string }>();
+  const [stored] = useState(() => SwarmSight.getConfig());
+  const [hub, setHub] = useState(stored.lastHubURL || stored.venueHubURL);
+  const [name, setName] = useState(stored.name);
+  const [error, setError] = useState<string | null>(null);
+  const [joining, setJoining] = useState(false);
+  const autoJoined = useRef(false);
+  const hubField = useRef<TextFieldRef>(null);
+  const nameField = useRef<TextFieldRef>(null);
+
+  const valid = SwarmSight.resolveHubURL(hub) !== null;
+
+  const join = useCallback(async (target: string, as: string) => {
+    setJoining(true);
+    setError(null);
+    try {
+      await SwarmSight.join(target, as);
+      router.replace('/operator');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJoining(false);
+    }
+  }, []);
+
+  // The SwiftUI fields start empty; seed them once from the stored config.
+  useEffect(() => {
+    const startHub = stored.lastHubURL || stored.venueHubURL;
+    if (startHub) void hubField.current?.setText(startHub);
+    if (stored.name) void nameField.current?.setText(stored.name);
+  }, [stored]);
+
+  // A deep link (swarmsight://join?hub=…) or the launch-argument test hook prefills
+  // the form. Only `replay=1` joins without a tap.
+  useEffect(() => {
+    if (autoJoined.current) return;
+    const fromRoute = params.hub
+      ? `swarmsight://join?hub=${encodeURIComponent(params.hub)}&replay=${params.replay ?? ''}&markers=${params.markers ?? ''}&seat=${params.seat ?? ''}`
+      : stored.launchJoin;
+    const link = parseJoinLink(fromRoute);
+    if (!link) return;
+    autoJoined.current = true;
+    setHub(link.hub);
+    void hubField.current?.setText(link.hub);
+    if (link.replay) {
+      SwarmSight.configure({ poseSource: 'replay', replayMarkers: link.markers });
+      void join(link.hub, name || 'sim').then(() => (link.seat ? tapSeat(link.seat) : undefined));
+    }
+  }, [params.hub, params.replay, params.markers, params.seat, stored.launchJoin, join, name]);
+
+  // Apple's own scanner sheet (DataScanner): nothing of ours to render or get wrong.
+  const scan = useCallback(async () => {
+    const subscription = CameraView.onModernBarcodeScanned(({ data }) => {
+      const link = parseJoinLink(data);
+      if (!link) return;
+      setHub(link.hub);
+      void hubField.current?.setText(link.hub);
+      setError(null);
+      void CameraView.dismissScanner();
+    });
+    try {
+      await CameraView.launchScanner({ barcodeTypes: ['qr'] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTimeout(() => subscription.remove(), 30_000);
+    }
+  }, []);
+
+  const submit = useCallback(() => void join(hub, name), [join, hub, name]);
+
+  const hint = `The address on the dashboard’s QR code. Phone ${stored.phoneId.slice(0, 8)}${
+    stored.poseSource === 'replay' ? ' · no ARKit here, so this will replay a recorded walk' : ''
+  }.`;
+
+  return (
+    <Host style={styles.fill} useViewportSizeMeasurement>
+      <Form>
+        <Section
+          title="Hub"
+          footer={
+            <Text modifiers={[font({ textStyle: textStyles.footnote }), foregroundStyle(secondaryStyle)]}>
+              {hint}
+            </Text>
+          }>
+          <TextField
+            ref={hubField}
+            testID="hub"
+            placeholder="http://10.0.0.5:8000/"
+            onTextChange={setHub}
+            modifiers={[
+              keyboardType('url'),
+              textInputAutocapitalization('never'),
+              autocorrectionDisabled(),
+              textContentType('URL'),
+              submitLabel('join'),
+              onSubmit(submit),
+            ]}
+          />
+          <Button label="Scan the dashboard QR" systemImage="qrcode.viewfinder" onPress={scan} testID="scan" />
+        </Section>
+
+        <Section title="You">
+          <TextField
+            ref={nameField}
+            testID="name"
+            placeholder="Your name"
+            maxLength={24}
+            onTextChange={setName}
+            modifiers={[
+              textContentType('name'),
+              textInputAutocapitalization('words'),
+              submitLabel('join'),
+              onSubmit(submit),
+            ]}
+          />
+        </Section>
+
+        <Section
+          footer={
+            error ? (
+              <Label
+                title={error}
+                systemImage="exclamationmark.triangle.fill"
+                modifiers={[
+                  font({ textStyle: textStyles.footnote }),
+                  foregroundStyle(colors.problem),
+                  textSelection(true),
+                ]}
+              />
+            ) : undefined
+          }>
+          <Button
+            onPress={submit}
+            testID="join"
+            modifiers={[buttonStyle('borderedProminent'), controlSize('large'), disabled(!valid || joining)]}>
+            <HStack>
+              <Spacer />
+              {joining ? <ProgressView /> : <Text>Join</Text>}
+              <Spacer />
+            </HStack>
+          </Button>
+        </Section>
+      </Form>
+    </Host>
+  );
+}
+
+const styles = StyleSheet.create({ fill: { flex: 1 } });
