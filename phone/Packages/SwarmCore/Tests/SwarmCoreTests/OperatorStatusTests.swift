@@ -47,7 +47,12 @@ struct OperatorStatusTests {
             let status = OperatorStatus(pill(state, connection: .reconnecting, stale: true, thermal: .critical))
             #expect(status.title == "Reconnecting…", "\(state) hid the dropped connection")
             #expect(status.level == .problem)
+            #expect(!status.offersSeatPicker, "a Wi-Fi problem is not a seat-map problem")
         }
+        let connecting = OperatorStatus(pill(connection: .connecting))
+        #expect(connecting.title == "Connecting to the hub…")
+        #expect(connecting.hint == "Check you're on the venue Wi-Fi")
+        #expect(!connecting.offersSeatPicker)
     }
 
     @Test func secondaryConditionsOnlySurfaceWhenNothingWorseIsWrong() {

@@ -5,8 +5,10 @@
 Hackathon iOS app. 3–5 teammate phones become tracked cameras in a room. Each
 phone reports its 6DoF pose plus periodic JPEG frames to a central orchestrator
 over WebSocket, and displays commands sent back (full-screen color flash,
-directional arrow, sound, haptic). The operators walk around and sweep their
-cameras; they are not seated.
+directional arrow). The operators walk around and sweep their cameras; they are
+not seated.
+
+**Beep and haptic cues are currently cut** — see "Stripped for device bring-up".
 
 **This Swift app is the mobile client.** There is no browser phone client —
 operators join with Beacon. Everything an operator sees or does on a phone —
@@ -111,9 +113,13 @@ resumable from the last green commit.
 - **HUD mirror:** while a console has the phone expanded the hub sends
   `cmd: hud` and the phone answers `type: hud` at 5 Hz (`HUDMirror.swift`), in
   upright-frame fractions. A reconnect starts un-viewed.
-- **Voice:** live ARKit joins enable `voiceEnabled` and start `MicrophoneCapture`
-  → `SwarmClient.offerAudio` (16 kHz PCM `audio` / `audio_end`, VoiceGate).
-  Replay / drive stay silent. Mic mute lives in Settings; hardware checks are
+- **Voice: OFF by default on device.** `SwarmRuntime.isVoiceEnabled` gates
+  whether `join` starts `MicrophoneCapture` at all; `-BeaconVoice YES` in the
+  scheme's launch arguments turns it back on for a run. The audio path is where
+  the device bring-up trap lives — see "Stripped for device bring-up".
+  Otherwise unchanged: live ARKit joins set `voiceEnabled` and feed
+  `SwarmClient.offerAudio` (16 kHz PCM `audio` / `audio_end`, VoiceGate),
+  replay / drive stay silent, mic mute lives in Settings, hardware checks are
   in `DEVICE_CHECKLIST.md`.
 - **Clock:** the hub pings, the phone pongs with its epoch-ms clock, the hub
   works out the offset. Frames carry epoch-ms `tCapture`. `ClockSync` is kept
@@ -142,21 +148,66 @@ co-visible markers stops them being averaged.
 
 `physicalWidth` must be the true measured width in metres or all scale is wrong.
 
+## Stripped for device bring-up
+
+The client halts on device with `_dispatch_assert_queue_fail` — libdispatch's
+"this block ran on the wrong queue" trap — during join. Nothing in the
+Simulator exercises the code that can produce it: the Simulator takes the
+`.drive` path, which starts no ARKit, no `AVAudioSession` and no
+`CHHapticEngine`. So the optional device subsystems are out of the tree until
+the trap is found, leaving ARKit pose + camera preview + socket + voice:
+
+- **Haptics (`Haptics.swift`) — deleted.** `CHHapticEngine` delivers
+  `stoppedHandler` / `resetHandler` on its own internal queue.
+- **Beeps (`SoundPlayer.swift`) — deleted.** It was a *second* `AVAudioEngine`
+  sharing the one process-wide `AVAudioSession` with voice.
+- **`LiDARDepthSource.swift` and the `.sceneDepth` plumbing — deleted.** It was
+  already dead: `wantsSceneDepth` was false, nothing ever constructed a
+  `LiDARDepthSource`, and `SwarmClient.Dependencies` has no depth slot. The
+  hub has no depth channel either. `DepthSource`, `ServerDepthSource` and
+  `DepthScaleFit` stay in SwarmCore with their tests.
+- **Voice — the code is kept; `join` no longer starts it.** Two things did come
+  out of `MicrophoneCapture`, both evidence-driven: `prepareDirectionalInput()`
+  (five preferred-route mutations on the `AVAudioSession` ARKit's camera
+  shares) and the `.allowBluetooth` category option (HFP negotiation). Together
+  they were costing 3.9 s of blocked main thread in `microphone.start`, now
+  183 ms. The trap outlived both, so `SwarmRuntime.isVoiceEnabled` defaults to
+  false.
+
+**Still not fixed: the trap itself.** It fires after `engine.start` returns and
+before the tap delivers a buffer, on CoreAudio's own `RootQueue`, with no frame
+of ours on the stack. Two structural problems are the place to start: a
+`@MainActor` `MicrophoneCapture` doing `AVAudioSession` work on the main thread,
+and `ARSessionHost` leaving `session.delegateQueue` nil so ARKit's 60 Hz
+delegate contends for that same thread.
+
+`OperatorViewModel` still drains `client.cues()` and logs each cue it drops;
+dropping the subscription would leave the stream buffering in `SwarmClient`.
+
+Restoring any of these is deliberate work, not a revert: the callbacks above
+are non-`Sendable` blocks that the system invokes off the main thread, and
+they were previously installed from `@MainActor` types.
+
+### Tracing
+
+`BeaconLog` prints `[beacon] <uptime> [thread|queue] <message>` through the
+whole join path. **The queue label is the point** — read the last `[beacon]`
+line before a trap and the label on it says which queue the failing block was
+on. Set `BeaconLog.isEnabled = false` to silence it.
+
 ## Depth
 
-`DepthSource` protocol, two implementations:
+`DepthSource` protocol with one live implementation:
 
-- `LiDARDepthSource` — ARKit `frameSemantics = .sceneDepth`, Pro devices only.
 - `ServerDepthSource` — frames uploaded, VGGT-Ω depth returned from the server.
 
 **Dormant:** the hub has no depth channel, so `depthHz` is 0 and nothing depth
 is sent. The maths and tests stay.
 
-Both return metric depth in the venue frame. **VGGT-Ω depth is
-scene-normalized, not metres.** `ServerDepthSource` must apply a scale factor
-fitted from the known metric ARKit baselines between the frames in the chunk.
-Test that scale-fitting math against synthetic data with a known ground-truth
-scale.
+It returns metric depth in the venue frame. **VGGT-Ω depth is scene-normalized,
+not metres.** `ServerDepthSource` must apply a scale factor fitted from the
+known metric ARKit baselines between the frames in the chunk. Test that
+scale-fitting math against synthetic data with a known ground-truth scale.
 
 Do not branch UI or session logic on device class. Branch only at
 `DepthSource`.
@@ -218,7 +269,11 @@ phone reporting where it was thirty seconds ago.
 
 For the Expo app these live in `mobile/app.json` under `ios.infoPlist` (the
 generated plist is wiped by every prebuild); for the Xcode target, in
-`Resources/Info.plist`.
+`Resources/Info.plist`. **The two plists must be kept in step by hand.**
+`UIUserInterfaceStyle = Light` is one of these: `app.json`'s
+`userInterfaceStyle` only reaches the Expo plist, and without the same key in
+`Resources/Info.plist` the Xcode target follows the phone and every surface
+that is not `.cameraChrome()` goes dark on a dark-mode device.
 
 `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`,
 `NSLocalNetworkUsageDescription` plus `NSBonjourServices` (iOS local-network

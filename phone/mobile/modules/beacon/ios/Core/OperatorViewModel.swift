@@ -22,8 +22,6 @@ public final class OperatorViewModel {
     public private(set) var isDrive = false
 
     private let runtime: SwarmRuntime
-    private let haptics = HapticPlayer()
-    private let sounds = SoundPlayer()
     private var observer: UUID?
     private var tasks: [Task<Void, Never>] = []
     private var client: SwarmClient?
@@ -38,20 +36,21 @@ public final class OperatorViewModel {
 
     public func attach() {
         guard observer == nil else { return }
-        haptics.prepare()
-        sounds.prepare()
+        BeaconLog.log("view model attach")
         observer = runtime.observe { [weak self] session in
             Task { @MainActor in self?.bind(session) }
         }
     }
 
     public func detach() {
+        BeaconLog.log("view model detach")
         if let observer { runtime.removeObserver(observer) }
         observer = nil
         bind(nil)
     }
 
     private func bind(_ session: RuntimeSession?) {
+        BeaconLog.log("bind session=\(session == nil ? "nil" : "live") preview=\(session?.preview != nil)")
         for task in tasks { task.cancel() }
         tasks.removeAll()
         client = session?.client
@@ -65,17 +64,23 @@ public final class OperatorViewModel {
             frame = OverlayFrame()
             return
         }
-        tasks.append(Task { [weak self] in
+        tasks.append(Task { @MainActor [weak self] in
             for await next in await client.overlayFrames() {
                 self?.frame = next
                 self?.forwardRoomBounds(next.overlay.room)
             }
         })
-        tasks.append(Task { [weak self] in
+        // The cue stream is still drained, and only drained. Haptics and beeps
+        // were the two optional device subsystems on this screen — `CHHapticEngine`
+        // and a second `AVAudioEngine` sharing the one `AVAudioSession` with
+        // voice — and both are gone while the device bring-up is being trusted
+        // again. Dropping the subscription instead would leave the stream
+        // buffering inside `SwarmClient` for a consumer that never arrives.
+        tasks.append(Task { @MainActor in
             for await cue in await client.cues() {
                 switch cue {
-                case .haptic(let haptic): self?.haptics.play(haptic)
-                case .sound(let sound): self?.sounds.play(sound)
+                case .haptic(let haptic): BeaconLog.log("cue haptic \(haptic.pattern) (ignored)")
+                case .sound(let sound): BeaconLog.log("cue sound \(sound.name) (ignored)")
                 }
             }
         })

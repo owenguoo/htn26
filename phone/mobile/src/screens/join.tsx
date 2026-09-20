@@ -2,12 +2,8 @@ import { Host } from '@expo/ui';
 import {
   Button,
   Form,
-  HStack,
   Label,
-  ProgressView,
   Section,
-  Spacer,
-  Text,
   TextField,
   type TextFieldRef,
 } from '@expo/ui/swift-ui';
@@ -225,25 +221,23 @@ export default function Join() {
             ) : undefined
           }>
           <Button
+            label="Join"
             onPress={submit}
             testID="join"
             // A prominent capsule is a button, not a row: left inside the
             // section's own plate it reads as a button drawn inside a button.
             // Clearing the row's background and insets sits it directly on the
             // grouped background, where Apple puts a primary action.
+            // Keep the label fixed while joining — swapping in a ProgressView
+            // grew the capsule on press.
             modifiers={[
               buttonStyle('borderedProminent'),
               controlSize('large'),
               listRowBackground('clear'),
               listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }),
               disabled(!valid || joining),
-            ]}>
-            <HStack>
-              <Spacer />
-              {joining ? <ProgressView /> : <Text>Join</Text>}
-              <Spacer />
-            </HStack>
-          </Button>
+            ]}
+          />
         </Section>
       </Form>
     </Host>

@@ -24,10 +24,9 @@ enum ThemeController {
         observer = NotificationCenter.default.addObserver(
             forName: UIWindow.didBecomeVisibleNotification, object: nil, queue: .main
         ) { _ in
-            // Posted on the main queue, so the isolation is real. Re-styling
-            // every window is cheaper than reading the notification's payload,
-            // which is not `Sendable`.
-            MainActor.assumeIsolated { paint() }
+            // `queue: .main` is the main *dispatch* queue, not Swift's
+            // MainActor executor — `assumeIsolated` can trap here. Hop instead.
+            Task { @MainActor in paint() }
         }
     }
 

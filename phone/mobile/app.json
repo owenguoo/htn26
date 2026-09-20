@@ -7,7 +7,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "bundleIdentifier": "com.beacon.Beacon",
+      "bundleIdentifier": "com.beacon.Beacon.dawson",
       "deploymentTarget": "26.0",
       "supportsTablet": false,
       "requireFullScreen": true,

@@ -665,6 +665,12 @@ $('#autoSw').addEventListener('click', () => send({ type: 'autonomy', enabled: !
 let respondersPref = 3;
 $('#plannerSw').addEventListener('click', () => send({ type: 'planner', enabled: !st?.planner?.enabled }));
 $('#resetCov').addEventListener('click', () => send({ type: 'reset_coverage' }));
+$('#resetSession').addEventListener('click', () => {
+  if (st?.search?.mode === 'rehearsal') send({ type: 'target', remove: true });
+  send({ type: 'reset_coverage' });
+  send({ type: 'phase', phase: 'lobby' });
+  $('#searchMessage').textContent = '';
+});
 $('#candBtn').addEventListener('click', toggleCandidate);
 $('#respMinus').addEventListener('click', () => setResponders(-1));
 $('#respPlus').addEventListener('click', () => setResponders(+1));

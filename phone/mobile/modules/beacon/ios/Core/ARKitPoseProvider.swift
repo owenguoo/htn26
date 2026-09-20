@@ -1,7 +1,10 @@
 import ARKit
 import Foundation
+import QuartzCore
+import SceneKit
 import SwarmCore
 import simd
+import UIKit
 
 /// **The only file in this repo that imports ARKit.**
 ///
@@ -22,7 +25,7 @@ import simd
 // five-minute walk with and without markers; and that backgrounding produces
 // lost then recalibrating and sends no poses until a marker is seen again.
 // DEVICE_CHECKLIST.md items 1-8.
-public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
+public actor ARKitPoseProvider: PoseProvider {
 
     public struct Configuration: Sendable {
         /// The markers to look for, and their true measured widths.
@@ -30,9 +33,6 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
         /// Name of the `ARReferenceImage` group in the asset catalogue, or nil to
         /// build reference images from `venue.json` at runtime.
         public var referenceImageGroup: String?
-        /// LiDAR depth, on the devices that have it. Branching on device class
-        /// happens here and nowhere else.
-        public var wantsSceneDepth: Bool
         /// How many image anchors ARKit tracks at once.
         public var maximumConcurrentImages: Int
         /// Where `Markers/<id>.png` live. Inside the Expo module that is the
@@ -40,20 +40,19 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
         public var markerBundle: Bundle
 
         public init(venue: Venue, referenceImageGroup: String? = "Markers",
-                    wantsSceneDepth: Bool = true, maximumConcurrentImages: Int = 4,
-                    markerBundle: Bundle = .main) {
+                    maximumConcurrentImages: Int = 4, markerBundle: Bundle = .main) {
             self.markerBundle = markerBundle
             self.venue = venue
             self.referenceImageGroup = referenceImageGroup
-            self.wantsSceneDepth = wantsSceneDepth
             self.maximumConcurrentImages = maximumConcurrentImages
         }
     }
 
     private let configuration: Configuration
-    private let session = ARSession()
+    /// Owns the `ARSession`. Main-actor only so ARKit/CoreMotion never run off
+    /// the main thread, and so `ARSession` never crosses a Sendable boundary.
+    private var host: ARSessionHost?
     private var continuation: AsyncStream<PoseProviderEvent>.Continuation?
-    private var delegate: SessionDelegate?
 
     /// Everything the 60 Hz delegate touches. Lives outside the actor so the
     /// delegate never has to hop onto it — see `FrameInbox`.
@@ -79,31 +78,56 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
         self.continuation = continuation
         inbox.open(continuation)
 
-        let delegate = SessionDelegate(inbox: inbox)
-        self.delegate = delegate
-        session.delegate = delegate
-        session.delegateQueue = DispatchQueue(label: "beacon.arsession", qos: .userInitiated)
-
-        let sessionConfiguration = try makeSessionConfiguration()
-        session.run(sessionConfiguration, options: [.resetTracking, .removeExistingAnchors])
+        // ARSession + CoreMotion are created and started on the main actor:
+        // ARKit's types are not Sendable and its own bring-up assumes the main
+        // thread. Only Sendable values cross the hop.
+        BeaconLog.log("provider start: building ARSessionHost")
+        let host = await ARSessionHost()
+        BeaconLog.log("→ ARSessionHost.start")
+        try await host.start(configuration: configuration, inbox: inbox)
+        BeaconLog.log("✓ ARSessionHost.start")
+        self.host = host
         isRunning = true
         return stream
     }
 
     public func stop() async {
-        session.pause()
+        BeaconLog.log("provider stop")
+        await host?.stop()
+        host = nil
         isRunning = false
         inbox.close()
         continuation?.finish()
         continuation = nil
-        delegate = nil
     }
 
     public func setWorldOrigin(relativeTransform: simd_float4x4) async {
         // This is the shared-origin mechanism: after this call every ARKit pose
         // is already in the venue frame, so the phone converts and the server
         // never has to.
-        session.setWorldOrigin(relativeTransform: relativeTransform)
+        await host?.setWorldOrigin(relativeTransform: relativeTransform)
+    }
+
+    /// The `ARSCNView` that shows what the camera sees. Attach it to
+    /// `CameraPreviewSource` after `start()` — pixel-buffer CI preview is gone.
+    public func previewView() async -> UIView? {
+        await host?.previewView
+    }
+
+    /// Suspends until ARKit has delivered its first frame, or `timeout` seconds
+    /// pass — whichever comes first. Returns true if a frame arrived.
+    ///
+    /// This exists so the audio session is not reconfigured while the camera is
+    /// still coming up; see `SwarmRuntime.join`. Polling rather than a
+    /// continuation because the waiter is one-shot, off the hot path, and a
+    /// continuation here would have to be resumed from the 60 Hz delegate.
+    public func waitForFirstFrame(timeout: Double) async -> Bool {
+        let deadline = CACurrentMediaTime() + timeout
+        while !inbox.hasDeliveredFrame {
+            guard CACurrentMediaTime() < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
     }
 
     /// Metres of device motion since the last call. A yes/no signal — "did this
@@ -112,75 +136,6 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
     /// and never recovers.
     public func consumeMotionSinceLastQuery() async -> Float {
         inbox.consumeMotion()
-    }
-
-    // MARK: - MetricDepthFrameSource
-
-    public nonisolated var providesSceneDepth: Bool {
-        ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth)
-    }
-
-    public func latestSceneDepth() async -> (map: DepthMap, pose: Pose, deviceTimestamp: Double)? {
-        inbox.latestDepth()
-    }
-
-    // MARK: - Session configuration
-
-    private func makeSessionConfiguration() throws -> ARWorldTrackingConfiguration {
-        guard ARWorldTrackingConfiguration.isSupported else {
-            throw ProviderError.worldTrackingUnsupported
-        }
-        let sessionConfiguration = ARWorldTrackingConfiguration()
-
-        // Gravity fixes pitch and roll; the marker fixes yaw. Never
-        // .gravityAndHeading — that pulls in the magnetometer, which is off by
-        // tens of degrees indoors.
-        sessionConfiguration.worldAlignment = .gravity
-        sessionConfiguration.isLightEstimationEnabled = false
-        sessionConfiguration.planeDetection = []
-        sessionConfiguration.environmentTexturing = .none
-
-        if let group = configuration.referenceImageGroup,
-           let images = ARReferenceImage.referenceImages(inGroupNamed: group, bundle: nil) {
-            sessionConfiguration.detectionImages = images
-        } else {
-            sessionConfiguration.detectionImages = try referenceImagesFromVenue()
-        }
-        sessionConfiguration.maximumNumberOfTrackedImages = configuration.maximumConcurrentImages
-        // Off: ARKit's own estimate of a marker's size is less trustworthy than a
-        // tape measure, and letting it float makes every distance drift with it.
-        sessionConfiguration.automaticImageScaleEstimationEnabled = false
-
-        if configuration.wantsSceneDepth,
-           ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-            sessionConfiguration.frameSemantics.insert(.sceneDepth)
-        }
-        return sessionConfiguration
-    }
-
-    /// Builds reference images from `Markers/<id>.png` in the bundle, using the
-    /// measured widths in `venue.json`.
-    ///
-    /// `physicalWidth` must be the true measured width in metres or all scale is
-    /// wrong — which is why it comes from the venue file rather than from the
-    /// asset catalogue, where it would be compiled in and need a rebuild to fix.
-    private func referenceImagesFromVenue() throws -> Set<ARReferenceImage> {
-        var images: Set<ARReferenceImage> = []
-        for marker in configuration.venue.markers {
-            guard let url = configuration.markerBundle.url(forResource: marker.id, withExtension: "png",
-                                                           subdirectory: "Markers")
-                    ?? configuration.markerBundle.url(forResource: marker.id, withExtension: "png"),
-                  let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-                throw ProviderError.missingMarkerImage(marker.id)
-            }
-            let reference = ARReferenceImage(cgImage, orientation: .up,
-                                             physicalWidth: CGFloat(marker.physicalWidth))
-            reference.name = marker.id
-            images.insert(reference)
-        }
-        guard !images.isEmpty else { throw ProviderError.noMarkerImages }
-        return images
     }
 
     // MARK: - Translation
@@ -210,46 +165,6 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
                                 imageHeight: Int(camera.imageResolution.height))
     }
 
-    /// Copies a `CVPixelBuffer` of `Float32` depth into a plain array. The buffer
-    /// belongs to the frame and must not outlive the callback.
-    static func depthMap(from pixelBuffer: CVPixelBuffer, confidence: CVPixelBuffer?) -> DepthMap? {
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
-
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        var values = [Float](repeating: 0, count: width * height)
-        for row in 0..<height {
-            let rowBase = base.advanced(by: row * bytesPerRow).assumingMemoryBound(to: Float.self)
-            for column in 0..<width {
-                values[row * width + column] = rowBase[column]
-            }
-        }
-
-        var confidences: [Float]?
-        if let confidence {
-            CVPixelBufferLockBaseAddress(confidence, .readOnly)
-            defer { CVPixelBufferUnlockBaseAddress(confidence, .readOnly) }
-            if let confidenceBase = CVPixelBufferGetBaseAddress(confidence) {
-                let confidenceRow = CVPixelBufferGetBytesPerRow(confidence)
-                var out = [Float](repeating: 0, count: width * height)
-                for row in 0..<height {
-                    let rowBase = confidenceBase.advanced(by: row * confidenceRow)
-                        .assumingMemoryBound(to: UInt8.self)
-                    for column in 0..<width {
-                        // ARConfidenceLevel is 0…2; normalise so the server does
-                        // not have to know Apple's enum.
-                        out[row * width + column] = Float(rowBase[column]) / 2
-                    }
-                }
-                confidences = out
-            }
-        }
-        return DepthMap(width: width, height: height, values: values, confidence: confidences)
-    }
-
     public enum ProviderError: Error, LocalizedError {
         case worldTrackingUnsupported
         case missingMarkerImage(String)
@@ -265,6 +180,117 @@ public actor ARKitPoseProvider: PoseProvider, MetricDepthFrameSource {
                 "venue.json named no markers, so nothing can establish the origin."
             }
         }
+    }
+}
+
+/// Main-thread owner of `ARSession` + the live preview `ARSCNView`.
+///
+/// ARKit/CoreMotion stay on the main thread, non-`Sendable` ARKit types never
+/// cross the pose-provider actor, and the operator sees the camera through
+/// Apple's scene view rather than a home-grown `CVPixelBuffer` → CIImage path
+/// that was trapping `_dispatch_assert_queue_fail` on device.
+@MainActor
+private final class ARSessionHost {
+    private let session = ARSession()
+    private var delegate: SessionDelegate?
+    private var sceneView: ARSCNView?
+
+    /// Live camera view sharing `session`. Nil until `start`.
+    var previewView: UIView? { sceneView }
+
+    func start(configuration: ARKitPoseProvider.Configuration, inbox: FrameInbox) throws {
+        BeaconLog.log("ARSessionHost.start on this queue")
+        let sessionConfiguration = try makeSessionConfiguration(configuration)
+        BeaconLog.log("session configuration built: \(sessionConfiguration.detectionImages?.count ?? 0) markers")
+        let delegate = SessionDelegate(inbox: inbox)
+        self.delegate = delegate
+
+        // Scene view first, then run — Apple's required order when sharing a
+        // session with `ARSCNView` so the camera feed actually composites.
+        let sceneView = ARSCNView(frame: .zero)
+        sceneView.scene = SCNScene()
+        sceneView.autoenablesDefaultLighting = false
+        sceneView.automaticallyUpdatesLighting = false
+        sceneView.backgroundColor = .black
+        sceneView.session = session
+        self.sceneView = sceneView
+
+        session.delegate = delegate
+        // Default (main) queue. Custom serial queues still trapped on device
+        // once frames started.
+        session.delegateQueue = nil
+        BeaconLog.log("ARSession.run")
+        session.run(sessionConfiguration, options: [.resetTracking, .removeExistingAnchors])
+        BeaconLog.log("ARSession.run returned")
+    }
+
+    func stop() {
+        session.pause()
+        session.delegate = nil
+        sceneView?.removeFromSuperview()
+        sceneView = nil
+        delegate = nil
+    }
+
+    func setWorldOrigin(relativeTransform: simd_float4x4) {
+        session.setWorldOrigin(relativeTransform: relativeTransform)
+    }
+
+    private func makeSessionConfiguration(
+        _ configuration: ARKitPoseProvider.Configuration
+    ) throws -> ARWorldTrackingConfiguration {
+        guard ARWorldTrackingConfiguration.isSupported else {
+            throw ARKitPoseProvider.ProviderError.worldTrackingUnsupported
+        }
+        let sessionConfiguration = ARWorldTrackingConfiguration()
+
+        // Gravity fixes pitch and roll; the marker fixes yaw. Never
+        // .gravityAndHeading — that pulls in the magnetometer, which is off by
+        // tens of degrees indoors.
+        sessionConfiguration.worldAlignment = .gravity
+        sessionConfiguration.isLightEstimationEnabled = false
+        sessionConfiguration.planeDetection = []
+        sessionConfiguration.environmentTexturing = .none
+
+        if let group = configuration.referenceImageGroup,
+           let images = ARReferenceImage.referenceImages(inGroupNamed: group, bundle: nil) {
+            sessionConfiguration.detectionImages = images
+        } else {
+            sessionConfiguration.detectionImages = try referenceImagesFromVenue(configuration)
+        }
+        sessionConfiguration.maximumNumberOfTrackedImages = configuration.maximumConcurrentImages
+        // Off: ARKit's own estimate of a marker's size is less trustworthy than a
+        // tape measure, and letting it float makes every distance drift with it.
+        sessionConfiguration.automaticImageScaleEstimationEnabled = false
+
+        return sessionConfiguration
+    }
+
+    /// Builds reference images from `Markers/<id>.png` in the bundle, using the
+    /// measured widths in `venue.json`.
+    ///
+    /// `physicalWidth` must be the true measured width in metres or all scale is
+    /// wrong — which is why it comes from the venue file rather than from the
+    /// asset catalogue, where it would be compiled in and need a rebuild to fix.
+    private func referenceImagesFromVenue(
+        _ configuration: ARKitPoseProvider.Configuration
+    ) throws -> Set<ARReferenceImage> {
+        var images: Set<ARReferenceImage> = []
+        for marker in configuration.venue.markers {
+            guard let url = configuration.markerBundle.url(forResource: marker.id, withExtension: "png",
+                                                           subdirectory: "Markers")
+                    ?? configuration.markerBundle.url(forResource: marker.id, withExtension: "png"),
+                  let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                throw ARKitPoseProvider.ProviderError.missingMarkerImage(marker.id)
+            }
+            let reference = ARReferenceImage(cgImage, orientation: .up,
+                                             physicalWidth: CGFloat(marker.physicalWidth))
+            reference.name = marker.id
+            images.insert(reference)
+        }
+        guard !images.isEmpty else { throw ARKitPoseProvider.ProviderError.noMarkerImages }
+        return images
     }
 }
 
@@ -288,9 +314,11 @@ private final class FrameInbox: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncStream<PoseProviderEvent>.Continuation?
     private var sink: (@Sendable (PixelBufferHandoff) -> Void)?
-    private var depth: (map: DepthMap, pose: Pose, deviceTimestamp: Double)?
     private var lastPosition: SIMD3<Float>?
     private var motion: Float = 0
+    private var didDeliverFrame = false
+
+    var hasDeliveredFrame: Bool { lock.withLock { didDeliverFrame } }
 
     func open(_ continuation: AsyncStream<PoseProviderEvent>.Continuation) {
         lock.withLock {
@@ -309,13 +337,12 @@ private final class FrameInbox: @unchecked Sendable {
     }
 
     /// One camera frame, already copied out of the `ARFrame`.
-    func frame(_ sample: PoseSample, pixelBuffer: PixelBufferHandoff,
-               depth newDepth: DepthMap?) {
+    func frame(_ sample: PoseSample, pixelBuffer: PixelBufferHandoff) {
         let (continuation, sink) = lock.withLock { () -> (AsyncStream<PoseProviderEvent>.Continuation?,
                                                           (@Sendable (PixelBufferHandoff) -> Void)?) in
+            didDeliverFrame = true
             if let last = lastPosition { motion += simd_distance(last, sample.pose.position) }
             lastPosition = sample.pose.position
-            if let newDepth { depth = (newDepth, sample.pose, sample.deviceTimestamp) }
             return (self.continuation, self.sink)
         }
         // Outside the lock: neither of these may block the other's readers.
@@ -344,10 +371,6 @@ private final class FrameInbox: @unchecked Sendable {
             return motion
         }
     }
-
-    func latestDepth() -> (map: DepthMap, pose: Pose, deviceTimestamp: Double)? {
-        lock.withLock { depth }
-    }
 }
 
 /// ARKit's delegate is not `Sendable` and fires on its own serial queue. It
@@ -360,22 +383,24 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
         self.inbox = inbox
     }
 
+    private var hasLoggedFirstFrame = false
+
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // Fires at 60 Hz. Everything is copied out synchronously here; the frame
         // is never retained, because retaining it stalls the session.
+        if !hasLoggedFirstFrame {
+            hasLoggedFirstFrame = true
+            BeaconLog.log("first ARKit frame")
+        }
         let timestamp = frame.timestamp
         let camera = frame.camera
         let pose = Pose(matrix: camera.transform)
-        let depth = frame.sceneDepth.flatMap {
-            ARKitPoseProvider.depthMap(from: $0.depthMap, confidence: $0.confidenceMap)
-        }
         // The pixel buffer is retained; the frame is not. CoreVideo buffers are
         // reference-counted independently of the ARFrame that vended them.
         inbox.frame(PoseSample(pose: pose, deviceTimestamp: timestamp,
                                quality: ARKitPoseProvider.quality(of: camera.trackingState),
                                intrinsics: ARKitPoseProvider.intrinsics(of: camera)),
-                    pixelBuffer: PixelBufferHandoff(frame.capturedImage, deviceTimestamp: timestamp),
-                    depth: depth)
+                    pixelBuffer: PixelBufferHandoff(frame.capturedImage, deviceTimestamp: timestamp))
     }
 
     func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
@@ -408,6 +433,7 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
     }
 
     func sessionWasInterrupted(_ session: ARSession) {
+        BeaconLog.log("ARSession interrupted")
         inbox.event(.interrupted)
     }
 
@@ -418,6 +444,11 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
     }
 
     func session(_ session: ARSession, didFailWithError error: any Error) {
+        BeaconLog.log("ARSession failed: \(error.localizedDescription)")
         inbox.event(.failed(error.localizedDescription))
+    }
+
+    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        BeaconLog.log("tracking state → \(ARKitPoseProvider.quality(of: camera.trackingState).wireValue)")
     }
 }

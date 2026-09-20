@@ -1,6 +1,14 @@
 import SwiftUI
 import SwarmCore
 
+private enum FloorPlanMarker {
+    /// Matches the console marker system: 22 points outside-to-outside with a
+    /// 2-point border, and four points of air before any attached label.
+    static let radius: CGFloat = 10
+    static let stroke: CGFloat = 2
+    static let labelGap: CGFloat = 4
+}
+
 /// Room metres ↔ view points. x is 0 on the stage centre line; y is 0 at the
 /// stage wall, which is drawn at the top — the same way up as the console.
 ///
@@ -70,13 +78,18 @@ struct FloorPlanCanvas: View {
 
             if let coverage = world?.coverage {
                 let cells = Array(coverage.cells.utf8)
-                for index in cells.indices where cells[index] == UInt8(ascii: "1") {
-                    let col = index % max(1, coverage.cols), row = index / max(1, coverage.cols)
-                    let topLeft = plan.point(x: coverage.x0 + Double(col) * coverage.cell,
-                                             y: Double(row) * coverage.cell)
-                    let side = plan.length(coverage.cell)
-                    context.fill(Path(CGRect(x: topLeft.x, y: topLeft.y, width: side + 0.5, height: side + 0.5)),
-                                 with: .color(MapInk.searched))
+                let side = plan.length(coverage.cell)
+                context.drawLayer { layer in
+                    layer.addFilter(.blur(radius: max(1.5, side * 0.45)))
+                    for index in cells.indices where cells[index] == UInt8(ascii: "1") {
+                        let col = index % max(1, coverage.cols), row = index / max(1, coverage.cols)
+                        let centre = plan.point(x: coverage.x0 + (Double(col) + 0.5) * coverage.cell,
+                                                y: (Double(row) + 0.5) * coverage.cell)
+                        let radius = max(2, side * 0.9)
+                        layer.fill(Path(ellipseIn: CGRect(x: centre.x - radius, y: centre.y - radius,
+                                                          width: radius * 2, height: radius * 2)),
+                                   with: .color(MapInk.searched))
+                    }
                 }
             }
 
@@ -87,22 +100,26 @@ struct FloorPlanCanvas: View {
                              with: .color(MapInk.stage))
             }
             context.stroke(Path(roundedRect: plan.bounds, cornerRadius: 4), with: .color(MapInk.outline),
-                           lineWidth: 1)
+                           lineWidth: 1.25)
 
             for peer in world?.phones ?? [] where peer.id != world?.me {
-                dot(&context, at: plan.point(x: peer.x, y: peer.y), heading: peer.h, color: MapInk.peer,
-                    radius: 3)
+                searcher(&context, at: plan.point(x: peer.x, y: peer.y), heading: peer.h, number: peer.i)
             }
             for ping in pings {
                 let p = plan.point(x: ping.x, y: ping.y)
-                // The HUD's ping colour, so a ping is the same thing wherever it is drawn.
-                context.fill(Path(ellipseIn: CGRect(x: p.x - 4, y: p.y - 4, width: 8, height: 8)),
-                             with: .color(Color(hex: "#ffd166") ?? .yellow))
+                var diamond = Path()
+                diamond.move(to: CGPoint(x: p.x, y: p.y - 7))
+                diamond.addLine(to: CGPoint(x: p.x + 7, y: p.y))
+                diamond.addLine(to: CGPoint(x: p.x, y: p.y + 7))
+                diamond.addLine(to: CGPoint(x: p.x - 7, y: p.y))
+                diamond.closeSubpath()
+                context.fill(diamond, with: .color(MapInk.ping))
             }
             if let candidate = world?.candidate {
                 let p = plan.point(x: candidate.x, y: candidate.y)
-                context.stroke(Path(ellipseIn: CGRect(x: p.x - 6, y: p.y - 6, width: 12, height: 12)),
-                               with: .color(MapInk.candidateRing), lineWidth: 2)
+                context.stroke(Path(ellipseIn: CGRect(x: p.x - 16, y: p.y - 16, width: 32, height: 32)),
+                               with: .color(MapInk.candidateHalo), lineWidth: FloorPlanMarker.stroke)
+                person(&context, at: p, color: MapInk.candidateRing)
             }
             if let seat {
                 let p = plan.point(x: seat.x, y: seat.y)
@@ -110,25 +127,50 @@ struct FloorPlanCanvas: View {
                                with: .color(MapInk.seatRing), lineWidth: 2)
             }
             if let me {
-                dot(&context, at: plan.point(x: me.x, y: me.y), heading: me.heading,
-                    color: Color(hex: colorHex) ?? MapInk.meFallback, radius: 5)
+                let myIndex = world?.phones?.first(where: { $0.id == world?.me })?.i
+                searcher(&context, at: plan.point(x: me.x, y: me.y), heading: me.heading, number: myIndex)
             }
         }
     }
 
-    private func dot(_ context: inout GraphicsContext, at point: CGPoint, heading: Double?, color: Color,
-                     radius: CGFloat) {
+    private func searcher(_ context: inout GraphicsContext, at point: CGPoint, heading: Double?, number: Int?) {
         if let heading {
             // Heading 0 faces the stage, which is up; clockwise from there.
             let angle = heading * .pi / 180
-            let tip = CGPoint(x: point.x + sin(angle) * radius * 3.2, y: point.y - cos(angle) * radius * 3.2)
-            var cone = Path()
-            cone.move(to: point)
-            cone.addLine(to: tip)
-            context.stroke(cone, with: .color(color), lineWidth: 2)
+            let direction = CGVector(dx: sin(angle), dy: -cos(angle))
+            let side = CGVector(dx: cos(angle), dy: sin(angle))
+            let tip = CGPoint(x: point.x + direction.dx * 16, y: point.y + direction.dy * 16)
+            let base = CGPoint(x: point.x + direction.dx * 8, y: point.y + direction.dy * 8)
+            var pointer = Path()
+            pointer.move(to: tip)
+            pointer.addLine(to: CGPoint(x: base.x + side.dx * 5, y: base.y + side.dy * 5))
+            pointer.addLine(to: CGPoint(x: base.x - side.dx * 5, y: base.y - side.dy * 5))
+            pointer.closeSubpath()
+            context.fill(pointer, with: .color(MapInk.searcher))
         }
-        context.fill(Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius,
-                                            width: radius * 2, height: radius * 2)), with: .color(color))
+        let circle = Path(ellipseIn: CGRect(x: point.x - FloorPlanMarker.radius,
+                                            y: point.y - FloorPlanMarker.radius,
+                                            width: FloorPlanMarker.radius * 2,
+                                            height: FloorPlanMarker.radius * 2))
+        context.fill(circle, with: .color(MapInk.searcher))
+        context.stroke(circle, with: .color(MapInk.markerBorder), lineWidth: FloorPlanMarker.stroke)
+        if let number {
+            context.draw(Text(String(number)).font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(MapInk.markerBorder), at: point)
+        }
+    }
+
+    private func person(_ context: inout GraphicsContext, at point: CGPoint, color: Color) {
+        let circle = Path(ellipseIn: CGRect(x: point.x - FloorPlanMarker.radius,
+                                            y: point.y - FloorPlanMarker.radius,
+                                            width: FloorPlanMarker.radius * 2,
+                                            height: FloorPlanMarker.radius * 2))
+        context.fill(circle, with: .color(MapInk.markerBorder))
+        context.stroke(circle, with: .color(color), lineWidth: FloorPlanMarker.stroke)
+        context.fill(Path(ellipseIn: CGRect(x: point.x - 2.7, y: point.y - 6.2, width: 5.4, height: 5.4)),
+                     with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: point.x - 4.5, y: point.y + 0.5, width: 9, height: 5.5),
+                          cornerRadius: 3), with: .color(color))
     }
 }
 
@@ -148,21 +190,21 @@ struct MiniMapView: View {
                 VStack(spacing: Space.xs) {
                     HStack {
                         Text("Searched")
-                            .foregroundStyle(.hudInkSecondary)
+                            .foregroundStyle(MapInk.labelSecondary)
                         Spacer(minLength: Space.xs)
                         Text("\(Int((searched * 100).rounded()))%")
-                            .foregroundStyle(.hudInk)
+                            .foregroundStyle(MapInk.label)
                     }
                     .font(TypeScale.readout)
                     ProgressView(value: min(1, max(0, searched)))
                         .progressViewStyle(.linear)
-                        .tint(.ssOK)
+                        .tint(MapInk.searcher)
                         .accessibilityLabel("Area searched")
                         .accessibilityValue("\(Int((searched * 100).rounded())) percent")
                 }
                 .padding(.horizontal, Space.s)
                 .padding(.vertical, Space.s)
-                .background(Surface.hudChrome, in: Radius.rect(Radius.plate))
+                .background(MapInk.legendBackground, in: Radius.rect(Radius.plate))
                 .padding(Space.xs)
             }
             }
@@ -188,10 +230,16 @@ struct SeatPickerView: View {
     var body: some View {
         VStack(spacing: Space.m) {
             HStack {
-                Text("Where are you standing?").font(TypeScale.sheetTitle)
+                Text("Map").font(TypeScale.sheetTitle)
                 Spacer()
-                Button("Close", action: onClose)
-                    .buttonStyle(.borderless)
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
             }
             Text("STAGE")
                 .font(TypeScale.readout)

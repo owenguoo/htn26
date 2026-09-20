@@ -57,8 +57,11 @@ public final class AudioSessionOwner {
                 // moment it is legal to reactivate, and every engine that was
                 // running has to be started again.
                 let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+                BeaconLog.log("audio interruption notification raw=\(raw.map(String.init) ?? "nil")")
                 guard raw == AVAudioSession.InterruptionType.ended.rawValue else { return }
-                MainActor.assumeIsolated {
+                // `queue: .main` ≠ MainActor; `assumeIsolated` traps off the
+                // executor even when the block is on the main dispatch queue.
+                Task { @MainActor in
                     guard let self else { return }
                     self.applied = nil
                     self.apply()
@@ -91,28 +94,17 @@ public final class AudioSessionOwner {
         apply()
     }
 
-    /// Requests the built-in mic's stereo beam while leaving external and
-    /// Bluetooth routes alone. Preferences are best-effort; callers must still
-    /// inspect the engine's actual channel count and fall back to mono.
-    public func prepareDirectionalInput() {
-        let session = AVAudioSession.sharedInstance()
-        guard let input = session.availableInputs?.first(where: { $0.portType == .builtInMic }),
-              let source = input.dataSources?.first(where: {
-                  $0.supportedPolarPatterns?.contains(.stereo) == true
-              }) else { return }
-        do {
-            try session.setPreferredInput(input)
-            try input.setPreferredDataSource(source)
-            try source.setPreferredPolarPattern(.stereo)
-            try session.setPreferredInputOrientation(.portrait)
-            if session.maximumInputNumberOfChannels >= 2 {
-                try session.setPreferredInputNumberOfChannels(2)
-            }
-        } catch {
-            // Direction is optional. The active mono route remains valid for
-            // voice and `install()` verifies what the engine actually supplied.
-        }
-    }
+    // `prepareDirectionalInput()` used to live here: it asked for the built-in
+    // mic's stereo beam with `setPreferredInput`, `setPreferredDataSource`,
+    // `setPreferredPolarPattern(.stereo)`, `setPreferredInputOrientation` and
+    // `setPreferredInputNumberOfChannels(2)`. Five route mutations on the one
+    // process-wide `AVAudioSession` — while ARKit is running the camera off the
+    // same session. Stereo input on iOS is bound up with the camera's own
+    // orientation handling, and the device trace had `start()` blocking for
+    // 3.9 s and ARKit's tracking dropping to `notAvailable` the moment it
+    // returned. Voice needs mono; the stereo beam was for the directional SOUND
+    // marker, which is a nice-to-have. It is not coming back without a device
+    // trace showing it is free.
 
     private func apply() {
         let session = AVAudioSession.sharedInstance()
@@ -131,16 +123,28 @@ public final class AudioSessionOwner {
         // somebody's music. `.defaultToSpeaker` because `.playAndRecord`
         // otherwise routes a beep to the earpiece, which nobody hears while the
         // phone is held up at arm's length.
+        // No `.allowBluetooth`. It forces the HFP profile for a two-way route,
+        // and negotiating HFP with a connected accessory takes seconds — a
+        // prime suspect for the 3.9 s `microphone.start` in the device trace.
+        // The operator's voice goes to the hub from the phone in their hand;
+        // it does not need to come from their earbuds.
         let options: AVAudioSession.CategoryOptions = wantsRecord
-            ? [.mixWithOthers, .defaultToSpeaker, .allowBluetooth]
+            ? [.mixWithOthers, .defaultToSpeaker]
             : [.mixWithOthers]
 
         let changed = applied.map { $0.category != category || $0.options != options } ?? true
         do {
-            if changed { try session.setCategory(category, mode: .default, options: options) }
+            if changed {
+                BeaconLog.log("audio → setCategory(\(category.rawValue))")
+                try session.setCategory(category, mode: .default, options: options)
+                BeaconLog.log("audio ✓ setCategory")
+            }
+            BeaconLog.log("audio → setActive(true)")
             try session.setActive(true)
+            BeaconLog.log("audio ✓ setActive, route=\(session.currentRoute.inputs.map(\.portType.rawValue))")
             applied = (category, options)
         } catch {
+            BeaconLog.log("audio ✗ session configuration failed: \(String(describing: error))")
             // A session that will not configure means no beeps and no voice.
             // Both are optional to the demo; the camera and the socket are not.
             applied = nil
@@ -242,30 +246,38 @@ public final class MicrophoneCapture {
     /// because that is what kills the beeps as well.
     public func start() async {
         guard !isTapped else { return }
+        BeaconLog.log("mic → requestPermission")
         guard await Self.requestPermission() else {
+            BeaconLog.log("mic ✗ permission denied")
             Registry.shared.set(availability: .denied)
             return
         }
+        BeaconLog.log("mic ✓ permission granted")
 
+        BeaconLog.log("mic → AudioSessionOwner.begin(.record)")
         AudioSessionOwner.shared.begin(.record)
+        BeaconLog.log("mic ✓ AudioSessionOwner.begin(.record)")
         reconfigureHandler = AudioSessionOwner.shared.onReconfigure { [weak self] in
-            MainActor.assumeIsolated { self?.restart() }
+            Task { @MainActor in self?.restart() }
         }
         // The other half of the same problem: when the route changes, an
         // `AVAudioEngine` stops and drops its tap's format on the floor. It has
         // to be rebuilt, not merely restarted.
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.restart() }
+                BeaconLog.log("AVAudioEngineConfigurationChange")
+                Task { @MainActor in self?.restart() }
             }
 
         guard install() else {
+            BeaconLog.log("mic ✗ install failed")
             AudioSessionOwner.shared.end(.record)
             Registry.shared.set(availability: .unsupported)
             return
         }
         Registry.shared.attach(self)
         Registry.shared.set(availability: .running)
+        BeaconLog.log("mic ✓ running")
     }
 
     public func stop() {
@@ -307,27 +319,17 @@ public final class MicrophoneCapture {
     // MARK: - Engine
 
     private func install() -> Bool {
-        AudioSessionOwner.shared.prepareDirectionalInput()
+        BeaconLog.log("mic → engine.inputNode")
         let input = engine.inputNode
-        // The web client asks `getUserMedia` for echo cancellation, noise
-        // suppression and automatic gain. This is AVFoundation's equivalent of
-        // all three, and it matters for a specific reason here: without echo
-        // cancellation the phone's own ping beep is loud enough to open the
-        // voice gate and get transcribed as a word. Best effort — it is
-        // unavailable on some routes, and failing to enable it is not a reason
-        // to have no microphone.
-        let hardwareFormat = input.outputFormat(forBus: 0)
-        // Voice processing is mono. Keep it on for mono/Bluetooth routes, but
-        // leave a built-in stereo route untouched so its level difference can
-        // feed the directional detector. Loud-sound onset/decay gating and the
-        // explicit local-beep suppression replace its noise/echo help there.
-        if hardwareFormat.channelCount < 2 {
-            try? input.setVoiceProcessingEnabled(true)
-        } else {
-            try? input.setVoiceProcessingEnabled(false)
-        }
+        BeaconLog.log("mic ✓ engine.inputNode")
+        // Voice processing on the input node has asserted
+        // `_dispatch_assert_queue_fail` when brought up alongside ARKit. Echo
+        // cancellation for the local beep is nice; a live camera is required.
+        // Leave processing off — loud-sound gating still covers most of it.
+        try? input.setVoiceProcessingEnabled(false)
 
         let format = input.outputFormat(forBus: 0)
+        BeaconLog.log("mic format \(format.sampleRate) Hz × \(format.channelCount)ch")
         guard format.sampleRate > 0, format.channelCount > 0 else { return false }
 
         // Bounded on purpose. The consumer only awaits an actor hop, so a
@@ -340,7 +342,14 @@ public final class MicrophoneCapture {
 
         // 4096 frames, exactly `ScriptProcessor(4096, 1, 1)` in `phone.js`, so
         // the pre-roll chunk is the same slice of time on both clients.
+        // `hasLoggedFirstBuffer` is touched only from the tap, which AVAudioEngine
+        // serialises, and only ever set true — never read for correctness.
+        nonisolated(unsafe) var hasLoggedFirstBuffer = false
         input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, when in
+            if !hasLoggedFirstBuffer {
+                hasLoggedFirstBuffer = true
+                BeaconLog.log("first mic buffer")
+            }
             guard let channels = buffer.floatChannelData else { return }
             let count = Int(buffer.frameLength)
             guard count > 0 else { return }
@@ -359,11 +368,16 @@ public final class MicrophoneCapture {
                                      stereoRight: right, rate: buffer.format.sampleRate, at: at))
         }
         isTapped = true
+        BeaconLog.log("mic ✓ installTap")
 
+        BeaconLog.log("mic → engine.prepare")
         engine.prepare()
+        BeaconLog.log("mic ✓ engine.prepare; → engine.start")
         do {
             try engine.start()
+            BeaconLog.log("mic ✓ engine.start")
         } catch {
+            BeaconLog.log("mic ✗ engine.start: \(String(describing: error))")
             uninstall()
             return false
         }
@@ -390,7 +404,11 @@ public final class MicrophoneCapture {
     /// The route moved or an interruption ended. Rebuild rather than restart —
     /// the tap's format belonged to the old route.
     private func restart() {
-        guard Registry.shared.capture === self else { return }
+        BeaconLog.log("mic → restart")
+        guard Registry.shared.capture === self else {
+            BeaconLog.log("mic restart skipped (not the live capture)")
+            return
+        }
         pump?.cancel()
         pump = nil
         continuation?.finish()
@@ -402,6 +420,7 @@ public final class MicrophoneCapture {
         }
         if isMuted { engine.pause() }
         Registry.shared.set(availability: .running)
+        BeaconLog.log("mic ✓ restart")
     }
 
     // MARK: - Permission

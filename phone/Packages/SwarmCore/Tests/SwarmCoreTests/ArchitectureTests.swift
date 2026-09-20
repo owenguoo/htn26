@@ -134,7 +134,7 @@ struct ArchitectureTests {
     /// comment stating exactly what a human must check on hardware."
     @Test func everyDeviceDependentFileSaysWhatAHumanMustCheck() {
         let deviceDependent = ["ARKitPoseProvider.swift", "FrameEncoder.swift",
-                               "LiDARDepthSource.swift", "Haptics.swift"]
+                               "MicrophoneCapture.swift"]
         for (url, source) in shellFiles()
         where deviceDependent.contains(url.lastPathComponent) {
             let name = url.lastPathComponent

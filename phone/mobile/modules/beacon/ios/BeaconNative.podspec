@@ -22,7 +22,7 @@ Pod::Spec.new do |s|
   spm_dependency(s, url: swarm_core, requirement: { kind: 'upToNextMajorVersion', minimumVersion: '0.0.0' },
                  products: ['SwarmCore'])
 
-  s.frameworks = 'ARKit', 'CoreHaptics', 'AVFoundation', 'CoreImage', 'Metal'
+  s.frameworks = 'ARKit', 'SceneKit', 'AVFoundation', 'CoreImage'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',

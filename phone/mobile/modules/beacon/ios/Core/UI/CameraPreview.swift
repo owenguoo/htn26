@@ -1,90 +1,59 @@
 import CoreImage
 import CoreVideo
-import Metal
 import Observation
 import SwiftUI
+import UIKit
 
-/// Shows what the camera sees, behind the overlay.
-///
-/// Without this the app is a black screen with the camera light on, and an
-/// operator cannot aim at a marker — which reads as "tracking is broken" when
-/// what is actually happening is that no marker has ever been in frame.
-///
-/// Note what is *not* imported: ARKit. The preview renders the same
-/// `CVPixelBuffer` the provider already copies out for the encoder, so the one
-/// ARKit file stays the only one, and the operator sees exactly what the server
-/// sees rather than a separate camera feed that might disagree.
+/// Hosts the live camera. On device the content is an `ARSCNView` that shares
+/// the `ARSession` (see `ARKitPoseProvider`) — we do **not** re-render
+/// `CVPixelBuffer`s through Core Image for the operator preview. That path
+/// retained capture-pool buffers and tripped `_dispatch_assert_queue_fail` on
+/// device (camera LED on, "waiting for the camera…", process halted).
 @MainActor
 @Observable
 public final class CameraPreviewSource {
-    private(set) var image: CGImage?
-    /// Frames dropped because a render was still running. Expected under load;
-    /// the preview is the first thing that should suffer.
-    private(set) var dropped = 0
+    /// Becomes true once the AR session has handed us its scene view.
+    private(set) var isLive = false
 
-    private let context: CIContext
-    private let queue = DispatchQueue(label: "beacon.preview", qos: .userInitiated)
-    private var rendering = false
-    private var nextDue: Double = 0
+    let container = CameraPreviewContainerView()
 
-    /// Well below the 60 Hz ARKit delivers. The preview exists so a human can
-    /// aim; it does not need to be smooth, and every millisecond it takes is a
-    /// millisecond stolen from the latency budget that does matter.
-    private let targetHz: Double = 15
-    /// Roughly a phone screen's width in points times its scale, so the preview
-    /// is not visibly upscaled. 480 was cheap and looked it: blown up to a
-    /// 1200-point-wide screen it is a 2.5x upscale, which reads as "the camera
-    /// is bad" when it is only the preview. The render is on the GPU and
-    /// throttled, so the extra pixels cost little.
-    private let targetWidth = 1_170
-
-    init() {
-        let options: [CIContextOption: Any] = [.cacheIntermediates: false]
-        if let device = MTLCreateSystemDefaultDevice() {
-            context = CIContext(mtlDevice: device, options: options)
-        } else {
-            context = CIContext(options: options)
-        }
+    /// Called after `ARSession.run` with the session's `ARSCNView`.
+    public func attach(_ view: UIView) {
+        container.setContent(view)
+        isLive = true
     }
 
-    /// Called from the ARSession delegate queue with the same buffer the encoder
-    /// will get. Drops rather than queues, exactly like the encoder: a preview
-    /// that falls behind is showing the past, which is worse than showing less.
-    nonisolated func offer(_ handoff: PixelBufferHandoff, now: Double) {
-        Task { @MainActor [weak self] in
-            self?.consider(handoff, now: now)
-        }
+    public func clear() {
+        container.setContent(nil)
+        isLive = false
+    }
+}
+
+public final class CameraPreviewContainerView: UIView {
+    private weak var content: UIView?
+
+    public override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        clipsToBounds = true
     }
 
-    private func consider(_ handoff: PixelBufferHandoff, now: Double) {
-        guard !rendering, now >= nextDue else {
-            if rendering { dropped += 1 }
-            return
-        }
-        nextDue = now + 1.0 / targetHz
-        rendering = true
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-        let context = self.context
-        let width = targetWidth
-        queue.async { [weak self] in
-            let rendered = Self.render(handoff.buffer, context: context, targetWidth: width)
-            Task { @MainActor [weak self] in
-                self?.image = rendered ?? self?.image
-                self?.rendering = false
-            }
-        }
+    func setContent(_ view: UIView?) {
+        content?.removeFromSuperview()
+        content = nil
+        guard let view else { return }
+        view.frame = bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(view)
+        content = view
     }
 
-    private nonisolated static func render(_ buffer: CVPixelBuffer, context: CIContext,
-                                           targetWidth: Int) -> CGImage? {
-        let image = CIImage(cvPixelBuffer: buffer)
-        // ARKit's capture is in sensor orientation, which is landscape-right for
-        // a phone held upright. `.right` turns it the way the operator is
-        // holding it.
-        let oriented = image.oriented(.right)
-        let scale = CGFloat(targetWidth) / oriented.extent.width
-        let scaled = oriented.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        return context.createCGImage(scaled, from: scaled.extent)
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        content?.frame = bounds
     }
 }
 
@@ -92,28 +61,31 @@ struct CameraPreviewView: View {
     let source: CameraPreviewSource
 
     var body: some View {
-        GeometryReader { geometry in
-            if let image = source.image {
-                Image(decorative: image, scale: 1)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
-            } else {
-                // Before the first frame. Says which of the two black screens
-                // this is, because "no camera yet" and "camera showing a dark
-                // room" look identical and mean very different things.
+        ZStack {
+            CameraPreviewRepresentable(source: source)
+            if !source.isLive {
+                // Before the AR scene view is attached. Says which of the two
+                // black screens this is: "no camera yet" vs a dark room.
                 ZStack {
-                    // Black in both themes: a camera that has not started is
-                    // black, and a white screen here reads as a crash.
                     Color.hudVoid
                     Text("waiting for the camera…")
                         .font(TypeScale.footnote)
                         .foregroundStyle(.hudInkSecondary)
                 }
                 .cameraChrome()
+                .allowsHitTesting(false)
             }
         }
         .ignoresSafeArea()
     }
+}
+
+private struct CameraPreviewRepresentable: UIViewRepresentable {
+    let source: CameraPreviewSource
+
+    func makeUIView(context: Context) -> CameraPreviewContainerView {
+        source.container
+    }
+
+    func updateUIView(_ uiView: CameraPreviewContainerView, context: Context) {}
 }

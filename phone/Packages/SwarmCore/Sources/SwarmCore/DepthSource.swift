@@ -3,9 +3,9 @@ import simd
 
 /// Metric depth for a chunk of frames, in the venue frame.
 ///
-/// Two implementations: `LiDARDepthSource` in the app target (ARKit
-/// `frameSemantics = .sceneDepth`, Pro devices only) and `ServerDepthSource`
-/// here (frames uploaded, VGGT-Ω depth returned).
+/// One live implementation: `ServerDepthSource`, here (frames uploaded, VGGT-Ω
+/// depth returned). The LiDAR implementation was removed with the rest of the
+/// `.sceneDepth` plumbing — see "Stripped for device bring-up" in CLAUDE.md.
 ///
 /// **Device class is branched on here and nowhere else.** No UI and no session
 /// logic may ask whether the phone has LiDAR.
@@ -146,10 +146,13 @@ public struct ServerDepthSource: DepthSource {
 /// Metric depth straight off the device, copied out of whatever frame produced
 /// it.
 ///
-/// This exists so `LiDARDepthSource` does not have to import ARKit. CLAUDE.md
-/// puts ARKit in exactly one file, and the only object that holds an `ARFrame`
-/// is `ARKitPoseProvider` — which conforms to this and copies the depth buffer
-/// out. An `ARFrame` retained beyond its delegate callback stalls the session.
+/// The seam a device-side depth source would plug into: it exists so such a
+/// source does not have to import ARKit, since CLAUDE.md puts ARKit in exactly
+/// one file and the only object that holds an `ARFrame` is `ARKitPoseProvider`.
+///
+/// **Nothing conforms to this today.** `ARKitPoseProvider` did, and the
+/// conformance went with the `.sceneDepth` plumbing; the protocol is kept
+/// because the hub may yet grow a depth channel.
 public protocol MetricDepthFrameSource: Sendable {
     /// True on devices with a LiDAR scanner and `.sceneDepth` enabled.
     var providesSceneDepth: Bool { get }

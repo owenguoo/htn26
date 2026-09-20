@@ -6,6 +6,12 @@ import SwarmCore
 /// is at parity this target is how the client gets onto a phone.
 @main
 struct BeaconApp: App {
+    /// The first trace line of the process. If this one does not appear, the
+    /// problem is the logging or the build — not the join path.
+    init() {
+        BeaconLog.log("app launch")
+    }
+
     var body: some Scene {
         WindowGroup {
             // No `.preferredColorScheme(.dark)`. The operator screen is dark

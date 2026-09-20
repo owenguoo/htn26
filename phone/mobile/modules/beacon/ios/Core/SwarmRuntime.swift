@@ -151,9 +151,37 @@ public final class SwarmRuntime: @unchecked Sendable {
         for target in targets { target(session) }
     }
 
+    /// **Voice is off by default.** Not because the feature is unwanted, but
+    /// because the device bring-up trap lives in the audio path and a camera
+    /// that works beats a microphone that halts the process.
+    ///
+    /// The evidence, in order: `microphone.start` blocked the main thread for
+    /// 3.9 s (fixed — `.allowBluetooth` forcing HFP negotiation, plus five
+    /// preferred-route mutations on the session ARKit's camera shares); ARKit's
+    /// tracking dropped to `notAvailable` the instant it returned; and CoreAudio
+    /// then tripped `_dispatch_assert_queue_fail` on its own `RootQueue`, after
+    /// `engine.start` returned but before the tap delivered a single buffer,
+    /// with no frame of ours anywhere on the stack.
+    ///
+    /// `MicrophoneCapture` is untouched and still wired up — this gates only
+    /// whether `join` starts it. Turn it back on for a run with `-BeaconVoice
+    /// YES` in the scheme's launch arguments, or flip the default here once the
+    /// audio path is fixed. The two things to fix first: `MicrophoneCapture` is
+    /// `@MainActor`, and `ARSessionHost` leaves `delegateQueue` nil, so every
+    /// `AVAudioSession` call it makes contends with ARKit's 60 Hz delegate on
+    /// the one thread.
+    static var isVoiceEnabled: Bool {
+        // `object(forKey:) as? Bool` is wrong here: the argument domain parses
+        // `-BeaconVoice YES` into the *string* "YES" and the cast fails.
+        // `bool(forKey:)` applies `NSString.boolValue`, so YES/1/true all read
+        // as true.
+        UserDefaults.standard.bool(forKey: "BeaconVoice")
+    }
+
     // MARK: - Join / leave
 
     public func join(hub scanned: String, name: String) async throws {
+        BeaconLog.log("join(\(scanned))")
         guard let socketURL = HubURL.derive(scanned) else { throw RuntimeError.badHubURL(scanned) }
         await leave()
 
@@ -181,26 +209,29 @@ public final class SwarmRuntime: @unchecked Sendable {
             build: "ios-\(version)", venue: venue)
 
         let session: RuntimeSession
+        var arkitProvider: ARKitPoseProvider?
         switch source {
         case .arkit:
             // Real operators take part in voice-directed search. Replay / drive
             // stay silent so `swarm-replay` and the hub e2e do not open a mic.
             configuration.voiceEnabled = true
+            BeaconLog.log("building ARKit session")
             let provider = ARKitPoseProvider(configuration: .init(
-                venue: venue, referenceImageGroup: nil, wantsSceneDepth: false,
+                venue: venue, referenceImageGroup: nil,
                 markerBundle: ModuleResources.bundle))
-            let encoder = CoreImageFrameEncoder()
+            let encoder = await MainActor.run { CoreImageFrameEncoder() }
             let preview = await CameraPreviewSource()
+            // Preview is an `ARSCNView` sharing the session — do not also feed
+            // pixel buffers into a CI preview (that path retained capture-pool
+            // buffers and froze the camera LED-on / "waiting…" state).
             await provider.setPixelBufferSink { buffer in
-                // The preview only reads; the encoder takes ownership. Sequential,
-                // never concurrent, which is the invariant PixelBufferHandoff names.
-                preview.offer(buffer, now: CACurrentMediaTime())
                 encoder.stage(buffer)
             }
             let client = SwarmClient(configuration: configuration,
                                      dependencies: .init(provider: provider, encoder: encoder,
                                                          uptime: uptime, thermal: thermal))
             let microphone = await MainActor.run { MicrophoneCapture(client: client) }
+            arkitProvider = provider
             session = RuntimeSession(client: client, preview: preview, venue: venue,
                                      socketURL: socketURL, microphone: microphone)
         case .replay:
@@ -248,6 +279,7 @@ public final class SwarmRuntime: @unchecked Sendable {
 
         PhoneIdentity.name = configuration.name
         PhoneIdentity.lastHubURL = scanned
+        BeaconLog.log("publishing session (source=\(source.rawValue))")
         publish(session)
         await MainActor.run {
             // ARKit plus streaming for thirty minutes will cook a phone, and a
@@ -255,13 +287,49 @@ public final class SwarmRuntime: @unchecked Sendable {
             UIApplication.shared.isIdleTimerDisabled = true
         }
         do {
-            try await session.client.start()
+            try await BeaconLog.step("client.start") { try await session.client.start() }
+            // ARSession is running now — hand its scene view to the operator
+            // preview. Until this lands the UI shows "waiting for the camera…".
+            if let arkitProvider, let preview = session.preview {
+                let view = await BeaconLog.step("provider.previewView") {
+                    await arkitProvider.previewView()
+                }
+                if let view {
+                    await BeaconLog.step("preview.attach") { await preview.attach(view) }
+                } else {
+                    BeaconLog.log("no preview view — camera stays on \"waiting…\"")
+                }
+            }
             // After the socket is up: a declined / missing mic is soft — frames
             // and commands keep working; Settings shows "no microphone".
-            if let microphone = session.microphone {
-                await microphone.start()
+            //
+            // **Not until the camera is actually delivering.** The device trace
+            // showed `microphone.start` completing and ARKit's first frame
+            // landing 15 ms apart, with CoreAudio then tripping
+            // `_dispatch_assert_queue_fail` on its own `RootQueue` — no frame of
+            // ours anywhere on that stack. `MicrophoneCapture.start` takes the
+            // process-wide `AVAudioSession` to `.playAndRecord`, then sets a
+            // preferred input, data source, polar pattern, orientation and
+            // channel count; doing all that while `ARSession` is bringing its
+            // capture session up is asking two subsystems to reconfigure the
+            // same session at once. Waiting for the first frame costs a beat of
+            // voice at join and serialises the two.
+            if let microphone = session.microphone, Self.isVoiceEnabled {
+                if let arkitProvider {
+                    let arrived = await BeaconLog.step("wait for first ARKit frame") {
+                        await arkitProvider.waitForFirstFrame(timeout: 5)
+                    }
+                    // A phone that never gets a frame has a bigger problem than
+                    // voice; start the mic anyway rather than silently dropping it.
+                    if !arrived { BeaconLog.log("no ARKit frame within 5s — starting mic regardless") }
+                }
+                await BeaconLog.step("microphone.start") { await microphone.start() }
+            } else if session.microphone != nil {
+                BeaconLog.log("microphone start skipped — voice off (-BeaconVoice YES to enable)")
             }
+            BeaconLog.log("join complete")
         } catch {
+            BeaconLog.log("join failed: \(error)")
             await leave()
             throw error
         }
@@ -269,10 +337,14 @@ public final class SwarmRuntime: @unchecked Sendable {
 
     public func leave() async {
         guard let session else { return }
+        BeaconLog.log("leave")
         // Tear the tap down while we still hold the strong ref; the registry
         // alone is weak and would not keep it alive across `publish(nil)`.
         if let microphone = session.microphone {
             await MainActor.run { microphone.stop() }
+        }
+        if let preview = session.preview {
+            await preview.clear()
         }
         publish(nil)
         await session.client.stop()

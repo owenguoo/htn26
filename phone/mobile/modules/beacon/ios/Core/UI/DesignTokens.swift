@@ -70,22 +70,30 @@ extension ShapeStyle where Self == Color {
 /// `.white.opacity(0.35)` appearing twice for two different reasons is how a map
 /// stops being legible one edit at a time.
 enum MapInk {
-    /// Outside the room is still somewhere. A visibly different floor, so
-    /// walking past a wall reads as that and not as a broken map.
-    static let outside = Color.black.opacity(0.35)
-    static let floor = Color.black.opacity(0.55)
-    /// Mirrors the console's coverage fill.
-    static let searched = Color.green.opacity(0.28)
-    static let stage = Color.white.opacity(0.35)
-    static let outline = Color.white.opacity(0.6)
-    static let peer = Color.white.opacity(0.8)
-    static let plateBorder = Color.white.opacity(0.35)
+    /// Fixed colours mirror the operator console's light search-map palette.
+    /// This map floats over arbitrary video, so these deliberately do not
+    /// resolve from the surrounding light/dark appearance.
+    static let outside = Color(red: 0.91, green: 0.95, blue: 0.92)
+    static let floor = Color.white.opacity(0.96)
+    static let searched = Color(red: 0.09, green: 0.51, blue: 0.29).opacity(0.16)
+    static let stage = Color(red: 0.87, green: 0.93, blue: 0.89)
+    static let outline = Color(red: 0.47, green: 0.61, blue: 0.52)
+    static let searcher = Color(red: 0.09, green: 0.51, blue: 0.29)
+    static let possible = Color(red: 0.85, green: 0.47, blue: 0.02)
+    static let found = Color(red: 0.72, green: 0.18, blue: 0.21)
+    static let markerBorder = Color.white
+    static let plateBorder = Color(red: 0.70, green: 0.81, blue: 0.74)
+    static let label = Color(red: 0.09, green: 0.22, blue: 0.15)
+    static let labelSecondary = Color(red: 0.27, green: 0.40, blue: 0.33)
+    static let legendBackground = Color.white.opacity(0.9)
     /// The seat the operator has tapped but not yet confirmed.
-    static let seatRing = Color.orange
-    /// The hub's current guess at where the thing is.
-    static let candidateRing = Color.red
+    static let seatRing = possible
+    /// The hub only sends this point after the person has been found.
+    static let candidateRing = found
+    static let candidateHalo = found.opacity(0.24)
+    static let ping = Color(red: 1.0, green: 0.82, blue: 0.40)
     /// Used when the hub has not named a colour for this phone yet.
-    static let meFallback = Color.yellow
+    static let meFallback = searcher
 }
 
 /// Ink for the Simulator's drive room. Light on purpose: this is a rehearsal

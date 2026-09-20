@@ -1,7 +1,6 @@
 import CoreImage
 import CoreVideo
 import Foundation
-import Metal
 import SwarmCore
 import UIKit
 
@@ -40,20 +39,16 @@ public final class CoreImageFrameEncoder: FrameEncoding, @unchecked Sendable {
         // Colour management off: it buys nothing for a JPEG a detector will run
         // over, and costs milliseconds a frame.
         //
-        // Backed by Metal explicitly. `useSoftwareRenderer: false` alone does
-        // not guarantee a GPU context, and the YCbCr conversion plus downscale
-        // is exactly the work a GPU does for free and a CPU does slowly — this
-        // is the single biggest term in the capture-to-encode budget.
-        let options: [CIContextOption: Any] = [
+        // Software renderer on purpose for device stability. A Metal-backed
+        // `CIContext` created/used off the main thread was trapping
+        // `_dispatch_assert_queue_fail` (camera on, preview frozen). Encode is
+        // ~10 Hz; CPU is acceptable until that path is proven safe again.
+        context = CIContext(options: [
             .workingColorSpace: NSNull(),
             .outputColorSpace: NSNull(),
             .cacheIntermediates: false,
-        ]
-        if let device = MTLCreateSystemDefaultDevice() {
-            context = CIContext(mtlDevice: device, options: options)
-        } else {
-            context = CIContext(options: options.merging([.useSoftwareRenderer: false]) { a, _ in a })
-        }
+            .useSoftwareRenderer: true,
+        ])
     }
 
     /// The device timestamp of the buffer the last `encode` consumed, so the
