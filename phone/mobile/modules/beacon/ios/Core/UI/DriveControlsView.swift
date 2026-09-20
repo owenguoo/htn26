@@ -107,7 +107,7 @@ struct DriveStickView: View {
         ZStack {
             Circle()
                 .fill(Surface.hudChrome)
-                .overlay(Circle().strokeBorder(MapInk.plateBorder, lineWidth: 1))
+                .overlay(Circle().strokeBorder(MapInk.line, lineWidth: 1))
                 .frame(width: Self.base, height: Self.base)
             Circle()
                 .fill(.hudInk.opacity(isHeld ? 0.95 : 0.7))

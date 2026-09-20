@@ -51,6 +51,7 @@ STALE_MS = 3000          # no frame for this long → tile shows "stale"
 EXTERNAL_POSE_TTL = 5000  # a pose from the positioning service overrides the seat for this long
 REAP_AFTER_MS = 30000    # forget disconnected phones after this long
 SILENT_AFTER_MS = 10000  # answered no ping for this long → treat as gone, even if the socket lingers
+EVICT_MS = 300000        # an operator-removed phone is refused for this long, then may rejoin fresh
 PHASES = ("lobby", "calibrate", "search", "found", "end")  # show flow, driven from /console
 SEARCH_PHASES = ("search", "found")  # coverage and candidate detection only run in these
 REAL_NEAR_MISS = 0.15   # similarity this far below the match threshold still hints (heatmap only)
@@ -194,12 +195,17 @@ class Hub:
         self.directives_cleared: list[str] = []
         self.mission_complete = False       # every responder reached the found candidate
         self.boosted: set[str] = set()      # phones told to capture faster (expanded in a console)
+        self.evicted: dict[str, int] = {}   # phone id → when an operator removed it, refused until EVICT_MS
         self.mapper = None
         self.mission = None                 # Mission Control (LLM); created in main()
 
     # ---- phone lifecycle -------------------------------------------------
-    async def register(self, hello: dict, ws: WebSocket) -> Phone:
+    async def register(self, hello: dict, ws: WebSocket) -> Phone | None:
         pid = str(hello.get("phoneId") or uuid.uuid4())
+        # An operator removed this phone: its automatic reconnect must not put it
+        # back in the swarm, or "Remove camera" would undo itself seconds later.
+        if now_ms() - self.evicted.get(pid, 0) < EVICT_MS:
+            return None
         phone = self.phones.get(pid)
         if phone is None:
             phone = Phone(id=pid, index=self.next_index)
@@ -237,6 +243,25 @@ class Hub:
                 pass
         return phone
 
+    async def remove_phone(self, pid: str) -> bool:
+        """Operator eviction: end this phone's session and drop it from the swarm."""
+        phone = self.phones.pop(pid, None)
+        self.evicted[pid] = now_ms()
+        self.boosted.discard(pid)
+        self.directives.pop(pid, None)
+        if phone is None:
+            return False
+        ws, phone.ws = phone.ws, None
+        phone.connected = False
+        self.search.disconnect(phone.id, phone.stream_id)
+        if ws is not None:
+            try:
+                await ws.send_json({"type": "command", "cmd": "leave", "reason": "removed"})
+            except Exception:
+                pass
+            asyncio.create_task(_close_quietly(ws))
+        return True
+
     def disconnect(self, phone: Phone, ws: WebSocket) -> None:
         if phone.ws is ws:
             phone.ws = None
@@ -259,6 +284,8 @@ class Hub:
             for pid in [p.id for p in self.phones.values()
                         if not p.connected and now - p.last_seen > REAP_AFTER_MS]:
                 del self.phones[pid]
+            for pid in [k for k, at in self.evicted.items() if now - at > EVICT_MS]:
+                del self.evicted[pid]
 
     # ---- inbound -----------------------------------------------------------
     def on_frame(self, phone: Phone, buf: bytes) -> None:
@@ -943,6 +970,9 @@ async def ws_phone(ws: WebSocket) -> None:
     try:
         hello = await ws.receive_json()
         phone = await hub.register(hello, ws)
+        if phone is None:  # removed by an operator
+            await ws.close(code=4003)
+            return
         if phone.ws is not ws:
             return
         await ws.send_json({
@@ -1031,6 +1061,8 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
             elif msg.get("type") == "focus":
                 sub.focus = msg.get("phoneId") or None
                 await hub.update_boost()
+            elif msg.get("type") == "remove":
+                await hub.remove_phone(str(msg.get("phoneId")))
             elif msg.get("type") == "hide":
                 phone = hub.phones.get(str(msg.get("phoneId")))
                 if phone:

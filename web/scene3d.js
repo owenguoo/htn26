@@ -10,6 +10,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { heatLevels, heatCanvas, heatAlpha } from '/web/room.js';
 
 const EYE_H = 1.45;      // phones are held about here
 const FRUSTUM_M = 1.1;   // how far out the live feed floats
@@ -438,8 +439,8 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   }
 
   // ---- probability heatmap on the floor (same data as the 2D map)
-  const heatCanvas = document.createElement('canvas');
-  const heatTex = new THREE.CanvasTexture(heatCanvas);
+  const heatCanvasEl = document.createElement('canvas');
+  const heatTex = new THREE.CanvasTexture(heatCanvasEl);
   heatTex.colorSpace = THREE.SRGBColorSpace;
   const heat = new THREE.Mesh(new THREE.PlaneGeometry(room.width, D),
     new THREE.MeshBasicMaterial({ map: heatTex, transparent: true, depthWrite: false }));
@@ -457,20 +458,18 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
     heat.material.blending = heatMask ? THREE.AdditiveBlending : THREE.NormalBlending;
     heat.material.needsUpdate = true;
     heatKey = cov.heat;
-    heatCanvas.width = cov.cols;
-    heatCanvas.height = cov.rows;
-    const g = heatCanvas.getContext('2d');
-    const img = g.createImageData(cov.cols, cov.rows);
-    for (let i = 0; i < cov.heat.length; i++) {
-      const v = parseInt(cov.heat[i], 36) / 35;
-      // a light warm wash: likely areas glow, searched ones clear. Over a live scan it's fainter and
-      // only where the scan has floor, so the room itself stays the thing you look at.
-      img.data[i * 4] = 87;
-      img.data[i * 4 + 1] = 216;
-      img.data[i * 4 + 2] = 121;
-      img.data[i * 4 + 3] = heatMask ? Math.round(v * v * v * [0, 14, 34][heatMask[i]]) : Math.round(v * v * v * 70);
+    // Same contrast stretch and ramp as the 2D map (`heatLevels`/`heatAlpha` in
+    // room.js), so switching between the two views does not change the story.
+    const levels = heatLevels(cov);
+    if (!levels) {
+      heatCanvas(cov, new Float64Array(cov.cols * cov.rows), () => 0, heatCanvasEl);
+    } else {
+      // A light warm wash: likely areas glow, searched ones clear. Over a live scan it is fainter
+      // and only where the scan has floor, so the room itself stays the thing you look at.
+      const mask = heatMask;
+      heatCanvas(cov, levels, mask ? (v, i) => heatAlpha(v) * [0, 0.2, 0.5][mask[i]] : heatAlpha,
+        heatCanvasEl);
     }
-    g.putImageData(img, 0, 0);
     heatTex.needsUpdate = true;
   }
 

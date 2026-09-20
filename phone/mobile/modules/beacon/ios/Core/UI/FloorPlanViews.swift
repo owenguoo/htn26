@@ -1,11 +1,15 @@
+import CoreGraphics
+import Foundation
 import SwiftUI
 import SwarmCore
 
-private enum FloorPlanMarker {
-    /// Matches the console marker system: 22 points outside-to-outside with a
-    /// 2-point border, and four points of air before any attached label.
+/// The console's marker system: 20 points outside-to-outside with a 2-point
+/// white border, and four points of air before any attached label.
+/// `MAP_MARKER_*` / `MAP_LABEL_*` in `web/console.js`.
+private enum MapMarker {
     static let radius: CGFloat = 10
     static let stroke: CGFloat = 2
+    static let labelHeight: CGFloat = 18
     static let labelGap: CGFloat = 4
 }
 
@@ -15,30 +19,26 @@ private enum FloorPlanMarker {
 /// **The stage lives at negative y, outside the room rectangle.** That is
 /// `web/room.js` `bounds()`: `y0 = -stage.depth`, `y1 = room.depth`. The room
 /// outline starts at y = 0 and the stage block sits above it, against the wall.
-/// Drawing the stage inside the room — which is what this used to do — put the
-/// rectangle below the stage instead of beside it and did not match the console.
 ///
-/// Two modes. With no `focus` the whole plan, stage included, is fitted into
-/// the view. With a `focus` the view is a fixed-size window of `metresAcross`
-/// centred on that point: the map scrolls under the operator instead of the
-/// operator walking off the edge of it. That matters more than it sounds —
-/// `room.json` is a nominal 20 × 15 m, and real rooms, seat-tap origins and
-/// drift all put people outside it.
+/// Two modes. With no `focus` the whole plan is fitted into the view with the
+/// console's own 28 points of padding — `makeView(room, w, h, 28)`. With a
+/// `focus` the view is a fixed-size window of `metresAcross` centred on that
+/// point: the map scrolls under the operator instead of the operator walking
+/// off the edge of it. That matters more than it sounds — `room.json` is a
+/// nominal 20 × 15 m, and real rooms, seat origins and drift all put people
+/// outside it. The console never needs it because nobody is standing in it.
 struct FloorPlanGeometry {
     let room: HubRoom
     let size: CGSize
     var focus: (x: Double, y: Double)?
     var metresAcross: Double = 12
-    /// Breathing room around a fitted plan, in points. `makeView` in room.js
-    /// uses 28 on the console's much larger canvas.
-    var padding: CGFloat = 10
+    var padding: CGFloat = 28
 
-    /// `bounds()` in room.js: the stage hangs off the top of the room.
     private var stageDepth: Double { room.stage?.depth ?? 0 }
     private var spanX: Double { room.width }
     private var spanY: Double { room.depth + stageDepth }
 
-    private var scale: CGFloat {
+    var scale: CGFloat {
         guard focus == nil else { return size.width / metresAcross }
         return min(max(1, size.width - 2 * padding) / spanX, max(1, size.height - 2 * padding) / spanY)
     }
@@ -58,12 +58,6 @@ struct FloorPlanGeometry {
         CGPoint(x: origin.x + (x + room.width / 2) * scale, y: origin.y + y * scale)
     }
 
-    func room(at point: CGPoint) -> HubSeat {
-        let x = (point.x - origin.x) / scale - room.width / 2
-        let y = (point.y - origin.y) / scale
-        return HubSeat(x: min(room.width / 2, max(-room.width / 2, x)), y: min(room.depth, max(0, y)))
-    }
-
     func length(_ metres: Double) -> CGFloat { metres * scale }
 
     /// The room's outline, wherever that falls — partly or wholly off-view when following.
@@ -79,129 +73,238 @@ struct FloorPlanGeometry {
     }
 }
 
-/// The shared picture: where I am, where everyone else is and which way they
-/// are looking, what has been searched, where the pings are.
+/// The search map, drawn the way the operator console draws it.
 ///
-/// Everything here is redrawn from `world`, which the hub pushes at `WORLD_HZ`,
-/// so both the mini-map and the full map are live without either of them asking
-/// for anything. The mini-map is the same drawing with the detail turned down.
+/// This is `draw()` in `web/console.js`, in the same order with the same
+/// numbers: the backdrop gradient, the floor, the coverage field, the walls,
+/// the stage, everyone's view cone, pings, the found person, then the phone
+/// markers on top. The operator and the console are looking at one picture of
+/// one room, and the fastest way for them to stop agreeing is for the two
+/// renderers to drift apart — so where a literal appears here, the `console.js`
+/// line it came from is named beside it.
+///
+/// What the phone adds is `focus`: the mini-map follows the operator. What it
+/// leaves out is what the console alone can do — planner sector overlays, the
+/// draggable rehearsal target, the marker pin, the explain overlay — because
+/// the phone's `world` message does not carry any of it.
 struct FloorPlanCanvas: View {
     let room: HubRoom
     let world: HubWorld?
     let me: RoomPose?
-    let colorHex: String?
     let pings: [PingCue]
     /// Keep `me` in the middle and scroll the room underneath.
     var followsMe = false
-    /// Off on the mini-map: numbers, the STAGE word and ping labels need room.
+    /// Off on the mini-map, where there is no room for the STAGE word, the
+    /// labels over the pins or the scale bar.
     var showsDetail = true
-    /// Lets a caller pick the tap target's geometry back out of the view.
-    var onGeometry: ((FloorPlanGeometry) -> Void)?
+    /// Seconds on a monotonic clock. The expanding rings derive their phase
+    /// from it the way the console does, each with its own divisor:
+    /// `(performance.now() / 1000) % 1` for a ping, `/ 1100` for a find.
+    var time: Double = 0
 
     var body: some View {
         Canvas { context, size in
             let plan = FloorPlanGeometry(room: room, size: size,
                                          focus: followsMe ? me.map { ($0.x, $0.y) } : nil,
-                                         padding: showsDetail ? 10 : 4)
-            onGeometry?(plan)
-            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(MapInk.outside))
-            context.fill(Path(roundedRect: plan.bounds, cornerRadius: 4), with: .color(MapInk.floor))
+                                         padding: showsDetail ? 28 : 6)
+            backdrop(&context, size: size)
 
-            drawCoverage(&context, plan: plan)
-
+            // drawRoom(): floor, then walls, with the stage hanging off the top.
+            // Square corners and a 2-point wall, exactly as `fillRect`/`strokeRect`.
+            context.fill(Path(plan.bounds), with: .color(MapInk.floor))
+            coverage(&context, plan: plan)
+            context.stroke(Path(plan.bounds), with: .color(MapInk.wall), lineWidth: 2)
             if let stage = plan.stageRect {
-                context.fill(Path(roundedRect: stage, cornerRadius: 3), with: .color(MapInk.stage))
-                context.stroke(Path(roundedRect: stage, cornerRadius: 3), with: .color(MapInk.outline),
-                               lineWidth: 1)
-                if showsDetail, stage.height > 14 {
-                    context.draw(Text("STAGE")
-                        .font(.system(size: min(13, stage.height * 0.5), weight: .semibold))
-                        .foregroundStyle(MapInk.labelSecondary), at: CGPoint(x: stage.midX, y: stage.midY))
+                context.fill(Path(stage), with: .color(MapInk.stage))
+                if showsDetail {
+                    // `600 ${Math.max(10, view.scale * 0.6)}px` — the STAGE word
+                    // grows with the room, not with the operator's text size.
+                    let fontSize = max(10, plan.scale * 0.6)
+                    context.draw(Text("STAGE").font(.system(size: fontSize, weight: .semibold))
+                        .foregroundStyle(MapInk.stageLabel), at: CGPoint(x: stage.midX, y: stage.midY))
                 }
             }
-            context.stroke(Path(roundedRect: plan.bounds, cornerRadius: 4), with: .color(MapInk.outline),
-                           lineWidth: 1.25)
 
-            // What everyone is looking at, under the markers — the console's
-            // view cones, at the console's own fov and range.
-            for peer in world?.phones ?? [] {
-                guard let heading = peer.h else { continue }
-                cone(&context, plan: plan, x: peer.x, y: peer.y, heading: heading,
-                     opacity: peer.id == world?.me ? 0.2 : 0.11)
-            }
-            // Before the hub has listed this phone in `world.phones` — the first
-            // second after joining, and any tick where the pose was too stale to
-            // report — the operator is still on the map from the local pose, so
-            // draw their cone from that instead of leaving a dot with no gaze.
-            if let me, let heading = me.heading,
-               !(world?.phones ?? []).contains(where: { $0.id == world?.me }) {
-                cone(&context, plan: plan, x: me.x, y: me.y, heading: heading, opacity: 0.2)
+            let people = searchers
+            for who in people {
+                guard let heading = who.heading else { continue }
+                cone(&context, plan: plan, x: who.x, y: who.y, heading: heading)
             }
 
-            for peer in world?.phones ?? [] where peer.id != world?.me {
-                searcher(&context, at: plan.point(x: peer.x, y: peer.y), heading: peer.h,
-                         number: showsDetail ? peer.i : nil, isMe: false)
+            var labels: [CGRect] = []
+            drawPings(&context, plan: plan)
+            drawCandidate(&context, plan: plan, labels: &labels, size: size)
+            for who in people {
+                phone(&context, at: plan.point(x: who.x, y: who.y), heading: who.heading, number: who.index)
             }
-            for ping in pings {
-                let p = plan.point(x: ping.x, y: ping.y)
-                var diamond = Path()
-                diamond.move(to: CGPoint(x: p.x, y: p.y - 7))
-                diamond.addLine(to: CGPoint(x: p.x + 7, y: p.y))
-                diamond.addLine(to: CGPoint(x: p.x, y: p.y + 7))
-                diamond.addLine(to: CGPoint(x: p.x - 7, y: p.y))
-                diamond.closeSubpath()
-                context.fill(diamond, with: .color(MapInk.ping))
-                context.stroke(diamond, with: .color(MapInk.markerBorder), lineWidth: 1)
-            }
-            if let candidate = world?.candidate {
-                let p = plan.point(x: candidate.x, y: candidate.y)
-                context.stroke(Path(ellipseIn: CGRect(x: p.x - 16, y: p.y - 16, width: 32, height: 32)),
-                               with: .color(MapInk.candidateHalo), lineWidth: FloorPlanMarker.stroke)
-                person(&context, at: p, color: MapInk.candidateRing)
-            }
-            if let me {
-                let myIndex = world?.phones?.first(where: { $0.id == world?.me })?.i
-                searcher(&context, at: plan.point(x: me.x, y: me.y), heading: me.heading,
-                         number: showsDetail ? myIndex : nil, isMe: true)
-            }
+            if showsDetail { scaleBar(&context, plan: plan, size: size) }
         }
     }
 
-    /// `drawCoverage` in `web/console.js`, with the same ink, the same radius,
-    /// the same blur and the same `.025 + .16·level²` ramp.
+    private struct Searcher {
+        var x: Double
+        var y: Double
+        var heading: Double?
+        var index: Int?
+    }
+
+    /// Everyone on the map, the operator included. The hub lists this phone in
+    /// `world.phones` like any other; before it has (the first second after
+    /// joining, or a tick where the pose was too stale to report) the local
+    /// pose stands in, so the operator's own dot never blinks out.
+    private var searchers: [Searcher] {
+        let phones = world?.phones ?? []
+        var out = phones.map { Searcher(x: $0.x, y: $0.y, heading: $0.h, index: $0.i) }
+        if let me, !phones.contains(where: { $0.id == world?.me }) {
+            out.append(Searcher(x: me.x, y: me.y, heading: me.heading, index: nil))
+        }
+        return out
+    }
+
+    /// `#mapWrap`'s CSS background, which the half-transparent floor sits on.
+    private func backdrop(_ context: inout GraphicsContext, size: CGSize) {
+        let centre = CGPoint(x: size.width * 0.5, y: size.height * 0.45)
+        context.fill(Path(CGRect(origin: .zero, size: size)), with: .radialGradient(
+            Gradient(stops: [.init(color: MapInk.backdropCentre, location: 0),
+                             .init(color: MapInk.backdropMid, location: 0.72),
+                             .init(color: MapInk.backdropEdge, location: 1)]),
+            center: centre, startRadius: 0, endRadius: max(size.width, size.height) * 0.75))
+    }
+
+    /// `drawCoverage()` in `web/console.js`, sharing its `heatLevels` /
+    /// `heatAlpha` from `web/room.js`: the field is equalised, then painted
+    /// once at cell resolution and scaled up, rather than stamped as one
+    /// blurred disc per cell.
     ///
-    /// The console has the hub's `heat` string — a per-cell probability. The
-    /// phone's `world` message carries only `cells`, which is binary, so the
-    /// gradient is recovered here by averaging each cell over its neighbours.
-    /// That turns a checkerboard of hard dots into the soft field the console
-    /// draws; the edges of a searched region fade instead of ending on a grid
-    /// line, which is what made the two maps look like different products.
-    private func drawCoverage(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
+    /// **The field is probability, not coverage.** The console draws the hub's
+    /// `heat`, which is high where the candidate probably *is* — and that is
+    /// mostly where nobody has looked yet, because every camera look
+    /// multiplies the cells it swept downwards (`swarm/coverage.py`). Drawing
+    /// "where we have looked" instead, which is what this used to do, lit up
+    /// the floor the swarm had already cleared and left the unsearched floor
+    /// blank: the exact inverse of the console's picture of the same room.
+    private func coverage(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
         guard let coverage = world?.coverage else { return }
         let cols = max(1, coverage.cols), rows = max(1, coverage.rows)
-        let levels = Self.smoothed(coverage.cells, cols: cols, rows: rows)
-        guard levels.count == cols * rows else { return }
-        guard let low = levels.min(), let high = levels.max(), high - low > 0.04 else { return }
+        guard let levels = Self.heatLevels(heat: coverage.heat, cells: coverage.cells,
+                                           cols: cols, rows: rows),
+              let field = Self.heatImage(levels, cols: cols, rows: rows) else { return }
 
-        let side = plan.length(coverage.cell)
-        let radius = max(showsDetail ? 8 : 5, side * 1.8)
+        let topLeft = plan.point(x: coverage.x0, y: 0)
+        let bottomRight = plan.point(x: coverage.x0 + Double(cols) * coverage.cell,
+                                     y: Double(rows) * coverage.cell)
+        let rect = CGRect(x: topLeft.x, y: topLeft.y,
+                          width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y)
+        guard rect.width > 1, rect.height > 1 else { return }
+        // Half a cell of blur on top of the scaler's own interpolation: enough
+        // to lose the grid, not enough to smear a hotspot off where it is.
+        let blur: CGFloat = max(showsDetail ? 3 : 1.5, plan.length(coverage.cell) * 0.5)
         context.drawLayer { layer in
-            layer.addFilter(.blur(radius: max(showsDetail ? 4 : 2.5, radius * 0.45)))
-            for row in 0..<rows {
-                for col in 0..<cols {
-                    let level = (levels[row * cols + col] - low) / (high - low)
-                    guard level >= 0.16 else { continue }
-                    let centre = plan.point(x: coverage.x0 + (Double(col) + 0.5) * coverage.cell,
-                                            y: (Double(row) + 0.5) * coverage.cell)
-                    layer.fill(Path(ellipseIn: CGRect(x: centre.x - radius, y: centre.y - radius,
-                                                      width: radius * 2, height: radius * 2)),
-                               with: .color(MapInk.heat.opacity(0.025 + 0.16 * level * level)))
-                }
-            }
+            layer.clip(to: Path(rect))  // heat stops at the walls
+            layer.addFilter(.blur(radius: blur))
+            layer.interpolation = .high
+            layer.draw(Image(decorative: field, scale: 1, orientation: .up), in: rect)
         }
+    }
+
+    /// `heatLevels()` in `web/room.js`, over whichever field the hub sent.
+    ///
+    /// With `heat` this is the console's own probability field, character for
+    /// character. Without it — `hub.py`'s `world_loop` does not forward `heat`
+    /// to phones today — the binary `cells` mask is inverted into "nobody has
+    /// looked here, so they may still be here" and quantised into the same 36
+    /// steps, so the rest of the pipeline is identical either way. That
+    /// fallback is only an approximation, and a short-lived one: `cells` is a
+    /// one-way latch that a four-phone sweep drives past 90% in seconds, and
+    /// once every cell is set the field is flat and nothing is drawn.
+    ///
+    /// Nil when the field is too flat to say anything.
+    static func heatLevels(heat: String?, cells: String, cols: Int, rows: Int) -> [Double]? {
+        let n = cols * rows
+        guard n > 0 else { return nil }
+        let top = heatSteps - 1
+        let bins: [Int]
+        if let heat, heat.utf8.count >= n {
+            bins = Array(heat.utf8.prefix(n)).map { min(top, max(0, base36($0))) }
+        } else {
+            let looked = smoothed(cells, cols: cols, rows: rows)
+            guard looked.count == n else { return nil }
+            bins = looked.map { min(top, max(0, Int((min(1, max(0, 1 - $0)) * Double(top)).rounded()))) }
+        }
+        let sorted = bins.sorted()
+        let spread = Double(sorted[n - 1] - sorted[Int(Double(n) * heatLowPercentile)]) / Double(top)
+        guard spread > heatMinSpread else { return nil }
+        return heatEqualise(bins)
+    }
+
+    /// One base-36 digit, the way `parseInt(c, 36)` reads it. Anything else is 0.
+    @inline(__always)
+    static func base36(_ byte: UInt8) -> Int {
+        switch byte {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"): return Int(byte - UInt8(ascii: "0"))
+        case UInt8(ascii: "a")...UInt8(ascii: "z"): return Int(byte - UInt8(ascii: "a")) + 10
+        case UInt8(ascii: "A")...UInt8(ascii: "Z"): return Int(byte - UInt8(ascii: "A")) + 10
+        default: return 0
+        }
+    }
+
+    /// Rank of each bin among all cells, 0…1, ties sharing the midpoint of the
+    /// span they occupy. A plain min/max stretch cannot draw this field: most
+    /// of it is one plateau of cells nobody has looked at, which a linear ramp
+    /// paints as a solid sheet, and that plateau collapses into a step or two
+    /// the moment one detection lifts a single cell far above it — at which
+    /// point the same linear ramp paints the whole room as empty. Ranking
+    /// survives both.
+    static func heatEqualise(_ bins: [Int]) -> [Double] {
+        let n = bins.count
+        var counts = [Int](repeating: 0, count: heatSteps)
+        for b in bins where b >= 0 && b < heatSteps { counts[b] += 1 }
+        var level = [Double](repeating: 0, count: heatSteps)
+        var seen = 0
+        for v in 0..<heatSteps where counts[v] > 0 {
+            level[v] = n > 1 ? (Double(seen) + Double(counts[v] - 1) / 2) / Double(n - 1) : 1
+            seen += counts[v]
+        }
+        return bins.map { $0 >= 0 && $0 < heatSteps ? level[$0] : 0 }
+    }
+
+    /// `HEAT_MAX_ALPHA` / `HEAT_GAMMA` / `HEAT_STEPS` / `HEAT_MIN_SPREAD` /
+    /// `HEAT_LOW_PERCENTILE` in `web/room.js`. Keep the five in step with it.
+    static let heatMaxAlpha: Double = 0.34
+    static let heatGamma: Double = 1.8
+    static let heatSteps = 36
+    static let heatMinSpread: Double = 0.04
+    static let heatLowPercentile: Double = 0.05
+
+    static func heatAlpha(_ level: Double) -> Double {
+        heatMaxAlpha * pow(min(1, max(0, level)), heatGamma)
+    }
+
+    /// The field as a cols×rows bitmap in `MapInk.heat`, one pixel per cell,
+    /// drawn scaled up with interpolation. `heatCanvas()` in `web/room.js`.
+    static func heatImage(_ levels: [Double], cols: Int, rows: Int) -> CGImage? {
+        guard cols > 0, rows > 0, levels.count >= cols * rows else { return nil }
+        // `MapInk.heat` = rgb(24, 131, 75), premultiplied by the cell's alpha.
+        let ink = (r: 24.0, g: 131.0, b: 75.0)
+        var bytes = [UInt8](repeating: 0, count: cols * rows * 4)
+        for i in 0..<(cols * rows) {
+            let a = heatAlpha(levels[i])
+            bytes[i * 4] = UInt8((ink.r * a).rounded())
+            bytes[i * 4 + 1] = UInt8((ink.g * a).rounded())
+            bytes[i * 4 + 2] = UInt8((ink.b * a).rounded())
+            bytes[i * 4 + 3] = UInt8((255 * a).rounded())
+        }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        return CGImage(width: cols, height: rows, bitsPerComponent: 8, bitsPerPixel: 32,
+                       bytesPerRow: cols * 4, space: CGColorSpaceCreateDeviceRGB(),
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true,
+                       intent: .defaultIntent)
     }
 
     /// Each cell averaged with its eight neighbours, itself counting double.
+    /// Without it the binary mask upscales into hard-edged blocks where the
+    /// console has a soft field, which is what made the two look unrelated.
     static func smoothed(_ cells: String, cols: Int, rows: Int) -> [Double] {
         let bytes = Array(cells.utf8)
         guard bytes.count >= cols * rows, cols > 0, rows > 0 else { return [] }
@@ -224,10 +327,12 @@ struct FloorPlanCanvas: View {
         return out
     }
 
-    /// `drawCone` in `web/room.js`: a wedge that fades out along its length.
+    /// `drawCone()` in `web/room.js` at `console.js`'s connected alpha, over
+    /// `CONE_DRAW_SCALE` of the camera's real range — the same shortening the
+    /// console applies, so both maps claim the same amount of floor is seen.
     private func cone(_ context: inout GraphicsContext, plan: FloorPlanGeometry,
-                      x: Double, y: Double, heading: Double, opacity: Double) {
-        let length = plan.length(FloorPlanCanvas.coneLength(room))
+                      x: Double, y: Double, heading: Double) {
+        let length = plan.length((room.coneLength ?? 5) * Self.coneDrawScale)
         guard length > 2 else { return }
         let p = plan.point(x: x, y: y)
         // Canvas angle 0 = +x; heading 0 = −y (toward the stage).
@@ -238,111 +343,204 @@ struct FloorPlanCanvas: View {
         wedge.addArc(center: p, radius: length, startAngle: mid - half, endAngle: mid + half, clockwise: false)
         wedge.closeSubpath()
         context.fill(wedge, with: .radialGradient(
-            Gradient(colors: [MapInk.searcher.opacity(opacity), MapInk.searcher.opacity(0)]),
+            Gradient(colors: [MapInk.heat.opacity(0.12), MapInk.heat.opacity(0)]),
             center: p, startRadius: 0, endRadius: length))
     }
 
-    /// The console draws the cone at the room's full camera range. On a phone
-    /// that swamps the picture, so the mini-map keeps the angle and shortens
-    /// the reach — the same call the console now makes.
-    static func coneLength(_ room: HubRoom) -> Double { (room.coneLength ?? 5) * 0.6 }
+    /// `CONE_DRAW_SCALE` in `web/console.js`. Keep the two in step.
+    static let coneDrawScale: Double = 0.6
 
-    private func searcher(_ context: inout GraphicsContext, at point: CGPoint, heading: Double?,
-                          number: Int?, isMe: Bool) {
-        let radius = isMe ? FloorPlanMarker.radius : FloorPlanMarker.radius * 0.85
-        if let heading {
-            // Heading 0 faces the stage, which is up; clockwise from there.
-            let angle = heading * .pi / 180
-            let direction = CGVector(dx: sin(angle), dy: -cos(angle))
-            let side = CGVector(dx: cos(angle), dy: sin(angle))
-            let tip = CGPoint(x: point.x + direction.dx * (radius + 6), y: point.y + direction.dy * (radius + 6))
-            let base = CGPoint(x: point.x + direction.dx * (radius - 2), y: point.y + direction.dy * (radius - 2))
-            var pointer = Path()
-            pointer.move(to: tip)
-            pointer.addLine(to: CGPoint(x: base.x + side.dx * 5, y: base.y + side.dy * 5))
-            pointer.addLine(to: CGPoint(x: base.x - side.dx * 5, y: base.y - side.dy * 5))
-            pointer.closeSubpath()
-            context.fill(pointer, with: .color(isMe ? MapInk.searcher : MapInk.peer))
+    /// `drawPhone()`: a dot with a heading triangle, the phone's index in it.
+    private func phone(_ context: inout GraphicsContext, at point: CGPoint,
+                       heading: Double?, number: Int?) {
+        context.drawLayer { layer in
+            layer.addFilter(.shadow(color: MapInk.markerShadow, radius: 7, x: 0, y: 2))
+            if let heading {
+                let angle = CGFloat(heading * .pi / 180)
+                // ctx.rotate(heading), then moveTo(0,-16) lineTo(5,-8) lineTo(-5,-8).
+                let rotate = { (x: CGFloat, y: CGFloat) -> CGPoint in
+                    CGPoint(x: point.x + x * cos(angle) - y * sin(angle),
+                            y: point.y + x * sin(angle) + y * cos(angle))
+                }
+                var pointer = Path()
+                pointer.move(to: rotate(0, -16))
+                pointer.addLine(to: rotate(5, -8))
+                pointer.addLine(to: rotate(-5, -8))
+                pointer.closeSubpath()
+                layer.fill(pointer, with: .color(MapInk.searcher))
+            }
+            let circle = Path(ellipseIn: CGRect(x: point.x - MapMarker.radius, y: point.y - MapMarker.radius,
+                                                width: MapMarker.radius * 2, height: MapMarker.radius * 2))
+            layer.fill(circle, with: .color(MapInk.searcher))
+            layer.stroke(circle, with: .color(MapInk.markerBorder), lineWidth: MapMarker.stroke)
         }
-        let circle = Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius,
-                                            width: radius * 2, height: radius * 2))
-        context.fill(circle, with: .color(isMe ? MapInk.searcher : MapInk.peer))
-        context.stroke(circle, with: .color(MapInk.markerBorder), lineWidth: FloorPlanMarker.stroke)
         if let number {
             context.draw(Text(String(number)).font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(MapInk.markerBorder), at: point)
+                .foregroundStyle(MapInk.markerBorder), at: CGPoint(x: point.x, y: point.y + 0.5))
         }
     }
 
+    /// `drawPersonGlyph()`: a head and shoulders in a white disc.
     private func person(_ context: inout GraphicsContext, at point: CGPoint, color: Color) {
-        let circle = Path(ellipseIn: CGRect(x: point.x - FloorPlanMarker.radius,
-                                            y: point.y - FloorPlanMarker.radius,
-                                            width: FloorPlanMarker.radius * 2,
-                                            height: FloorPlanMarker.radius * 2))
+        let circle = Path(ellipseIn: CGRect(x: point.x - MapMarker.radius, y: point.y - MapMarker.radius,
+                                            width: MapMarker.radius * 2, height: MapMarker.radius * 2))
         context.fill(circle, with: .color(MapInk.markerBorder))
-        context.stroke(circle, with: .color(color), lineWidth: FloorPlanMarker.stroke)
+        context.stroke(circle, with: .color(color), lineWidth: MapMarker.stroke)
         context.fill(Path(ellipseIn: CGRect(x: point.x - 2.7, y: point.y - 6.2, width: 5.4, height: 5.4)),
                      with: .color(color))
         context.fill(Path(roundedRect: CGRect(x: point.x - 4.5, y: point.y + 0.5, width: 9, height: 5.5),
                           cornerRadius: 3), with: .color(color))
     }
+
+    /// `drawPings()`: an expanding ring, a dark diamond, and the label above it.
+    private func drawPings(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
+        for ping in pings {
+            let p = plan.point(x: ping.x, y: ping.y)
+            let k = time.truncatingRemainder(dividingBy: 1)
+            let radius = CGFloat(6 + k * 18)
+            context.stroke(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius,
+                                                  width: radius * 2, height: radius * 2)),
+                           with: .color(MapInk.heat.opacity(0.8 * (1 - k))), lineWidth: 1)
+            var diamond = Path()
+            diamond.move(to: CGPoint(x: p.x, y: p.y - 7))
+            diamond.addLine(to: CGPoint(x: p.x + 7, y: p.y))
+            diamond.addLine(to: CGPoint(x: p.x, y: p.y + 7))
+            diamond.addLine(to: CGPoint(x: p.x - 7, y: p.y))
+            diamond.closeSubpath()
+            context.fill(diamond, with: .color(MapInk.ping))
+            guard showsDetail else { continue }
+            context.draw(Text(ping.label).font(.system(size: 11, weight: .medium))
+                .foregroundStyle(MapInk.ping), at: CGPoint(x: p.x, y: p.y - 14))
+        }
+    }
+
+    /// The found-person half of `drawCandidate()`. The rehearsal target, the
+    /// responder lines and the marker pin are console-only: nothing in the
+    /// phone's `world` message describes them.
+    private func drawCandidate(_ context: inout GraphicsContext, plan: FloorPlanGeometry,
+                               labels: inout [CGRect], size: CGSize) {
+        guard let candidate = world?.candidate else { return }
+        let p = plan.point(x: candidate.x, y: candidate.y)
+        // `(performance.now() / 1100) % 1` — a little slower than the pings.
+        let k = (time * 1000 / 1100).truncatingRemainder(dividingBy: 1)
+        let radius = MapMarker.radius + MapMarker.stroke + 1 + CGFloat(k * 24)
+        context.stroke(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius,
+                                              width: radius * 2, height: radius * 2)),
+                       with: .color(MapInk.found.opacity(0.7 * (1 - k))), lineWidth: 2)
+        person(&context, at: p, color: MapInk.found)
+        guard showsDetail else { return }
+        let y = p.y - MapMarker.radius - MapMarker.stroke / 2 - MapMarker.labelGap - MapMarker.labelHeight / 2
+        mapLabel(&context, "FOUND PERSON", at: CGPoint(x: p.x, y: y), background: MapInk.found,
+                 labels: &labels, size: size)
+    }
+
+    /// `drawMapLabel()` plus `reserveMapLabel()`: a pill in the marker's colour,
+    /// nudged vertically until it is not sitting on another one.
+    private func mapLabel(_ context: inout GraphicsContext, _ text: String, at point: CGPoint,
+                          background: Color, labels: inout [CGRect], size: CGSize) {
+        let resolved = context.resolve(Text(text).font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(MapInk.markerBorder))
+        let width = resolved.measure(in: CGSize(width: .infinity, height: .infinity)).width + 12
+        let half = width / 2
+        let x = max(half + 4, min(size.width - half - 4, point.x))
+        var rect = CGRect(x: x - half, y: point.y - 9, width: width, height: MapMarker.labelHeight)
+        for offset in [0, -22, -44, 22, 44, -66, 66] as [CGFloat] {
+            let y = max(MapMarker.labelHeight / 2 + 4,
+                        min(size.height - MapMarker.labelHeight / 2 - 4, point.y + offset))
+            rect = CGRect(x: x - half, y: y - 9, width: width, height: MapMarker.labelHeight)
+            if !labels.contains(where: { $0.insetBy(dx: -3, dy: -3).intersects(rect) }) { break }
+        }
+        labels.append(rect)
+        context.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(background))
+        context.draw(resolved, at: CGPoint(x: rect.midX, y: rect.midY + 0.5))
+    }
+
+    /// `.map-scale`: a 5 m rule in the bottom-right corner.
+    private func scaleBar(_ context: inout GraphicsContext, plan: FloorPlanGeometry, size: CGSize) {
+        let width = plan.length(5)
+        guard width > 16, width < size.width - 60 else { return }
+        let right = size.width - 14, bottom = size.height - 14
+        var rule = Path()
+        rule.move(to: CGPoint(x: right - width, y: bottom - 6))
+        rule.addLine(to: CGPoint(x: right - width, y: bottom))
+        rule.addLine(to: CGPoint(x: right, y: bottom))
+        rule.addLine(to: CGPoint(x: right, y: bottom - 6))
+        context.stroke(rule, with: .color(MapInk.labelTertiary), lineWidth: 1)
+        context.draw(Text("5 m").font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(MapInk.labelTertiary),
+                     at: CGPoint(x: right - width - 14, y: bottom - 4))
+    }
 }
 
-/// The corner map. Live, and small enough that everything on it has to earn its
-/// place: the room, the heat, everyone's cone and dot, and me in the middle.
-///
-/// The searched readout is a row *under* the plan, not a plate floating on top
-/// of it. Overlaid, it covered the bottom third of a 132 × 150 map — including
-/// the operator's own dot whenever they walked toward the back of the room.
+/// Wraps the map in a clock only when something on it is actually animating.
+/// The console repaints on every animation frame regardless; a phone running
+/// ARKit, an encoder and a socket does not get to be that relaxed, so a map
+/// with no pings and nobody found is drawn once and left alone.
+private struct PulsingFloorPlan<Content: View>: View {
+    let isAnimating: Bool
+    @ViewBuilder var content: (Double) -> Content
+
+    var body: some View {
+        if isAnimating {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                content(timeline.date.timeIntervalSinceReferenceDate)
+            }
+        } else {
+            content(0)
+        }
+    }
+}
+
+/// The corner map: the console's map, scrolled to keep the operator centred,
+/// with the labels and the scale bar dropped because there is no room for them.
+/// The strip underneath is the console's legend strip — same background, same
+/// ink, cut down to the two numbers that mean anything to a person in the room.
 struct MiniMapView: View {
     let room: HubRoom
     let world: HubWorld?
     let me: RoomPose?
-    let colorHex: String?
     let pings: [PingCue]
 
     var body: some View {
         VStack(spacing: 0) {
-            FloorPlanCanvas(room: room, world: world, me: me, colorHex: colorHex, pings: pings,
-                            followsMe: true, showsDetail: false)
+            PulsingFloorPlan(isAnimating: !pings.isEmpty || world?.candidate != nil) { time in
+                FloorPlanCanvas(room: room, world: world, me: me, pings: pings,
+                                followsMe: true, showsDetail: false, time: time)
+            }
             if let searched = world?.searched {
                 HStack(spacing: Space.xs) {
-                    Image(systemName: "square.grid.2x2")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(MapInk.labelSecondary)
-                    Text("\(Int((searched * 100).rounded()))%")
-                        .foregroundStyle(MapInk.label)
-                    Spacer(minLength: 0)
+                    Text("\(Int((searched * 100).rounded()))% searched")
+                    Spacer(minLength: Space.xs)
                     if let searchers = world?.searchers, searchers > 0 {
-                        Image(systemName: "person.2.fill")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(MapInk.labelSecondary)
                         Text("\(searchers)")
-                            .foregroundStyle(MapInk.label)
+                        Image(systemName: "person.2.fill").font(.system(size: 8, weight: .bold))
                     }
                 }
-                .font(TypeScale.readout)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(MapInk.labelSecondary)
                 .padding(.horizontal, Space.s)
-                .padding(.vertical, Space.xs)
+                .padding(.vertical, 5)
                 .frame(maxWidth: .infinity)
                 .background(MapInk.legendBackground)
+                .overlay(alignment: .top) { MapInk.line.frame(height: 1) }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Area searched")
                 .accessibilityValue("\(Int((searched * 100).rounded())) percent")
             }
         }
         .clipShape(Radius.rect(Radius.plate))
-        .overlay(Radius.rect(Radius.plate).stroke(MapInk.plateBorder, lineWidth: 1))
+        .overlay(Radius.rect(Radius.plate).stroke(MapInk.line, lineWidth: 1))
         .cameraChrome()
     }
 }
 
 /// The map, full size. Opened by tapping the mini-map, and that is all it is:
-/// the same live picture with the whole room in view. It carries no controls —
-/// no "confirm you're on your spot", no "forget the marker lock". Those belong
-/// them under the map meant every glance at where the team was came with a
-/// prompt about a problem the operator had not asked about. There is now one
-/// way to get located anyway, and it is to look at a printed marker.
+/// the console's search map with the whole room in view, live, with the
+/// console's own legend under it.
+///
+/// It carries no controls. Looking at where the team is should not come with a
+/// prompt about a problem the operator did not ask about — and getting located
+/// has one answer anyway, which is to look at a printed marker.
 struct RoomMapView: View {
     let room: HubRoom
     let world: HubWorld?
@@ -351,7 +549,7 @@ struct RoomMapView: View {
     let onClose: () -> Void
 
     private var summary: String {
-        var parts = ["\(Int((((world?.searched ?? 0)) * 100).rounded()))% searched"]
+        var parts = ["\(Int(((world?.searched ?? 0) * 100).rounded()))% searched"]
         if let searchers = world?.searchers, searchers > 0 {
             parts.append(searchers == 1 ? "1 searching" : "\(searchers) searching")
         }
@@ -362,13 +560,11 @@ struct RoomMapView: View {
         VStack(spacing: Space.m) {
             HStack {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Map").font(TypeScale.sheetTitle)
-                    if let lookingFor = world?.lookingFor, !lookingFor.isEmpty {
-                        Text(lookingFor)
-                            .font(TypeScale.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    Text("Search map").font(TypeScale.sheetTitle)
+                    Text("\(Int(room.width)) × \(Int(room.depth)) m · \(summary)")
+                        .font(TypeScale.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 Spacer()
                 Button(action: onClose) {
@@ -381,28 +577,55 @@ struct RoomMapView: View {
                 .accessibilityLabel("Close")
             }
 
-            FloorPlanCanvas(room: room, world: world, me: me, colorHex: nil, pings: pings)
+            VStack(spacing: 0) {
+                PulsingFloorPlan(isAnimating: !pings.isEmpty || world?.candidate != nil) { time in
+                    FloorPlanCanvas(room: room, world: world, me: me, pings: pings, time: time)
+                }
                 .aspectRatio(room.width / max(1, room.depth + (room.stage?.depth ?? 0)), contentMode: .fit)
-                // The plan is the same drawn artefact as the mini-map — dark
-                // strokes on a light floor — so it keeps its own ink whichever
-                // way the card around it resolves.
-                .clipShape(Radius.rect(Radius.plate))
-                .overlay(Radius.rect(Radius.plate).stroke(MapInk.plateBorder, lineWidth: 1))
                 .accessibilityLabel("Room plan. You, your team, and what has been searched.")
 
-            // One quiet line, not a row of scoreboard tiles. Rank is gone
-            // outright: an operator sweeping a room does not need to be told
-            // they are third, and turning a search into a leaderboard is the
-            // wrong thing to put under a map of where everyone is.
-            Text(summary)
-                .font(TypeScale.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // `.map-legend`: a full-width strip under the map, not a card
+                // floating over the floor.
+                HStack(spacing: Space.l) {
+                    MapLegendKey(label: "Searcher", fill: MapInk.searcher, ring: MapInk.markerBorder)
+                    MapLegendKey(label: "Possible", fill: MapInk.markerBorder, ring: MapInk.sighting)
+                    MapLegendKey(label: "Found", fill: MapInk.markerBorder, ring: MapInk.found)
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(MapInk.labelSecondary)
+                .padding(.horizontal, Space.m)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(MapInk.legendBackground)
+                .overlay(alignment: .top) { MapInk.line.frame(height: 1) }
+            }
+            .clipShape(Radius.rect(Radius.plate))
+            .overlay(Radius.rect(Radius.plate).stroke(MapInk.line, lineWidth: 1))
         }
         .padding(Space.xl)
         // Not a presented sheet, on purpose: this card sits over a live camera
         // the operator is still aiming, and a sheet would cover the preview.
         .background(Surface.card, in: Radius.rect(Radius.sheet))
         .padding(Space.l)
+    }
+}
+
+/// `.map-key`: a 20-point disc with a 2-point border, filled for a searcher and
+/// hollow for a person.
+private struct MapLegendKey: View {
+    let label: String
+    let fill: Color
+    let ring: Color
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(fill)
+                .frame(width: 16, height: 16)
+                .overlay(Circle().strokeBorder(ring, lineWidth: 2))
+            Text(label)
+        }
+        .accessibilityElement(children: .combine)
     }
 }

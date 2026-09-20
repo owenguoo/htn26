@@ -95,3 +95,96 @@ export function drawCone(ctx, view, x, y, heading, fovDeg, length, fill, stroke)
     ctx.stroke();
   }
 }
+
+// ---------------------------------------------------------------- search heat
+// The hub's `heat` (swarm/coverage.py `Coverage.snapshot`) is one base-36
+// character per floor cell: that cell's probability relative to the hottest
+// cell. Two things have to happen to it before it is worth looking at.
+//
+// 1. Equalisation, not a min/max stretch. The probability field has a shape
+//    that defeats a linear ramp from both ends. Cells nobody has looked at yet
+//    all hold exactly the *same* probability, so most of the map is one
+//    plateau with dents worn into it where the cameras have swept — a linear
+//    ramp paints that plateau at full strength and the map becomes a solid
+//    sheet. Then one detection boost lifts a single cell far above the
+//    plateau, the encoding is relative to the hottest cell, and the entire
+//    plateau collapses into one or two of the 36 steps — a linear ramp now
+//    paints it at nothing and the map goes blank apart from one dot. Ranking
+//    the cells instead (a 36-bin histogram equalisation, ties sharing the
+//    midpoint of their span) survives both: the plateau lands mid-tone, swept
+//    floor fades out under it, and a boosted cell still tops the ramp.
+// 2. One alpha per cell, applied once. The 2D map used to stamp a blurred disc
+//    per cell at a radius of 1.8 cells, so about ten discs piled up on every
+//    pixel and alpha .18 compounded to alpha .9 — a solid green sheet with
+//    holes worn in it where the search had already been, which reads as the
+//    exact inverse of what it means. Painting the grid once, at cell
+//    resolution, and letting the scaler interpolate keeps the ramp honest.
+export const HEAT_RGB = [24, 131, 75];
+/// Alpha of the hottest cell. Everything below it falls off faster than linear
+/// so that a broad "not looked at yet" field stays a wash and a real hotspot
+/// still reads as a hotspot.
+export const HEAT_MAX_ALPHA = 0.34;
+const HEAT_GAMMA = 1.8;
+/// `HEAT_LEVELS` in swarm/coverage.py: how many steps `heat` is encoded in.
+const HEAT_STEPS = 36;
+/// Below this much spread between the low percentile and the peak there is no
+/// story to tell — an untouched map, or one that has been swept flat.
+const HEAT_MIN_SPREAD = 0.04;
+const HEAT_LOW_PERCENTILE = 0.05;
+
+export function heatAlpha(level) {
+  return HEAT_MAX_ALPHA * Math.pow(Math.min(1, Math.max(0, level)), HEAT_GAMMA);
+}
+
+/// Rank of each bin among all cells, 0..1, ties sharing the midpoint of the
+/// span they occupy. `bins` holds one 0..HEAT_STEPS-1 index per cell.
+export function heatEqualise(bins) {
+  const n = bins.length;
+  const counts = new Int32Array(HEAT_STEPS);
+  for (let i = 0; i < n; i++) counts[bins[i]]++;
+  const level = new Float64Array(HEAT_STEPS);
+  let seen = 0;
+  for (let v = 0; v < HEAT_STEPS; v++) {
+    if (!counts[v]) continue;
+    level[v] = n > 1 ? (seen + (counts[v] - 1) / 2) / (n - 1) : 1;
+    seen += counts[v];
+  }
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) out[i] = level[bins[i]];
+  return out;
+}
+
+/// Row-major 0..1 levels for a coverage snapshot, or null when the field is
+/// too flat to draw.
+export function heatLevels(cov) {
+  const n = (cov?.cols || 0) * (cov?.rows || 0);
+  if (!cov?.heat || !n || cov.heat.length < n) return null;
+  const bins = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = parseInt(cov.heat[i], 36);
+    bins[i] = Number.isFinite(v) ? Math.min(HEAT_STEPS - 1, Math.max(0, v)) : 0;
+  }
+  const sorted = Int32Array.from(bins).sort();
+  const spread = (sorted[n - 1] - sorted[Math.floor(n * HEAT_LOW_PERCENTILE)]) / (HEAT_STEPS - 1);
+  if (!(spread > HEAT_MIN_SPREAD)) return null;
+  return heatEqualise(bins);
+}
+
+/// The field as a cols×rows RGBA canvas, one pixel per cell. Draw it scaled up
+/// with smoothing on; do not stamp it cell by cell. `alphaFor(level, index)`
+/// defaults to the shared ramp — the 3D floor overrides it to fade the heat
+/// where the live scan has no floor under it.
+export function heatCanvas(cov, levels, alphaFor = heatAlpha, target = document.createElement('canvas')) {
+  target.width = cov.cols;
+  target.height = cov.rows;
+  const g = target.getContext('2d');
+  const img = g.createImageData(cov.cols, cov.rows);
+  for (let i = 0; i < levels.length; i++) {
+    img.data[i * 4] = HEAT_RGB[0];
+    img.data[i * 4 + 1] = HEAT_RGB[1];
+    img.data[i * 4 + 2] = HEAT_RGB[2];
+    img.data[i * 4 + 3] = Math.round(255 * Math.min(1, Math.max(0, alphaFor(levels[i], i))));
+  }
+  g.putImageData(img, 0, 0);
+  return target;
+}

@@ -52,6 +52,7 @@
     .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     .btn.primary:hover { background: var(--accent-hover); }
     .btn.danger { color: var(--red); }
+    .btn.danger:hover { background: var(--red-bg); border-color: var(--red); }
     .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
     .btn.icon-only { padding: 0; width: 28px; justify-content: center; }
     .btn:disabled { opacity: .4; cursor: default; }
@@ -63,6 +64,8 @@
       background: var(--bg-1); text-align: center; transition: background .15s, border-color .15s; }
     .upload-zone strong { font-weight: 500; }
     .upload-zone span { color: var(--fg-2); font-size: 12px; }
+    .upload-zone svg { justify-self: center; margin-bottom: 2px; color: var(--fg-2); transition: color .15s; }
+    .upload-zone:hover svg, .upload-zone.dragging svg { color: var(--accent); }
     .upload-zone:hover, .upload-zone.dragging { background: var(--accent-bg); border-color: var(--accent); }
     .upload-zone:disabled { opacity: .5; cursor: wait; }
     .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -153,7 +156,8 @@
     .grid.bottom { grid-template-columns: minmax(0, 1fr) 380px; }
     .card { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); min-width: 0; }
     .card-h { height: 48px; padding: 0 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
-    .card-h h2 { margin: 0; font-size: 14px; font-weight: 500; }
+    .card-h h2 { margin: 0; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+    .card-h h2 svg { flex: none; color: var(--fg-2); }
     .card-b { padding: 16px; }
     .stack { display: grid; gap: 16px; align-content: start; }
 
@@ -176,11 +180,13 @@
     #mapWrap { position: relative; height: 480px; overflow: hidden; background:
       radial-gradient(circle at 50% 45%, #fbfdfb 0, #f1f7f3 72%, #e8f1eb 100%); }
     #map { position: absolute; inset: 0; width: 100%; height: 100%; }
-    #mapWrap.mode-3d .map-legend, #mapWrap.mode-3d .map-scale { display: none; }
-    .map-legend { --map-marker-size: 22px; --map-marker-stroke: 2px; position: absolute; left: 14px; bottom: 14px;
-      display: flex; align-items: center; gap: 16px; padding: 8px 10px; border: 1px solid rgba(179,206,189,.75); border-radius: 7px;
-      background: rgba(255,255,255,.88); box-shadow: 0 4px 18px rgba(23,55,38,.08);
-      color: var(--fg-2); font-size: 11px; pointer-events: none; backdrop-filter: blur(6px); }
+    #mapWrap.mode-3d .map-scale { display: none; }
+    .map-column:has(#mapWrap.mode-3d) .map-legend { display: none; }
+    /* A full-width strip under the map rather than a card floating over the floor. */
+    .map-legend { --map-marker-size: 20px; --map-marker-stroke: 2px;
+      display: flex; align-items: center; flex-wrap: wrap; gap: 18px; padding: 10px 16px;
+      border-top: 1px solid var(--line); background: var(--bg-1);
+      color: var(--fg-2); font-size: 11px; }
     .map-legend span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
     .map-key { position: relative; display: inline-block; flex: 0 0 auto; width: var(--map-marker-size); height: var(--map-marker-size);
       border: var(--map-marker-stroke) solid #fff;
@@ -188,7 +194,7 @@
     .map-key.sighting, .map-key.rescued { background: #fff; box-shadow: none; }
     .map-key.sighting { color: #d97706; border-color: #d97706; }
     .map-key.rescued { color: var(--red); border-color: var(--red); }
-    .map-key.marker { border-radius: 4px; background: #fff; border-color: #6b4fbb; box-shadow: none; }
+    .map-key.marker { border-radius: 5px; background: #6b4fbb; }
     #markerBtn.arming { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     .map-key.sighting::before, .map-key.rescued::before { content: ""; position: absolute; left: 50%; top: 4px;
       width: 5px; height: 5px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
@@ -200,6 +206,7 @@
 
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .row + .row { margin-top: 14px; }
+    .settings-body .row + .row { margin-top: 0; }
     .row .label { font-weight: 500; }
     .row .hint { font-size: 12px; color: var(--fg-3); }
     .switch { width: 36px; height: 20px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--line-2);
@@ -229,9 +236,11 @@
     body:has(#settings[open]) { overflow: hidden; }
     .settings-body { padding: 16px; border-top: 1px solid var(--line); }
     .settings-body h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
-    .settings-group, .settings-body > .card { margin-bottom: 20px; }
-    .settings-group p { margin: 0 0 12px; }
-    .settings-group .divider { margin-left: 0; margin-right: 0; }
+    .settings-body > .card { margin-bottom: 16px; }
+    .settings-body > .card:last-child { margin-bottom: 0; }
+    .settings-body .card-b { display: grid; gap: 16px; }
+    .row-control { display: flex; align-items: center; gap: 8px; }
+    .settings input[type="number"] { width: 76px; }
     .map-column > .card > .card-h { height: auto; min-height: 48px; flex-wrap: wrap; padding: 12px 16px; }
     .map-legend { font-size: 12px; }
     #recs:not(:empty) { margin-bottom: 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
@@ -303,7 +312,7 @@
     .camera-details dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; padding: 0 14px 12px; font-size: 13px; }
     .camera-details dt { color: var(--fg-2); }
     .camera-details dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
-    .camera-details .actions { padding: 0 14px 12px; }
+    .camera-details .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 12px; }
     .system-details { margin-bottom: 16px; }
     .system-details .metrics { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
     .camera-nav { display: flex; gap: 6px; }
@@ -327,6 +336,8 @@
     .vimg .live { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px;
       font: 500 11px var(--mono); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; }
     .vimg .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: breathe 1s infinite; }
+    .vimg .live.off { color: #ffc9d1; }
+    .vimg .live.off i { background: var(--red); animation: none; }
     .vnone { position: absolute; color: #b3cebd; font-size: 13px; }
     #vHudCanvas { position: absolute; left: 0; top: 0; pointer-events: none; }
     .vcap { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80%; display: none;
@@ -339,12 +350,17 @@
     .vhudnote.warn { color: #ffb703; }
     #vHud.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     #vHud.on kbd { color: #555; border-color: #999; }
-    .vstats { display: grid; grid-template-columns: 1.5fr 1.6fr repeat(5, 1fr); border-top: 1px solid var(--line); }
-    .vstats div { padding: 12px 16px; border-left: 1px solid var(--line); min-width: 0; }
-    .vstats div:first-child { border-left: 0; }
-    .vstats .k { font-size: 11px; color: var(--fg-3); }
-    .vstats .v { font: 500 14px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .vfoot { font-size: 12px; color: var(--fg-3); }
+    /* Seven readings, each wide enough for a sentence: values wrap instead of
+       being clipped, and nothing is abbreviated into jargon. */
+    .vstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-top: 1px solid var(--line); }
+    .vstats div { padding: 10px 16px; border-left: 1px solid var(--line); border-top: 1px solid var(--line);
+      min-width: 0; }
+    .vstats div.wide { grid-column: span 2; }
+    .vstats .k { font-size: 11px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase;
+      color: var(--fg-3); }
+    .vstats .v { margin-top: 3px; font-size: 14px; font-weight: 500; line-height: 1.35;
+      font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
     .analysis, .vstats { flex-shrink: 0; }
     #analysisMeta { overflow-wrap: anywhere; }
@@ -352,9 +368,10 @@
       .viewer { padding: 12px; }
       .vbox { height: calc(100dvh - 24px); }
       .vh { gap: 6px; padding: 0 10px; }
-      .vh .vfoot, #vDevice, #vHide { display: none; }
+      .vh #vDevice { display: none; }
       .vstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .vstats div { border-bottom: 1px solid var(--line); }
+      .vstats div.wide { grid-column: span 2; }
+      .vh #vRemove { display: none; }
       .vimg { min-height: 240px; }
     }
     /* activity */
@@ -403,21 +420,26 @@
     <dialog class="settings" id="settings" aria-labelledby="settingsTitle">
       <div class="settings-header"><h2 id="settingsTitle">Settings</h2><button class="btn sm" id="settingsClose" autofocus>Close</button></div>
       <div class="settings-body">
-        <section class="settings-group"><h2>Match sensitivity</h2><p class="muted">Higher values require a closer visual match.</p><div class="search-tools">              <label for="threshold">Similarity threshold</label><input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.70" style="width:80px"><button class="btn" id="saveThreshold">Apply</button></div></section>
         <div class="card">
           <div class="card-h"><h2>Search</h2></div>
           <div class="card-b">
+            <div class="row"><div><div class="label"><label for="threshold">Match sensitivity</label></div><div class="hint">Higher values require a closer visual match</div></div>
+              <div class="row-control"><input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.70"><button class="btn sm" id="saveThreshold">Apply</button></div></div>
             <div class="row"><div><div class="label">Planner</div><div class="hint">Bayesian search: each phone goes where it's most likely to find them</div></div>
               <button class="switch" id="plannerSw" aria-label="Planner"></button></div>
             <div class="row"><div><div class="label">Coverage</div><div class="hint">Mark the whole room unsearched</div></div>
               <button class="btn sm" id="resetCov">Reset</button></div>
           </div>
         </div>
-        <section class="settings-group"><h2>Response controls</h2>            <div class="row" style="margin-top:16px"><div><div class="label">Responders</div><div class="hint">Nearest phones sent when found</div></div>
-              <div class="stepper"><button id="respMinus" aria-label="Fewer">−</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
-            <div class="divider"></div>
-            <button class="btn primary" id="candBtn" style="width:100%;justify-content:center">Place candidate</button>
-</section>
+        <div class="card">
+          <div class="card-h"><h2>Response</h2></div>
+          <div class="card-b">
+            <div class="row"><div><div class="label">Responders</div><div class="hint">Nearest phones sent when found</div></div>
+              <div class="stepper"><button id="respMinus" aria-label="Fewer">&minus;</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
+            <div class="row"><div><div class="label">Test candidate</div><div class="hint">Drop a mock person on the map to rehearse a find</div></div>
+              <button class="btn sm primary" id="candBtn">Place candidate</button></div>
+          </div>
+        </div>
       </div>
     </dialog>
 
@@ -434,7 +456,7 @@
     <section class="grid">
       <div class="stack map-column">
         <div class="card">
-          <div class="card-h"><h2>Search map</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.37 2.257a1.25 1.25 0 0 1 1.214-.054l3.378 1.69 2.133-1.313A1.25 1.25 0 0 1 14 3.644v7.326c0 .434-.225.837-.595 1.065l-2.775 1.708a1.25 1.25 0 0 1-1.214.053l-3.378-1.689-2.133 1.313A1.25 1.25 0 0 1 2 12.354V5.029c0-.434.225-.837.595-1.064L5.37 2.257ZM6 4a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 6 4Zm4.75 2.75a.75.75 0 0 0-1.5 0v4.5a.75.75 0 0 0 1.5 0v-4.5Z" clip-rule="evenodd"/></svg>Search map</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
             <span class="mono" style="font-size:12px" id="likely"></span>
             <button class="btn sm" id="markerBtn" type="button" title="Put the printed marker where it is in the room">Place marker</button>
             <div class="map-modes" id="mapModes" role="group" aria-label="Map view">
@@ -443,9 +465,9 @@
             </div>
 </div>
           <div id="mapWrap"><canvas id="map" aria-label="Live search map"></canvas>
-            <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span></div>
             <div class="map-scale" aria-hidden="true"><i></i><span>5 m</span></div>
             <div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
+          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span></div>
           <p id="mapStatus" role="status"></p>
           <div class="scan-controls">
             <button type="button" id="scanToggle" aria-pressed="false">Start scan</button>
@@ -455,7 +477,7 @@
           </div>
         </div>
         <section class="card camera-section" aria-label="Camera feeds">
-          <div class="card-h"><h2>Camera feeds</h2><span class="faint mono" id="phoneCount">0</span><span class="spacer"></span>
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H3ZM15 4.75a.75.75 0 0 0-1.28-.53l-2 2a.75.75 0 0 0-.22.53v2.5c0 .199.079.39.22.53l2 2a.75.75 0 0 0 1.28-.53v-6.5Z"/></svg>Camera feeds</h2><span class="faint mono" id="phoneCount">0</span><span class="spacer"></span>
             <div class="camera-nav"><button class="btn sm icon-only" id="cameraPrev" aria-label="Previous cameras" aria-controls="phones"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M17 10a.75.75 0 0 1-.75.75H5.612l4.158 3.96a.75.75 0 1 1-1.04 1.08l-5.5-5.25a.75.75 0 0 1 0-1.08l5.5-5.25a.75.75 0 1 1 1.04 1.08L5.612 9.25H16.25A.75.75 0 0 1 17 10Z" clip-rule="evenodd"/></svg></button>
               <button class="btn sm icon-only" id="cameraNext" aria-label="Next cameras" aria-controls="phones"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clip-rule="evenodd"/></svg></button></div>
           </div>
@@ -465,11 +487,11 @@
       </div>
       <div class="stack">
         <section class="card search-panel" aria-label="Person search">
-          <div class="card-h"><h2>Person to find</h2><span class="spacer"></span></div>
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12.735 14c.618 0 1.093-.561.872-1.139a6.002 6.002 0 0 0-11.215 0c-.22.578.254 1.139.872 1.139h9.47Z"/></svg>Person to find</h2><span class="spacer"></span></div>
           <div class="card-b">
             <fieldset id="searchTools" style="border:0;padding:0;margin:0">
               <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" aria-label="Upload photo" hidden>
-              <button class="upload-zone" type="button" id="uploadPhoto"><strong>Drop a photo here</strong><span>or click to choose</span></button>
+              <button class="upload-zone" type="button" id="uploadPhoto"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg><strong>Drop a photo here</strong><span>or click to choose</span></button>
               <button class="btn" id="clearReference" type="button" hidden>Clear</button>
 </div>
               <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
@@ -478,23 +500,23 @@
           </div>
         </section>
         <div class="card">
-          <div class="card-h"><h2>Search status</h2></div>
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M9 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/> <path fill-rule="evenodd" d="M9.68 5.26a.75.75 0 0 1 1.06 0 3.875 3.875 0 0 1 0 5.48.75.75 0 1 1-1.06-1.06 2.375 2.375 0 0 0 0-3.36.75.75 0 0 1 0-1.06Zm-3.36 0a.75.75 0 0 1 0 1.06 2.375 2.375 0 0 0 0 3.36.75.75 0 1 1-1.06 1.06 3.875 3.875 0 0 1 0-5.48.75.75 0 0 1 1.06 0Z" clip-rule="evenodd"/> <path fill-rule="evenodd" d="M11.89 3.05a.75.75 0 0 1 1.06 0 7 7 0 0 1 0 9.9.75.75 0 1 1-1.06-1.06 5.5 5.5 0 0 0 0-7.78.75.75 0 0 1 0-1.06Zm-7.78 0a.75.75 0 0 1 0 1.06 5.5 5.5 0 0 0 0 7.78.75.75 0 1 1-1.06 1.06 7 7 0 0 1 0-9.9.75.75 0 0 1 1.06 0Z" clip-rule="evenodd"/></svg>Search status</h2></div>
           <div class="card-b">
             <div class="status" id="candStatus">No candidate placed</div>
             <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
           </div>
         </div>
-        <section class="card system-details" aria-label="System details"><div class="card-h"><h2>System details</h2></div>
+        <section class="card system-details" aria-label="System details"><div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6 6v4h4V6H6Z"/> <path fill-rule="evenodd" d="M5.75 1a.75.75 0 0 0-.75.75V3a2 2 0 0 0-2 2H1.75a.75.75 0 0 0 0 1.5H3v.75H1.75a.75.75 0 0 0 0 1.5H3v.75H1.75a.75.75 0 0 0 0 1.5H3a2 2 0 0 0 2 2v1.25a.75.75 0 0 0 1.5 0V13h.75v1.25a.75.75 0 0 0 1.5 0V13h.75v1.25a.75.75 0 0 0 1.5 0V13a2 2 0 0 0 2-2h1.25a.75.75 0 0 0 0-1.5H13v-.75h1.25a.75.75 0 0 0 0-1.5H13V6.5h1.25a.75.75 0 0 0 0-1.5H13a2 2 0 0 0-2-2V1.75a.75.75 0 0 0-1.5 0V3h-.75V1.75a.75.75 0 0 0-1.5 0V3H6.5V1.75A.75.75 0 0 0 5.75 1ZM11 4.5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V5a.5.5 0 0 1 .5-.5h6Z" clip-rule="evenodd"/></svg>System details</h2></div>
     <div class="metrics">
-      <div class="metric" title="Connected phones sending video right now"><div class="k">Phones streaming</div><div class="v" id="mLive">0</div></div>
-      <div class="metric" title="Phones with a known spot in the room, so they can be drawn on the map"><div class="k">Phones on map</div><div class="v" id="mPlaced">0</div></div>
+      <div class="metric" title="Phones connected and sending video right now"><div class="k">Active phones</div><div class="v" id="mLive">0</div></div>
+      <div class="metric" title="Every phone that has joined this session, including ones that have gone quiet"><div class="k">Total phones</div><div class="v" id="mTotal">0</div></div>
       <div class="metric" id="mScannedBox" title="Phones that have locked onto a printed marker"><div class="k">Marker scanned</div><div class="v" id="mScanned">0/0</div></div>
       <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
     </div>
 
     </section>
         <section class="card" aria-label="Activity">
-          <div class="card-h"><h2>Activity</h2></div>
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 4.75a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM6.25 3a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 7.25a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 11.5a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM4 12.25a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM3 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>Activity</h2></div>
           <div id="log"><div class="empty">Nothing yet</div></div>
         </section>
       </div>
@@ -503,7 +525,7 @@
   </main>
 
     <aside class="card mission chat-panel" id="chatPanel" aria-labelledby="chatTitle" hidden>
-      <div class="card-h"><h2 id="chatTitle">Mission Control</h2><span class="spacer"></span><button type="button" class="autoSw" id="autoSw" title="Autonomy (M)"><span class="switch"></span>Autonomy</button><button type="button" class="chat-close" id="chatClose" aria-label="Close Mission Control" title="Close (Esc)"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg></button></div>
+      <div class="card-h"><h2 id="chatTitle"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M1 8.74c0 .983.713 1.825 1.69 1.943.904.108 1.817.19 2.737.243.363.02.688.231.85.556l1.052 2.103a.75.75 0 0 0 1.342 0l1.052-2.103c.162-.325.487-.535.85-.556.92-.053 1.833-.134 2.738-.243.976-.118 1.689-.96 1.689-1.942V4.259c0-.982-.713-1.824-1.69-1.942a44.45 44.45 0 0 0-10.62 0C1.712 2.435 1 3.277 1 4.26v4.482Zm3-3.49a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 4 5.25ZM4.75 7a.75.75 0 0 0 0 1.5h2.5a.75.75 0 0 0 0-1.5h-2.5Z" clip-rule="evenodd"/></svg>Mission Control</h2><span class="spacer"></span><button type="button" class="autoSw" id="autoSw" title="Autonomy (M)"><span class="switch"></span>Autonomy</button><button type="button" class="chat-close" id="chatClose" aria-label="Close Mission Control" title="Close (Esc)"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg></button></div>
       <p class="chat-intro">Direct cameras and guide the search.</p>
       <div id="mcFeed"></div>
       <form id="mcForm" autocomplete="off">
@@ -521,22 +543,22 @@
       <div class="vh">
         <span class="num" id="vNum"></span><b id="vName"></b><span class="faint" id="vDevice"></span>
         <span id="vBadges"></span><span class="spacer"></span>
-        <span class="vfoot"><kbd>←</kbd> <kbd>→</kbd> switch</span>
-        <button class="btn sm" id="vHud" title="Show what's on this phone's screen (H)">HUD <kbd>H</kbd></button>
-        <button class="btn sm" id="vHide"></button><button class="btn sm" id="vClose">Close <kbd>Esc</kbd></button>
+        <button class="btn sm" id="vHud" title="Show what's on this phone's screen (H)">HUD</button>
+        <button class="btn sm danger" id="vRemove" title="End this phone's session and drop it from the swarm">Remove</button>
+        <button class="btn sm" id="vClose">Close</button>
       </div>
       <div class="vimg"><img id="vImg" alt=""><canvas id="vHudCanvas"></canvas><div class="vnone" id="vNone">Waiting for video…</div>
-        <div class="live"><i></i>LIVE</div><div class="vhudnote" id="vHudNote" hidden></div><div class="vcap" id="vCap"></div></div>
+        <div class="live" id="vLive"><i></i><span></span></div><div class="vhudnote" id="vHudNote" hidden></div><div class="vcap" id="vCap"></div></div>
       <div class="analysis"><strong>Analyzed source frame</strong><div id="analysisMeta" class="muted">No current result</div><button class="btn" id="confirmSighting" hidden>Confirm visual sighting</button><canvas id="analyzedFrame" hidden></canvas></div>
       <details class="camera-details"><summary>Camera details</summary>
       <div class="vstats">
-        <div><div class="k">Doing</div><div class="v" id="vTask"></div></div>
-        <div><div class="k">Position</div><div class="v" id="vPos"></div></div>
-        <div><div class="k">Heading</div><div class="v" id="vHd"></div></div>
-        <div><div class="k">Tilt</div><div class="v" id="vPitch"></div></div>
-        <div><div class="k">FPS</div><div class="v" id="vFps"></div></div>
+        <div><div class="k">Doing now</div><div class="v" id="vTask"></div></div>
+        <div class="wide"><div class="k">Where in the room</div><div class="v" id="vPos"></div></div>
+        <div><div class="k">Camera facing</div><div class="v" id="vHd"></div></div>
+        <div><div class="k">Camera tilt</div><div class="v" id="vPitch"></div></div>
+        <div><div class="k">Frames / second</div><div class="v" id="vFps"></div></div>
         <div><div class="k">Latency</div><div class="v" id="vLat"></div></div>
-        <div><div class="k">Searched</div><div class="v" id="vM2"></div></div>
+        <div><div class="k">Area searched</div><div class="v" id="vM2"></div></div>
       </div></details>
     </div>
   </div>

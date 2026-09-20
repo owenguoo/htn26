@@ -65,42 +65,48 @@ extension ShapeStyle where Self == Color {
     static var hudVoid: Color { .black }
 }
 
-/// The mini-map and seat-plan palette. Drawn over the camera like the rest of
-/// the chrome, so it is fixed rather than semantic — but named, because
-/// `.white.opacity(0.35)` appearing twice for two different reasons is how a map
-/// stops being legible one edit at a time.
+/// The map palette, and it is **`web/console.js`'s, value for value**.
+///
+/// The phone's map and the operator console's search map are the same picture
+/// of the same room, so they are drawn from one set of colours. Every constant
+/// below is a hex literal out of `console.html`'s `:root` or a `ctx.fillStyle`
+/// in `console.js`, named after what the console calls it. They are fixed
+/// rather than semantic for the usual reason — this map floats over arbitrary
+/// video — but the stronger reason is that they are shared with another
+/// renderer, like `HUDStyle`: "fixing" one to a system colour silently makes
+/// the two maps different products.
 enum MapInk {
-    /// Fixed colours mirror the operator console's light search-map palette.
-    /// This map floats over arbitrary video, so these deliberately do not
-    /// resolve from the surrounding light/dark appearance.
-    static let outside = Color(red: 0.91, green: 0.95, blue: 0.92)
-    static let floor = Color.white.opacity(0.96)
-    static let searched = Color(red: 0.09, green: 0.51, blue: 0.29).opacity(0.16)
-    /// `rgba(24,131,75,·)` — the exact ink `drawCoverage` in `web/console.js`
-    /// paints the probability field with. Opacity is applied per blob there and
-    /// here, so this one stays fully opaque.
-    static let heat = Color(red: 24 / 255, green: 131 / 255, blue: 75 / 255)
-    static let stage = Color(red: 0.87, green: 0.93, blue: 0.89)
-    static let outline = Color(red: 0.47, green: 0.61, blue: 0.52)
-    static let searcher = Color(red: 0.09, green: 0.51, blue: 0.29)
-    /// Teammates. A shade lighter than `searcher` so the operator's own dot is
-    /// still the one that reads first on a map full of people.
-    static let peer = Color(red: 0.24, green: 0.62, blue: 0.42)
-    static let possible = Color(red: 0.85, green: 0.47, blue: 0.02)
-    static let found = Color(red: 0.72, green: 0.18, blue: 0.21)
+    /// Colours as the console writes them, so a value here can be diffed
+    /// against the CSS by eye.
+    private static func hex(_ r: Int, _ g: Int, _ b: Int) -> Color {
+        Color(red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255)
+    }
+
+    // `#mapWrap`: radial-gradient(circle at 50% 45%, #fbfdfb 0, #f1f7f3 72%, #e8f1eb 100%)
+    static let backdropCentre = hex(0xfb, 0xfd, 0xfb)
+    static let backdropMid = hex(0xf1, 0xf7, 0xf3)
+    static let backdropEdge = hex(0xe8, 0xf1, 0xeb)
+
+    /// `drawRoom` colours, from the one call `console.js` makes.
+    static let floor = Color.white.opacity(0.5)          // 'rgba(255,255,255,.5)'
+    static let wall = hex(0x78, 0x9b, 0x85)              // '#789b85'
+    static let stage = hex(0xde, 0xee, 0xe3)             // '#deeee3'
+    static let stageLabel = hex(0x46, 0x66, 0x53)        // '#466653'
+
+    /// `drawCoverage` / `drawCone` both paint in the accent, at their own alpha.
+    static let heat = hex(0x18, 0x83, 0x4b)              // 'rgba(24,131,75,·)'
+    static let searcher = hex(0x18, 0x83, 0x4b)          // `--accent`
+    static let sighting = hex(0xd9, 0x77, 0x06)          // '#d97706'
+    static let found = hex(0xb7, 0x2f, 0x36)             // `--red`
+    static let ping = hex(0x17, 0x37, 0x26)              // '#173726', = `--fg`
+
     static let markerBorder = Color.white
-    static let plateBorder = Color(red: 0.70, green: 0.81, blue: 0.74)
-    static let label = Color(red: 0.09, green: 0.22, blue: 0.15)
-    static let labelSecondary = Color(red: 0.27, green: 0.40, blue: 0.33)
-    static let legendBackground = Color.white.opacity(0.9)
-    /// The seat the operator has tapped but not yet confirmed.
-    static let seatRing = possible
-    /// The hub only sends this point after the person has been found.
-    static let candidateRing = found
-    static let candidateHalo = found.opacity(0.24)
-    static let ping = Color(red: 1.0, green: 0.82, blue: 0.40)
-    /// Used when the hub has not named a colour for this phone yet.
-    static let meFallback = searcher
+    static let markerShadow = hex(0x17, 0x37, 0x26).opacity(0.16)
+
+    static let line = hex(0xd5, 0xe5, 0xda)              // `--line`
+    static let legendBackground = hex(0xed, 0xf6, 0xef)  // `--bg-1`
+    static let labelSecondary = hex(0x46, 0x66, 0x53)    // `--fg-2`
+    static let labelTertiary = hex(0x59, 0x75, 0x62)     // `--fg-3`
 }
 
 /// Ink for the Simulator's drive room. Light on purpose: this is a rehearsal

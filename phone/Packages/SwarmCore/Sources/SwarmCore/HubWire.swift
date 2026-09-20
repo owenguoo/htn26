@@ -424,8 +424,24 @@ public struct HubWorld: Sendable, Equatable, Decodable {
         public var rows: Int
         public var cell: Double
         public var x0: Double
-        /// Row-major "0"/"1" string, `cols * rows` long.
+        /// Row-major "0"/"1" string, `cols * rows` long: has any camera looked
+        /// at this cell yet. A one-way latch — it reaches 100% within about
+        /// half a minute of a real search, after which it says nothing.
         public var cells: String
+        /// Row-major base-36 string, `cols * rows` long: the cell's
+        /// probability relative to the hottest cell (`HEAT_LEVELS` in
+        /// `swarm/coverage.py`). This is the field the operator console draws
+        /// as its heatmap, and unlike `cells` it keeps evolving for the whole
+        /// search — every look pushes the cells it swept down and every
+        /// detection lifts the cells around it.
+        ///
+        /// **Optional because `hub.py`'s `world_loop` does not send it yet**;
+        /// it forwards only `("cols", "rows", "cell", "x0", "cells")` of
+        /// `Coverage.snapshot()`. Add `"heat"` to that tuple and the phone's
+        /// map becomes the same picture as the console's. Until then the map
+        /// falls back to inverting `cells`, which is a fair approximation for
+        /// the first few seconds and blank after that.
+        public var heat: String? = nil
     }
     public struct Ping: Sendable, Equatable, Decodable {
         public var id: Int

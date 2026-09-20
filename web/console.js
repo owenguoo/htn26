@@ -1,5 +1,5 @@
 import { frameKey, freshSighting, scoreLabel } from '/web/inference-ui.js';
-import { makeView, drawRoom, drawCone } from '/web/room.js';
+import { makeView, drawRoom, drawCone, heatLevels, heatCanvas } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
 // Before a search the show sits in "calibrate": every phone is scanning the
@@ -153,14 +153,23 @@ function fmtClock(ms) {
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// Metrics come and go as the console gets reshaped; a tile that is not on the
+// page must not take the whole render loop down with it.
+function setMetric(sel, value) {
+  const el = $(sel);
+  if (el) el.textContent = value;
+}
+
 function renderMetrics() {
-  const live = [...phones.values()].filter(isLive);
+  const all = [...phones.values()];
+  const live = all.filter(isLive);
   const { scanned, ready } = readiness();
-  $('#mLive').textContent = live.length;
-  $('#mPlaced').textContent = live.filter((p) => p.pose).length;
-  $('#mScanned').textContent = `${scanned}/${live.length}`;
-  $('#mScannedBox').classList.toggle('alert', live.length > 0 && !ready && !running());
-  $('#mSearched').textContent = `${Math.round((st.coverage?.searched || 0) * 100)}%`;
+  setMetric('#mLive', live.length);
+  setMetric('#mTotal', all.length);
+  setMetric('#mPlaced', live.filter((p) => p.pose).length);
+  setMetric('#mScanned', `${scanned}/${live.length}`);
+  setMetric('#mSearched', `${Math.round((st.coverage?.searched || 0) * 100)}%`);
+  $('#mScannedBox')?.classList.toggle('alert', live.length > 0 && !ready && !running());
 }
 
 function renderControls() {
@@ -211,6 +220,38 @@ function renderControls() {
   $('#candBtn').classList.toggle('primary', !t);
 }
 
+// Room coordinates are meters with the stage at the top of the map: x = 0 at
+// stage center (+x right), y = 0 at the stage edge (+y toward the back), and
+// heading 0 = facing the stage, clockwise from above. "-0.6, 0.9 · slam" makes
+// an operator decode that; these spell it out instead.
+const FACING = ['the stage', 'stage-right', 'the right wall', 'back-right',
+                'the back wall', 'back-left', 'the left wall', 'stage-left'];
+const POSE_SOURCE = { slam: 'tracked by the phone', seat: 'from the seat it scanned', sim: 'simulated' };
+
+function fmtPosition(pose) {
+  if (!pose) return 'Not placed yet';
+  const across = Math.abs(pose.x) < 0.15 ? 'On the center line' : `${Math.abs(pose.x).toFixed(1)} m ${pose.x < 0 ? 'left' : 'right'} of center`;
+  return `${across} · ${Math.max(0, pose.y).toFixed(1)} m from stage`;
+}
+
+function poseHint(pose) {
+  return pose ? `x ${pose.x.toFixed(1)} m, y ${pose.y.toFixed(1)} m · ${POSE_SOURCE[pose.source] || pose.source}`
+    : 'This phone has no known spot in the room yet, so it cannot be drawn on the map.';
+}
+
+function fmtHeading(pose) {
+  if (pose?.heading == null) return 'Unknown';
+  const deg = (Math.round(pose.heading) % 360 + 360) % 360;
+  return `${deg}° · facing ${FACING[Math.round(deg / 45) % 8]}`;
+}
+
+function fmtTilt(pitch) {
+  if (pitch == null) return 'Unknown';
+  const deg = Math.round(pitch);
+  return Math.abs(deg) < 8 ? `${Math.abs(deg)}° · level`
+    : `${Math.abs(deg)}° ${deg > 0 ? 'up' : 'down'}${Math.abs(deg) > 65 ? deg > 0 ? ' · at the ceiling' : ' · at the floor' : ''}`;
+}
+
 function phoneStatus(p) {
   const out = [];
   const t = st.target;
@@ -220,7 +261,6 @@ function phoneStatus(p) {
   if (job) out.push([`→ ${job.sector}`, job.onTarget ? 'w' : '']);
   if (!p.connected) out.push(['Offline', '']);
   else if (p.stale) out.push(['No signal', 'r']);
-  if (p.pitch != null && Math.abs(p.pitch) > 65) out.push([p.pitch < 0 ? 'Floor' : 'Ceiling', '']);
   if (p.hidden) out.push(['Hidden', '']);
   if (p.speaking) out.push(['🎙 Speaking', 'w']);
   if (p.oldPage && !p.sim && p.connected) out.push(['Old page · reload', 'r']);
@@ -247,9 +287,9 @@ function renderPhones() {
         <div class="camera-caption"></div></button>
         <details class="camera-details"><summary>Camera details</summary><dl>
         <dt>Device</dt><dd class="device"></dd><dt>Position</dt><dd class="pos"></dd>
-        <dt>Heading</dt><dd class="hd"></dd><dt>Frames / second</dt><dd class="fps"></dd>
+        <dt>Facing</dt><dd class="hd"></dd><dt>Frames / second</dt><dd class="fps"></dd>
         <dt>Latency</dt><dd class="lat"></dd></dl>
-        <div class="actions"><button class="btn sm" data-act="hide"></button></div></details>`;
+        <div class="actions"><button class="btn sm danger" data-act="remove" title="End this phone's session and drop it from the swarm">Remove</button></div></details>`;
       if (thumbs.has(p.id)) card.querySelector('img').src = thumbs.get(p.id);
     }
     existing.delete(p.id);
@@ -264,13 +304,13 @@ function renderPhones() {
     card.querySelector('.camera-caption').textContent = p.caption?.text || '';
     card.querySelector('.device').textContent = p.device || 'Unknown';
     const pose = p.pose;
-    card.querySelector('.pos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : 'Not placed';
-    card.querySelector('.hd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
+    card.querySelector('.pos').textContent = fmtPosition(pose);
+    card.querySelector('.pos').title = poseHint(pose);
+    card.querySelector('.hd').textContent = fmtHeading(pose);
     card.querySelector('.fps').textContent = p.fps.toFixed(1);
     card.querySelector('.lat').textContent = p.latencyMs != null ? `${p.latencyMs} ms` : '–';
     const liveBadge = !p.connected ? ['Offline · last frame', ''] : p.stale ? ['No signal', 'r'] : ['Live', 'w'];
     card.querySelector('.st').innerHTML = [liveBadge, ...phoneStatus(p).filter(([label]) => label !== 'Offline' && label !== 'No signal')].map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
-    card.querySelector('[data-act="hide"]').textContent = p.hidden ? 'Show camera' : 'Hide camera';
   });
   for (const card of existing.values()) card.remove();
   updateCameraNavigation();
@@ -296,7 +336,7 @@ $('#phones').addEventListener('click', (e) => {
   const card = e.target.closest('.camera-card');
   const p = card && phones.get(card.dataset.id);
   if (!p || !action) return;
-  if (action.dataset.act === 'hide') send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
+  if (action.dataset.act === 'remove') removePhone(p);
   else openViewer(p.id);
 });
 
@@ -341,15 +381,18 @@ function renderViewer() {
   $('#vName').textContent = p.name || 'Phone';
   $('#vDevice').textContent = p.device || '';
   $('#vBadges').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
-  $('#vHide').textContent = p.hidden ? 'Show on projector' : 'Hide from projector';
+  const pill = $('#vLive');
+  pill.classList.toggle('off', !isLive(p));
+  pill.querySelector('span').textContent = !p.connected ? 'OFFLINE' : p.stale ? 'NO SIGNAL' : 'LIVE';
   const pose = p.pose;
   const job = st.planner?.assignments?.[p.id];
   $('#vTask').textContent = p.task || (job ? `searching ${job.sector}${job.gain ? ` · ${(job.gain * 100).toFixed(1)}% find chance` : ''}` : 'idle');
-  $('#vPos').textContent = pose ? `${pose.x.toFixed(1)}, ${pose.y.toFixed(1)} · ${pose.source}` : 'not placed';
-  $('#vHd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
-  $('#vPitch').textContent = p.pitch != null ? `${Math.round(p.pitch)}°` : '–';
-  $('#vFps').textContent = p.fps.toFixed(1);
-  $('#vLat').textContent = p.latencyMs != null ? `${p.latencyMs}ms` : '–';
+  $('#vPos').textContent = fmtPosition(pose);
+  $('#vPos').title = poseHint(pose);
+  $('#vHd').textContent = fmtHeading(pose);
+  $('#vPitch').textContent = fmtTilt(p.pitch);
+  $('#vFps').textContent = `${p.fps.toFixed(1)} / s`;
+  $('#vLat').textContent = p.latencyMs != null ? `${p.latencyMs} ms` : 'Unknown';
   $('#vM2').textContent = `${p.searchedM2 ?? 0} m²`;
 }
 
@@ -494,10 +537,18 @@ function drawTape(ctx, x0, y0, w, h, cmp, k) {
   ctx.beginPath(); ctx.moveTo(cx - 5 * k, y0 + h); ctx.lineTo(cx + 5 * k, y0 + h); ctx.lineTo(cx, y0 + h - 6 * k); ctx.fill();
 }
 requestAnimationFrame(drawHud);
-$('#vHide').addEventListener('click', () => {
+$('#vRemove').addEventListener('click', () => {
   const p = phones.get(viewing);
-  if (p) send({ type: 'hide', phoneId: p.id, hidden: !p.hidden });
+  if (p) removePhone(p);
 });
+
+// Removing a camera ends that person's session on their phone, so it asks first.
+function removePhone(p) {
+  if (!confirm(`Remove camera #${p.index}${p.name ? ` (${p.name})` : ''}?\n\n`
+    + 'Their phone leaves the swarm and stops streaming. They can rejoin from the QR code.')) return;
+  send({ type: 'remove', phoneId: p.id });
+  if (viewing === p.id) closeViewer();
+}
 $('#viewer').addEventListener('click', (e) => { if (e.target === $('#viewer')) closeViewer(); });
 
 function renderLog() {
@@ -825,6 +876,7 @@ const canvas = $('#map');
 const ctx = canvas.getContext('2d');
 let view = null;
 const coverageLayer = document.createElement('canvas');
+const heatTile = document.createElement('canvas');  // cols×rows, reused every rebuild
 let coverageKey = '';
 const mapLabelRects = [];
 /// How much of the camera's real range the map's view wedge draws.
@@ -857,23 +909,23 @@ function drawCoverage(cov) {
     coverageLayer.height = h;
     const layer = coverageLayer.getContext('2d');
     layer.clearRect(0, 0, w, h);
-    const values = [...cov.heat].map(value => parseInt(value, 36) / 35);
-    const low = Math.min(...values), high = Math.max(...values);
-    if (high - low > 0.04) {
-      const radius = Math.max(10, cov.cell * view.scale * 1.8);
-      layer.filter = `blur(${Math.max(5, radius * .45)}px)`;
-      for (let row = 0; row < cov.rows; row++) {
-        for (let col = 0; col < cov.cols; col++) {
-          const level = (values[row * cov.cols + col] - low) / (high - low);
-          if (level < 0.16) continue;
-          const [x, y] = view.toPx(cov.x0 + (col + .5) * cov.cell, (row + .5) * cov.cell);
-          layer.fillStyle = `rgba(24,131,75,${(.025 + .16 * level * level).toFixed(3)})`;
-          layer.beginPath();
-          layer.arc(x, y, radius, 0, Math.PI * 2);
-          layer.fill();
-        }
-      }
+    // One pixel per cell, scaled up by the canvas with smoothing on: the field
+    // gets exactly one alpha per cell instead of the pile of overlapping discs
+    // that used to turn the whole unsearched floor into a flat green sheet.
+    const levels = heatLevels(cov);
+    if (levels) {
+      const [ax, ay] = view.toPx(cov.x0, 0);
+      const [bx, by] = view.toPx(cov.x0 + cov.cols * cov.cell, cov.rows * cov.cell);
+      layer.save();
+      layer.beginPath();
+      layer.rect(ax, ay, bx - ax, by - ay);   // heat stops at the walls
+      layer.clip();
+      layer.imageSmoothingEnabled = true;
+      layer.imageSmoothingQuality = 'high';
+      layer.filter = `blur(${Math.max(3, cov.cell * view.scale * 0.5).toFixed(1)}px)`;
+      layer.drawImage(heatCanvas(cov, levels, undefined, heatTile), ax, ay, bx - ax, by - ay);
       layer.filter = 'none';
+      layer.restore();
     }
   }
   ctx.drawImage(coverageLayer, 0, 0);
@@ -947,16 +999,16 @@ function drawMarker() {
   const [x, y] = view.toPx(m.x, m.y);
   ctx.save();
   ctx.translate(x, y);
-  ctx.fillStyle = '#fff';
-  ctx.strokeStyle = MARKER_COLOR;
-  ctx.lineWidth = 2;
+  ctx.shadowColor = 'rgba(23,55,38,.16)';
+  ctx.shadowBlur = 7;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = MARKER_COLOR;
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = MAP_MARKER_STROKE;
   ctx.beginPath();
-  ctx.roundRect(-8, -8, 16, 16, 3);
+  ctx.roundRect(-8, -8, 16, 16, 4);
   ctx.fill();
   ctx.stroke();
-  ctx.fillStyle = MARKER_COLOR;
-  ctx.fillRect(-4, -4, 4, 4);
-  ctx.fillRect(1, 1, 4, 4);
   ctx.restore();
   drawMapLabel('MARKER', x, y - 19, MARKER_COLOR);
 }

@@ -164,7 +164,7 @@ public struct OperatorView: View {
             HStack(alignment: .bottom) {
                 if showMiniMap, !chromeIsHidden, let room = overlay.room {
                     MiniMapView(room: room, world: overlay.world, me: overlay.roomPose,
-                                colorHex: overlay.colorHex, pings: overlay.pings)
+                                pings: overlay.pings)
                         // A fixed window that follows the operator, not the room's
                         // own aspect: the dot stays centred however far they walk.
                         .frame(width: 132, height: 164)
