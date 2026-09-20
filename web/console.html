@@ -91,6 +91,18 @@
     #searchMessage.err, #personMessage.err { color: var(--red); }
     #personMessage:empty { display: none; }
     #personMessage { margin-top: 10px; font-size: 13px; color: var(--fg-2); }
+    /* The people holding the phones, as people: who is here and what each one
+       is doing right now. The camera wall shows what they can see; this says
+       who they are. A row opens that phone's panel. */
+    .team-row { display: flex; align-items: baseline; gap: 9px; width: 100%; text-align: left;
+      padding: 10px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .team-row:last-child { border-bottom: 0; }
+    .team-row:hover { background: var(--bg-1); }
+    .team-row .idx { flex: none; font-size: 12px; color: var(--fg-3); }
+    .team-row .who { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .team-row .what { margin-left: auto; color: var(--fg-2); white-space: nowrap; }
+    .team-row.off { opacity: .55; }
+    .team-row.hot .what { color: var(--red); font-weight: 500; }
     /* Threats: what the swarm has flagged in the room, newest first. */
     .threat-row { display: flex; align-items: baseline; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
     .threat-row:last-child { border-bottom: 0; }
@@ -98,7 +110,6 @@
     .threat-row .where { color: var(--fg-2); }
     .threat-row .age { margin-left: auto; font: 12px var(--mono); color: var(--fg-3); }
     .threat-row.stale { opacity: .55; }
-    #threatList .empty { padding: 20px 16px; font-size: 13px; }
     #referencePreview { max-width: 100%; max-height: 280px; margin-top: 12px; }
     #personChoices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     #searchMessage:empty { display: none; }
@@ -121,11 +132,12 @@
        who is still out there. Hidden until there is something to say; red the
        moment somebody is found, so the find is visible from across the room. */
     .live { border-top: 1px solid var(--line); background: var(--bg-1); }
-    .live-inner { max-width: none; margin: 0 auto; padding: 7px 24px; min-height: 38px;
-      display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--fg-2); }
-    .live-lead { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-weight: 500; color: var(--fg); }
+    .live-inner { max-width: none; margin: 0 auto; padding: 9px 24px; min-height: 44px;
+      display: flex; align-items: center; gap: 14px; font-size: 14px; color: var(--fg-2); }
+    .live-lead { display: inline-flex; align-items: center; gap: 10px; min-width: 0; font-size: 15px;
+      font-weight: 500; color: var(--fg); }
     .live-lead b { font-weight: 600; }
-    .live-dot { flex: none; width: 8px; height: 8px; border-radius: var(--r-dot); background: var(--accent);
+    .live-dot { flex: none; width: 9px; height: 9px; border-radius: var(--r-dot); background: var(--accent);
       animation: breathe 1s ease-in-out infinite; }
     .live-aside { white-space: nowrap; }
     .live.warn { background: #fffbeb; border-top-color: #f0d38a; }
@@ -265,7 +277,6 @@
     .map-key.rescued { color: var(--red); border-color: var(--red); }
     .map-key.marker { border-radius: 5px; background: #6b4fbb; }
     /* Grid view only: the cells a camera has actually had a good look at. */
-    .map-key.looked { border-radius: 3px; background: rgba(24,131,75,.34); border-color: rgba(24,131,75,.5); box-shadow: none; }
     /* The probability field is a scale, not a category, so its key is a ramp
        with both ends named rather than one swatch. White sits under it because
        the cleared end of the ramp is transparent over the map's white floor. */
@@ -450,7 +461,11 @@
     .camera-details .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 12px; }
     .system-details { margin-bottom: 16px; }
     .system-details .metrics { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
-    .empty { padding: 40px 16px; text-align: center; color: var(--fg-3); }
+    /* One empty state everywhere: 28px of air above and below the sentence,
+       centred and quiet. Inside a `.card-b` the body already contributes its
+       own 16px, so that copy takes 12 and the two come out the same height. */
+    .empty { padding: 28px 16px; text-align: center; color: var(--fg-3); font-size: 13px; }
+    .card-b > .empty { padding: 12px 0; }
 
     /* expanded feed: a panel docked to the right edge, like Mission Control,
        rather than a modal over the whole console. The operator keeps the map
@@ -502,7 +517,7 @@
     .vlog h3 { margin: 0; padding: 12px 16px 6px; font-size: 11px; font-weight: 500; letter-spacing: .06em;
       text-transform: uppercase; color: var(--fg-3); border-top: 1px solid var(--line); }
     .vlog .ev { grid-template-columns: 52px 1fr; padding: 7px 16px; }
-    .vlog .empty { padding: 18px 16px; text-align: left; font-size: 13px; }
+    .vlog .empty { text-align: left; }
     .vstats .k { font-size: 11px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase;
       color: var(--fg-3); }
     .vstats .v { margin-top: 3px; font-size: 14px; font-weight: 500; line-height: 1.35;
@@ -657,10 +672,15 @@
             </fieldset>
             <div id="searchMessage" role="status"></div>
             <div class="divider"></div>
-            <div class="status" id="candStatus">No candidate placed</div>
+            <div class="empty" id="candStatus">No candidate placed</div>
             <div class="found-list" id="foundList"></div>
             <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
           </div>
+        </section>
+        <section class="card" aria-label="Rescue team">
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM6 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.49 15.326a.78.78 0 0 1-.358-.442 3 3 0 0 1 4.308-3.516 6.484 6.484 0 0 0-1.905 3.959c-.023.222-.014.442.025.654a4.97 4.97 0 0 1-2.07-.655ZM16.44 15.98a4.97 4.97 0 0 0 2.07-.654.78.78 0 0 0 .357-.442 3 3 0 0 0-4.308-3.517 6.484 6.484 0 0 1 1.907 3.96 2.32 2.32 0 0 1-.026.654ZM18 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM5.304 16.19a.844.844 0 0 1-.277-.71 5 5 0 0 1 9.947 0 .843.843 0 0 1-.277.71A6.975 6.975 0 0 1 10 18a6.974 6.974 0 0 1-4.696-1.81Z"/></svg>Rescue team</h2><span class="spacer"></span>
+            <span class="faint" id="teamCount"></span></div>
+          <div id="teamList"></div>
         </section>
         <section class="card" aria-label="Threats">
           <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M6.701 2.25c.577-1 2.02-1 2.598 0l5.2 9a1.5 1.5 0 0 1-1.299 2.25H2.8A1.5 1.5 0 0 1 1.5 11.25l5.2-9ZM8 5a.75.75 0 0 1 .75.75v2.5a.75.75 0 0 1-1.5 0v-2.5A.75.75 0 0 1 8 5Zm0 6.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clip-rule="evenodd"/></svg>Threats</h2><span class="spacer"></span>
@@ -681,7 +701,7 @@
           <div id="mapWrap"><canvas id="map" aria-label="Live search map"></canvas>
             <div class="map-scale" aria-hidden="true"><i></i><span></span></div>
             <div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
-          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span><span><svg class="hazard-key" viewBox="-12 -12 24 24" aria-hidden="true"><path d="M0 -11L11 9H-11Z" fill="#fef3c7" stroke="#b45309" stroke-width="2"/><path d="M-1 -3h2v6h-2zM-1 5h2v2h-2z" fill="#92400e"/></svg>Hazard</span><span id="heatLegend">Cleared<i class="heat-scale"></i>Likely here</span><span id="gridKey" hidden><i class="map-key looked"></i>Camera has looked here</span></div>
+          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span><span><svg class="hazard-key" viewBox="-12 -12 24 24" aria-hidden="true"><path d="M0 -11L11 9H-11Z" fill="#fef3c7" stroke="#b45309" stroke-width="2"/><path d="M-1 -3h2v6h-2zM-1 5h2v2h-2z" fill="#92400e"/></svg>Hazard</span><span id="heatLegend">Cleared<i class="heat-scale"></i>Likely here</span></div>
           <p id="mapStatus" role="status"></p>
           <div class="scan-controls">
             <button type="button" id="scanToggle" aria-pressed="false">Start scan</button>
@@ -707,7 +727,6 @@
       <div class="metric" title="Phones connected and sending video right now"><div class="k">Active phones</div><div class="v" id="mLive">0</div></div>
       <div class="metric" title="Every phone that has joined this session, including ones that have gone quiet"><div class="k">Total phones</div><div class="v" id="mTotal">0</div></div>
       <div class="metric" id="mScannedBox" title="Phones that have locked onto a printed marker"><div class="k">Marker scanned</div><div class="v" id="mScanned">0/0</div></div>
-      <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
       <div class="metric" title="Phones whose position is tracked by the phone itself. The rest are shown at the seat they told us they were at — the map still draws them, but nothing has confirmed they are still there. Simulated phones are generated, not tracked."><div class="k">Position tracked</div><div class="v" id="mTracked">0/0</div></div>
     </div>
 

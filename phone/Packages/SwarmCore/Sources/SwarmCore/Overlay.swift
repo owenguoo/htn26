@@ -136,17 +136,6 @@ public struct OperatorStatus: Sendable, Equatable {
     /// in their hand and pointed at something.
     static let locateHint = "Find a printed marker"
 
-    /// How long a marker fix has to go unrefreshed before the operator is told
-    /// their position may be drifting.
-    ///
-    /// This was 30 s, which is roughly how long it takes to sweep one corner of
-    /// a room — so the warning was up more often than it was down, for a phone
-    /// that was tracking perfectly well. A warning an operator learns to ignore
-    /// is worse than no warning, because the one time it matters they will
-    /// ignore that too. Two minutes is long enough that seeing it means the
-    /// operator really has not looked at a marker for a while.
-    static let driftHintSeconds: Double = 120
-
     /// How long the phone has to be out of touch with the hub before the
     /// status goes red.
     ///
@@ -155,9 +144,10 @@ public struct OperatorStatus: Sendable, Equatable {
     /// Both take a moment, and both are completely normal — but the pill went
     /// straight to a red warning triangle and "Check the venue Wi-Fi" the
     /// instant the app opened, so every single launch began by telling the
-    /// operator something was broken. It is the same crying-wolf problem as
-    /// `driftHintSeconds`: a warning that is usually wrong gets ignored when
-    /// it is right.
+    /// operator something was broken. It is the same crying-wolf problem
+    /// that took out the drift hint, the recalibrating notice and the shaky
+    /// tracking one: a warning that is usually wrong gets ignored when it is
+    /// right.
     ///
     /// Under this, the same words are amber with no instruction attached —
     /// "Connecting…", which is true and not alarming. Over it, the connection
@@ -191,15 +181,10 @@ public struct OperatorStatus: Sendable, Equatable {
         case .idle, .permissions:
             self.init(level: .attention, title: "Starting the camera…")
         case .recalibrating:
-            // `.ok`, so the pill stays down. ARKit drops in and out of
-            // relocalizing constantly while somebody walks, and a notice that
-            // appears and disappears every few seconds is read as the app being
-            // broken rather than as information. The case that actually needs
-            // the operator to do something — alignment gone entirely — is
-            // `.calibrating where alignment == .none` below, which still
-            // speaks, and the phase card still puts up the "Recalibrate" prompt
-            // with it.
-            self.init(level: .ok, title: "Recalibrating")
+            // Kept, where the drift hint and the shaky-tracking notice were
+            // not: this is the one tracking state the operator can actually do
+            // something about, and the something is in the hint.
+            self.init(level: .attention, title: "Needs recalibrating", hint: Self.locateHint)
         case .lost:
             self.init(level: .problem, title: "Tracking lost",
                       hint: pill.alignment == .marker ? "Move slowly, find a marker"
@@ -207,7 +192,13 @@ public struct OperatorStatus: Sendable, Equatable {
         case .calibrating where pill.alignment == .none:
             self.init(level: .attention, title: "Not located yet", hint: Self.locateHint)
         case .degraded:
-            self.init(level: .attention, title: "Tracking is shaky", hint: "Slow down, camera up")
+            // `.ok`, so the pill stays down. ARKit reports degraded tracking
+            // constantly and briefly — a fast pan, a blank wall, somebody
+            // walking through frame — and it recovers on its own within a
+            // second or two without the operator doing anything. The only
+            // status worth stopping somebody mid-sweep for is the one they have
+            // to act on, which is having no position at all.
+            self.init(level: .ok, title: "Tracking")
         case .calibrating, .tracking:
             if pill.isStale {
                 self.init(level: .problem, title: "Camera stopped", hint: "Reopen the app if it stays")
@@ -215,9 +206,6 @@ public struct OperatorStatus: Sendable, Equatable {
                 self.init(level: .attention, title: "Not located yet", hint: Self.locateHint)
             } else if pill.thermalState >= .serious {
                 self.init(level: .attention, title: "Phone is hot", hint: "Sending fewer frames")
-            } else if pill.alignment == .marker,
-                      (pill.secondsSinceCorrection ?? 0) > Self.driftHintSeconds {
-                self.init(level: .attention, title: "Position may be drifting", hint: "Glance at a marker")
             } else {
                 self.init(level: .ok, title: pill.alignment == .seat ? "Tracking from your spot" : "Tracking")
             }
@@ -1280,23 +1268,56 @@ public struct OverlayModel: Sendable {
     /// one now and then. Without this, a single missed frame takes the amber
     /// screen away and the next one brings it back — a strobe, at exactly the
     /// range where somebody is about to walk into something.
-    private static let hazardHoldSeconds: Double = 1.0
+    private static let hazardHoldSeconds: Double = 1
+
+    /// And one you are standing next to is remembered much longer, because
+    /// walking up to something is precisely what stops the camera seeing it:
+    /// it fills the frame, or it drops below the lens as you close on it. That
+    /// made the warning quietest at the one moment it mattered most — the
+    /// operator felt the buzz build as they approached and then fade away just
+    /// as they arrived. Proximity beats recency. A chair half a metre away that
+    /// nothing has seen for five seconds is still a chair half a metre away,
+    /// and its distance keeps being recomputed from the live pose, so it fades
+    /// honestly when the operator actually walks off rather than on a timer.
+    private static let closeHazardHoldSeconds: Double = 10
 
     private mutating func updateHazards(pose: Pose?, roomPose: RoomPose?, alignment: RoomAlignment?,
                                         intrinsics: CameraIntrinsics?, now: Double) {
-        let placed = (state.world?.hazards ?? []).compactMap { hazard -> HazardCue? in
-            guard !hazard.stale, hazard.x.isFinite, hazard.y.isFinite else { return nil }
-            var cue = HazardCue(id: hazard.id, x: hazard.x, y: hazard.y)
+        func locate(id: String, x: Double, y: Double) -> HazardCue? {
+            guard x.isFinite, y.isFinite else { return nil }
+            var cue = HazardCue(id: id, x: x, y: y)
             (cue.bearingRadians, cue.distance, cue.imagePoint) = place(
-                x: hazard.x, y: hazard.y, heightAboveFloor: HazardCue.heightMetres,
+                x: x, y: y, heightAboveFloor: HazardCue.heightMetres,
                 pose: pose, roomPose: roomPose, alignment: alignment, intrinsics: intrinsics)
             guard let distance = cue.distance, distance <= HazardCue.warnMetres else { return nil }
             return cue
         }
+
+        var placed = (state.world?.hazards ?? []).compactMap { hazard -> HazardCue? in
+            guard let cue = locate(id: hazard.id, x: hazard.x, y: hazard.y) else { return nil }
+            // Stale means nothing has seen it lately, which is not the same as
+            // it not being there — and the surest way to stop seeing something
+            // is to walk right up to it.
+            guard !hazard.stale || cue.blocking else { return nil }
+            return cue
+        }
+        // The one being remembered is placed again from the live pose, so it
+        // gets nearer and further as the operator actually moves.
+        let hold = state.nearestHazard?.blocking == true
+            ? Self.closeHazardHoldSeconds : Self.hazardHoldSeconds
+        if let held = state.nearestHazard, now - hazardSeenAt <= hold,
+           !placed.contains(where: { $0.id == held.id }),
+           let again = locate(id: held.id, x: held.x, y: held.y) {
+            placed.append(again)
+        }
         if let nearest = placed.min(by: { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }) {
             state.nearestHazard = nearest
-            hazardSeenAt = now
-        } else if now - hazardSeenAt > Self.hazardHoldSeconds {
+            // Only a real report refreshes the clock; a remembered one must
+            // still age out, or a hazard once seen would never be forgotten.
+            if state.world?.hazards?.contains(where: { $0.id == nearest.id && !$0.stale }) == true {
+                hazardSeenAt = now
+            }
+        } else {
             state.nearestHazard = nil
         }
     }

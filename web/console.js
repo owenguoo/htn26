@@ -150,7 +150,6 @@ function renderMetrics() {
   // searched and every sighting's placement are resting on.
   setMetric('#mTracked', `${live.filter((p) => p.pose?.source === 'slam').length}/${live.length}`);
   setMetric('#mScanned', `${scanned}/${live.length}`);
-  setMetric('#mSearched', `${Math.round((st.coverage?.searched || 0) * 100)}%`);
   $('#mScannedBox')?.classList.toggle('alert', live.length > 0 && !ready && !running());
 }
 
@@ -177,13 +176,18 @@ function renderControls() {
   const s = $('#candStatus');
   const victims = t?.victims || [];
   const hidden = t?.candidates || [];
-  s.classList.toggle('found', victims.length > 0);
+  // "Nothing yet" is not a status worth boxing: when there is no news the line
+  // takes the same quiet, centred treatment as every other empty state on the
+  // page, and only becomes a panel once it has something to say.
+  let quiet = false;
   if (st.search?.mode === 'real') {
     const confirmed = st.search.confirmations || (st.search.confirmation ? [st.search.confirmation] : []);
+    quiet = !confirmed.length;
     s.textContent = !confirmed.length ? 'No confirmed sighting'
       : confirmed.length === 1 ? `Visual sighting confirmed · Phone ${confirmed[0].phoneId} · target location unknown`
       : `${confirmed.length} visual sightings confirmed · target locations unknown`;
   } else if (!t) {
+    quiet = true;
     s.textContent = 'No candidate placed';
   } else if (victims.length) {
     // Responder progress is per person and is already on each row below; a
@@ -205,7 +209,9 @@ function renderControls() {
       + (top && top.confidence >= 0.4 ? `possible sighting · ${sightingEvidence(top)}`
          : one ? 'not found yet' : 'none found yet');
   }
+  s.className = quiet ? 'empty' : victims.length ? 'status found' : 'status';
   renderFoundList(victims);
+  renderTeam();
   renderThreats();
   renderLive(victims, t);
   renderPeople(st.search?.people);
@@ -359,6 +365,51 @@ function renderFoundList(victims) {
       + `<span>${escapeHtml(detail)}</span></div>`;
   }).join('');
 }
+
+// The rescue team: one row per phone, said as a person rather than a camera.
+// Everything here is the same state the map and the feed wall draw — the
+// planner's assignment, the responder lists on each find, the phone's own task
+// line — so a row never claims something the rest of the console does not show.
+let teamKey = '';
+
+function whoIs(v) {
+  return v.label || `Person ${v.id}`;
+}
+
+function teamDoing(p) {
+  if (!p.connected) return ['Offline', false];
+  for (const v of st.target?.victims || []) {
+    if (v.foundBy === p.id) return [`found ${whoIs(v)}`, true];
+    if (v.responders && p.id in v.responders) {
+      return [v.responders[p.id] ? `with ${whoIs(v)}` : `going to ${whoIs(v)}`, true];
+    }
+  }
+  if (p.stale) return ['No signal', false];
+  if (p.task) return [p.task, false];
+  const job = st.planner?.assignments?.[p.id];
+  if (job) return [`searching ${job.sector}`, false];
+  return [running() ? 'looking around' : 'waiting', false];
+}
+
+function renderTeam() {
+  const list = [...phones.values()].sort((a, b) => a.index - b.index);
+  const rows = list.map((p) => ({ id: p.id, index: p.index, name: p.name || 'Phone',
+                                  live: isLive(p), doing: teamDoing(p) }));
+  $('#teamCount').textContent = rows.length ? `${rows.filter((r) => r.live).length} on the floor` : '';
+  const key = JSON.stringify(rows);
+  if (key === teamKey) return;
+  teamKey = key;
+  $('#teamList').innerHTML = rows.length ? rows.map((r) =>
+    `<button type="button" class="team-row${r.live ? '' : ' off'}${r.doing[1] ? ' hot' : ''}" data-phone="${escapeHtml(r.id)}">`
+    + `<span class="idx mono">#${r.index}</span><span class="who">${escapeHtml(r.name)}</span>`
+    + `<span class="what">${escapeHtml(r.doing[0])}</span></button>`).join('')
+    : '<div class="empty">Nobody has joined yet</div>';
+}
+
+$('#teamList').addEventListener('click', (event) => {
+  const id = event.target.closest('[data-phone]')?.dataset.phone;
+  if (id) openViewer(id);
+});
 
 // What the swarm has flagged in the room: obstacles in the way, and people it
 // has seen but not identified. Straight off `hazards` and `detectedPeople` in
@@ -694,27 +745,6 @@ function drawHud() {
   }
   if (hud.lookingFor) { pill(ctx, sx + sw / 2, top + 12 * k, hud.lookingFor, 'rgba(12,17,32,0.85)', '#eef2ff', 12 * k); top += 30 * k; }
   if (hud.toast) { pill(ctx, sx + sw / 2, top + 14 * k, hud.toast, 'rgba(255,255,255,0.95)', '#05070f', 13 * k, true); top += 36 * k; }
-  // Bottom-right, opposite where the phone puts its mini-map: who this operator
-  // is being sent to, standing still while the banner above rewrites itself.
-  if (hud.objective) {
-    const [tint] = TONES[hud.objective.tone] || TONES.warn;
-    ctx.font = `700 ${13 * k}px Geist, system-ui`;
-    const titleWidth = ctx.measureText(hud.objective.title).width;
-    ctx.font = `${11 * k}px Geist, system-ui`;
-    const width = Math.max(titleWidth, ctx.measureText(hud.objective.detail).width) + 24 * k;
-    const height = 46 * k, x = sx + sw - width - 10 * k, y = sy + sh - height - 10 * k;
-    ctx.fillStyle = 'rgba(12,17,32,0.82)';
-    ctx.beginPath(); ctx.roundRect(x, y, width, height, 10 * k); ctx.fill();
-    ctx.strokeStyle = tint; ctx.lineWidth = 1; ctx.stroke();
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#fff';
-    ctx.font = `700 ${13 * k}px Geist, system-ui`;
-    ctx.fillText(hud.objective.title, x + 12 * k, y + 16 * k);
-    ctx.fillStyle = '#a9b2c4';
-    ctx.font = `${11 * k}px Geist, system-ui`;
-    ctx.fillText(hud.objective.detail, x + 12 * k, y + 32 * k);
-    ctx.textAlign = 'center';
-  }
   // The full-screen card, drawn last so it covers the HUD it stands in for —
   // with a real hole in it, so the operator sees the same window onto the feed
   // that the searcher is looking through.
@@ -830,8 +860,14 @@ function removePhone(p) {
   if (viewing === p.id) closeViewer();
 }
 
+// Entries at or before this hub timestamp were wiped by a reset and are not
+// drawn again. The hub clears `planner.log` on reset too; this covers the
+// second or so afterwards, when the phase change the reset itself causes would
+// otherwise be the only line in a log the operator just emptied.
+let logSince = 0;
+
 function renderLog() {
-  const log = [...(st.planner?.log || [])].reverse().slice(0, 5);
+  const log = [...(st.planner?.log || [])].filter((e) => e.t > logSince).reverse().slice(0, 5);
   if (!log.length) { $('#log').innerHTML = '<div class="empty">Nothing yet</div>'; return; }
   $('#log').innerHTML = log.map((e) => {
     const p = e.phoneId && phones.get(e.phoneId);
@@ -1037,6 +1073,8 @@ $('#resetSession').addEventListener('click', () => $('#resetConfirm').showModal(
 $('#resetCancel').addEventListener('click', () => $('#resetConfirm').close());
 $('#resetGo').addEventListener('click', () => {
   $('#resetConfirm').close();
+  logSince = (st?.t ?? Date.now()) + 1000;
+  if (st?.planner) { st.planner.log = []; renderLog(); }
   if (st?.search?.mode === 'rehearsal') send({ type: 'target', remove: true });
   send({ type: 'reset_coverage' });
   send({ type: 'phase', phase: IDLE_PHASE, restart: true });
@@ -1135,7 +1173,6 @@ async function setMapMode(mode) {
   $('#mapWrap').classList.toggle('mode-3d', is3d);
   $('#scene3d').hidden = !is3d;
   $('#mapStatus').textContent = '';
-  $('#gridKey').hidden = mode !== 'grid';
   if (!is3d) {
     scene3d?.hide();
     gridKey = '';
@@ -1280,13 +1317,13 @@ function drawGrid(cov) {
       layer.drawImage(heatCanvas(cov, levels, undefined, heatTile), ax, ay, bx - ax, by - ay);
       layer.imageSmoothingEnabled = true;
     }
-    // `cells` is the hub's own looked/not-looked flag per cell — the thing the
-    // "area searched" percentage is counted from, drawn where it happened.
-    layer.fillStyle = 'rgba(24,131,75,.17)';
-    for (let i = 0; i < cov.cols * cov.rows; i++) {
-      if (cov.cells?.[i] !== '1') continue;
-      layer.fillRect(ax + (i % cov.cols) * cw, ay + Math.floor(i / cov.cols) * ch, cw + .5, ch + .5);
-    }
+    // No second "looked here" wash over the top. A cell a camera has looked at
+    // *is* a cleared cell — `coverage.py` drops the probability of exactly the
+    // cells it marks looked — so the green was the heat field's pale end said
+    // twice, in a different colour, on the same pixels. It was also the worse
+    // of the two: `cells` is a one-way latch that saturates within about half a
+    // minute of a real search and then covers the floor saying nothing, while
+    // the heat keeps moving for the whole search.
     layer.strokeStyle = 'rgba(23,55,38,.09)';
     layer.lineWidth = 1;
     layer.beginPath();

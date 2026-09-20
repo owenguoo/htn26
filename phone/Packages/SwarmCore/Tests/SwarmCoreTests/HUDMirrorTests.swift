@@ -313,8 +313,7 @@ struct HUDMirrorTests {
             model.apply(.guideTurn(sector: "PERSON 2", delta: 40, onTarget: false, text: nil,
                                    kind: "respond", distance: 24), heading: 90, now: 0)
         })
-        #expect(hud.objective == .init(title: "Person 2", detail: "24 m · 40° right",
-                                       bearing: 40, tone: "alert"))
+        #expect(hud.objective == .init(title: "Person 2", detail: "24 m · 40° right", tone: "alert"))
     }
 
     @Test func theObjectiveIsASweepWhenNobodyHasBeenFound() {
@@ -322,8 +321,7 @@ struct HUDMirrorTests {
             model.apply(.guideTurn(sector: "B3", delta: -12, onTarget: false, text: nil,
                                    kind: "search", distance: nil), heading: 90, now: 0)
         })
-        #expect(hud.objective == .init(title: "Sweeping B3", detail: "12° left",
-                                       bearing: -12, tone: "warn"))
+        #expect(hud.objective == .init(title: "Sweeping B3", detail: "12° left", tone: "warn"))
     }
 
     @Test func thereIsNoObjectiveWithNowhereToBeSent() {
@@ -520,9 +518,11 @@ struct HUDMirrorTests {
         })
         let card = try #require(hud.takeover)
         #expect(card.kind == "hazard", "the obstacle is what has to be dealt with first")
-        #expect(card.badge?.text == "Person 2 · 12 m · 40° right")
+        #expect(card.badge?.text == "Person 2 · 12 m", "title and range, no second bearing")
         #expect(card.badge?.color == HUDMirror.plateFound, "the person keeps their own colour")
-        #expect(card.window == "arrow", "step around it and carry on toward them")
+        #expect(card.window == "plain",
+                "the window shows the hazard: an arrow to somewhere else on a 'watch out' card "
+                + "is pointing away from the thing it is warning about")
     }
 
     @Test func aFindCardStillWarnsAboutTheObstacle() throws {
@@ -622,7 +622,7 @@ struct HUDMirrorTests {
         """)
         let card = try #require(mirror(overlay { $0.apply(hazards, now: 0) }).takeover)
         #expect(card.title == "Watch out")
-        #expect(card.detail == "Hazard 1 m ahead")
+        #expect(card.detail == "1 m ahead", "the plate already says Watch out above it")
         #expect(card.color == HUDMirror.hazardColor)
         #expect(card.seconds == 0, "no clock: it is up while it is true")
         let person = try #require(HUDMirror.takeover(kind: "found_go", name: "Sam"))
@@ -641,6 +641,25 @@ struct HUDMirrorTests {
                                takeover: "found_go", name: "Sam"), heading: 90, now: 0)
         })
         #expect(hud.takeover?.kind == "hazard")
+    }
+
+    /// Walking up to something is what stops the camera seeing it, so the
+    /// warning used to be quietest at the moment it mattered most.
+    @Test func standingOnTopOfAHazardIsStillFullStrength() throws {
+        let onIt = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 0.35, "y": 5, "stale": true}]}
+        """)
+        let hud = mirror(overlay { $0.apply(onIt, now: 0) })
+        #expect(hud.takeover?.kind == "hazard", "stale, but you are standing next to it")
+        #expect(hud.ambient?.intensity == 1, "right there is maximum, not a fading ramp")
+        #expect(hud.ambient?.pulseMs == 300)
+    }
+
+    @Test func aStaleHazardAcrossTheRoomIsStillIgnored() throws {
+        let away = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 2.5, "y": 5, "stale": true}]}
+        """)
+        #expect(mirror(overlay { $0.apply(away, now: 0) }).warning == nil)
     }
 
     /// A detector that misses one frame must not strobe the screen at the exact

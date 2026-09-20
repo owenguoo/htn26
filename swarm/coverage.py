@@ -165,8 +165,14 @@ class Coverage:
         mid = sorted(self.prob)[n // 2]
         top = max(self.prob)
         floor = min((p for p in self.prob if p > 0), default=0)
-        up = math.log(top / mid) if top > mid > 0 else 0.0
-        down = math.log(mid / floor) if 0 < floor < mid else 0.0
+        # A half with no real range in it is flat, and must be read as flat: the
+        # untouched cells of a room nobody has swept differ from each other only
+        # in the last bits of the renormalisation, and dividing by that span
+        # turned float noise into a saturated blue sheet over the whole floor.
+        # SPREAD is the smallest ratio worth a ramp.
+        SPREAD = 1.05
+        up = math.log(top / mid) if top > mid * SPREAD and mid > 0 else 0.0
+        down = math.log(mid / floor) if floor > 0 and mid > floor * SPREAD else 0.0
         out = []
         for p in self.prob:
             if p >= mid:

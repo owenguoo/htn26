@@ -91,14 +91,23 @@ struct RootView: View {
         NavigationStack {
             Form {
                 Section("Hub") {
+                    // **No `.textContentType`.** These two fields are the
+                    // only thing on this screen that talks to anything outside
+                    // the process: a content type puts the field in the
+                    // system's AutoFill group, and focusing it makes the
+                    // keyboard round-trip to the AutoFill services before it
+                    // will accept a keystroke. Neither is worth it here — a LAN
+                    // address is not in Safari's saved URLs, and the operator's
+                    // handle is remembered in `PhoneIdentity` after the first
+                    // join. Taking them off leaves this form doing no work at
+                    // all while you type.
                     TextField("http://10.0.0.5:8000/", text: $hub)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .textContentType(.URL)
                     TextField("Your name", text: $name)
-                        .textContentType(.name)
                         .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
                 }
                 if let error {
                     // Failures are read by a person standing in a room with a

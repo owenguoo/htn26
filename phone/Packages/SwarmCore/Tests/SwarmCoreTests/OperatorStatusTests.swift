@@ -83,12 +83,14 @@ struct OperatorStatusTests {
 
     @Test func secondaryConditionsOnlySurfaceWhenNothingWorseIsWrong() {
         #expect(OperatorStatus(pill(thermal: .serious)).title == "Phone is hot")
-        #expect(OperatorStatus(pill(correction: 200)).title == "Position may be drifting")
+        #expect(OperatorStatus(pill(correction: 200)).level == .ok,
+                "a marker fix going stale is not something to interrupt anybody about")
         #expect(OperatorStatus(pill(correction: 45)).level == .ok,
                 "a marker fix 45 s old is an ordinary sweep, not a warning")
         #expect(OperatorStatus(pill(alignment: .seat, correction: nil)).level == .ok,
                 "a seat-located phone has no marker fix to go stale")
-        #expect(OperatorStatus(pill(.degraded)).title == "Tracking is shaky")
+        #expect(OperatorStatus(pill(.degraded)).level == .ok,
+                "ARKit degrades and recovers on its own; there is nothing to act on")
         #expect(OperatorStatus(pill(stale: true)).level == .problem)
         // Hot *and* lost: say the one that stops it working.
         #expect(OperatorStatus(pill(.lost, thermal: .critical)).title == "Tracking lost")

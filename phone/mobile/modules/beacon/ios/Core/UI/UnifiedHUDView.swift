@@ -80,8 +80,7 @@ struct HUDSoundEdgeView: View {
 
     /// Fades the band in when the target leaves the frame, rather than popping.
     @State private var visible = false
-    /// Soft pulse while the band is up.
-    @State private var pulseDim = false
+
 
     var body: some View {
         GeometryReader { geometry in
@@ -123,18 +122,16 @@ struct HUDSoundEdgeView: View {
         .onChange(of: edge?.color) { _, _ in sync(to: edge) }
     }
 
-    private var bandOpacity: Double {
-        guard visible, edge != nil else { return 0 }
-        return pulseDim ? 0.48 : 0.95
-    }
+    /// Held, not pulsed. Everything else that says "urgent" on this screen — the
+    /// wash, the plates — stopped blinking for the same reason: the operator is
+    /// looking *through* all of it while they walk, and a surface that changes
+    /// brightness is harder to see past than one that does not. The rhythm is
+    /// in the haptics.
+    private var bandOpacity: Double { visible && edge != nil ? 0.95 : 0 }
 
     private func sync(to edge: HubHUDMirror.SoundEdge?) {
         if edge != nil {
             withAnimation(.easeInOut(duration: 0.5)) { visible = true }
-            pulseDim = false
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                pulseDim = true
-            }
         } else {
             withAnimation(.easeInOut(duration: 0.35)) { visible = false }
         }

@@ -32,10 +32,6 @@ struct TakeoverView: View {
     /// The plate arrives at full size and contracts away, which is what makes
     /// it read as *becoming* the badge rather than blinking out.
     @State private var shown = false
-    /// The hazard card has no clock, so it breathes instead — a still amber
-    /// screen would be read once and then stop being read.
-    @State private var pulseDim = false
-
     private var isHazard: Bool { takeover.kind == "hazard" }
 
     var body: some View {
@@ -55,16 +51,10 @@ struct TakeoverView: View {
         }
         .ignoresSafeArea()
         .scaleEffect(shown ? 1 : 0.94, anchor: .center)
-        .opacity(shown ? (pulseDim ? 0.72 : 1) : 0)
+        .opacity(shown ? 1 : 0)
         .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { shown = true }
-            guard isHazard else { return }
-            withAnimation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true)) {
-                pulseDim = true
-            }
-        }
-        .onDisappear { shown = false; pulseDim = false }
+        .onAppear { withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { shown = true } }
+        .onDisappear { shown = false }
         .accessibilityElement(children: .combine)
         .accessibilityLabel([takeover.title, takeover.detail, takeover.footer]
             .compactMap { $0 }.joined(separator: ". "))

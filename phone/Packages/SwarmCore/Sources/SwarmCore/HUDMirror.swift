@@ -54,21 +54,19 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
         public var hollow = false
     }
 
-    /// The one thing this phone is being sent to, named and measured, kept in a
-    /// fixed corner so the operator always knows where to look for it.
+    /// The one thing this phone is being sent to, named and measured.
     ///
-    /// The banner already says what to do *right now* ("Turn right 40°") and
-    /// rewrites itself every tick; it is an instruction, not a standing answer
-    /// to "who am I walking to and how far is it". Pre-formatted, like `banner`
-    /// and `lookingFor`, so the two renderers cannot round the same metre two
-    /// different ways.
+    /// No renderer draws this on its own any more — it had a card in the bottom
+    /// corner and the corner was wanted back. It stays because the takeover
+    /// plates still compose their badge out of it: when an obstacle takes the
+    /// screen, this is what tells the operator they were on their way to Person
+    /// 2, twelve metres off, and have not been stood down.
+    ///
+    /// Pre-formatted, like `banner` and `lookingFor`, so the two renderers
+    /// cannot round the same metre two different ways.
     public struct Objective: Sendable, Equatable, Encodable {
         public var title: String
         public var detail: String
-        /// Degrees right of where the phone is facing. The card's arrow turns
-        /// by this, so the glyph is a direction rather than decoration — the
-        /// detail line says "40° right" and the arrow means it.
-        public var bearing: Double
         /// "alert", "ok" or "warn" — the console's three pill colours, taken
         /// straight from the banner so the card and the banner never disagree.
         public var tone: String
@@ -140,11 +138,15 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
         /// the thing gets closer, so "nearly there" and "about to hit it" do
         /// not feel the same.
         public var intensity: Double
-        /// Milliseconds between beats, or 0 for a wash that simply holds.
+        /// Milliseconds between haptic beats, or 0 for no beat at all.
         ///
-        /// The renderer drives the light *and* the haptic from this one number,
-        /// which is the only way they stay on the same beat. A screen pulsing
-        /// at one rate against a buzz at another is worse than either alone.
+        /// **The colour does not use this.** The wash is held solid: an operator
+        /// is looking through it while they walk, and a surface that changes
+        /// brightness is harder to see past than one that does not, so urgency
+        /// that costs visibility is not urgency. The beat is in the hand, where
+        /// it costs nothing to look at, and it comes off the same `Ambient` the
+        /// colour does — so the tempo in the hand and the depth on the screen
+        /// are one description of one situation.
         public var pulseMs: Double
     }
 
@@ -291,7 +293,7 @@ public enum HUDMirror {
         switch kind {
         case "sector":
             return .init(kind: kind, color: plateSuccess, title: "At your sector", detail: who,
-                         footer: "Sweep it slowly, phone up", symbol: "checkmark",
+                         footer: "Look slowly", symbol: "checkmark",
                          window: "plain", badge: nil,
                          insetX: 0.11, top: 0.30, bottom: 0.88, seconds: 1.5)
         case "found_stay":
@@ -326,7 +328,7 @@ public enum HUDMirror {
     /// itself.
     static func hazardPlate(text: String) -> HubHUDMirror.Takeover {
         .init(kind: "hazard", color: hazardColor, title: "Watch out", detail: text,
-              footer: "Look up from the phone", symbol: "exclamationmark.triangle.fill",
+              footer: "Be careful", symbol: "exclamationmark.triangle.fill",
               window: "plain", badge: nil, insetX: 0.05, top: 0.26, bottom: 0.91, seconds: 0)
     }
     public static let soundColor = "#ff3b30"
@@ -604,12 +606,17 @@ public enum HUDMirror {
             ?? soundSide.map { HubHUDMirror.SoundEdge(side: $0, color: soundColor) }
             ?? guideSide.map { HubHUDMirror.SoundEdge(side: $0, color: alertColor) }
 
-        let warning = hazard.flatMap { hazard -> HubHUDMirror.Warning? in
+        // "1 m to your left": where it is, and nothing else. The strip under the
+        // tape prefixes it with the word Hazard because it appears among other
+        // lines and needs to say what it is about; the plate does not, because
+        // the plate already says "Watch out" in thirty-point type directly above
+        // it, and a card that says hazard twice is a card somebody reads twice.
+        let nearby = hazard.flatMap { hazard -> String? in
             guard let side = hazard.side, let metres = hazard.distance else { return nil }
-            let where_ = side == "ahead" ? "ahead" : "to your \(side)"
-            return .init(text: String(format: "Hazard %.0f m %@", Double(metres), where_),
-                         color: hazardColor)
+            return String(format: "%.0f m %@", Double(metres),
+                          side == "ahead" ? "ahead" : "to your \(side)")
         }
+        let warning = nearby.map { HubHUDMirror.Warning(text: "Hazard " + $0, color: hazardColor) }
 
         // The standing answer to "who am I walking to, and how far". It exists
         // only while there is somewhere to be sent — no arrow, no card.
@@ -620,7 +627,7 @@ public enum HUDMirror {
                          detail: objectiveDetail(offsetDegrees: off,
                                                  distance: arrow.distance.map(Double.init),
                                                  onTarget: cue.onTarget),
-                         bearing: off, tone: cue.tone)
+                         tone: cue.tone)
         }
 
         // What the whole screen is saying, for as long as it is true. A hazard
@@ -657,7 +664,7 @@ public enum HUDMirror {
         //  2. standing with somebody, which is held, not timed, because it is
         //     what you are doing rather than something that just happened;
         //  3. whatever moment the hub or the geometry last announced.
-        var plate = (hazard?.blocking == true ? warning.map { hazardPlate(text: $0.text) } : nil)
+        var plate = (hazard?.blocking == true ? nearby.map { hazardPlate(text: $0) } : nil)
             ?? (overlay.find == .with ? takeover(kind: "found_stay", name: overlay.findName) : nil)
             ?? overlay.takeover.flatMap { takeover(kind: $0.kind, name: $0.name) }
 
@@ -667,10 +674,16 @@ public enum HUDMirror {
         // the person because a chair is in the way is the failure this prevents.
         if plate?.kind == "hazard" {
             if let objective {
-                plate?.badge = .init(text: "\(objective.title) · \(objective.detail)",
-                                     color: plateFound)
-                // Step around it and carry on: point at them through the window.
-                plate?.window = "arrow"
+                // Title and range only. The full detail line carries a bearing
+                // too, and a card that says "1 m to your left" at the top and
+                // "98° right" underneath is asking somebody to solve a puzzle
+                // while they walk into a chair.
+                let range = overlay.arrow?.distance.map { String(format: " · %.0f m", Double($0)) } ?? ""
+                plate?.badge = .init(text: objective.title + range, color: plateFound)
+                // The window keeps showing the hazard, which is the thing this
+                // card is about and the thing directly in front of the lens. It
+                // used to put an arrow to the *objective* in there, so the card
+                // said "watch out" while pointing somewhere else entirely.
             } else if overlay.find == .with, let who = overlay.findName {
                 // Nowhere to be steered — you are already on them — but the
                 // amber screen must not read as "the person is over".

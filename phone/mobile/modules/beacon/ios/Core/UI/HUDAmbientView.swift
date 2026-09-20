@@ -15,21 +15,26 @@ import SwarmCore
 /// cannot see through would be a wash they have to lower the phone to escape,
 /// which defeats every other thing on this screen.
 ///
-/// Pulsing is reserved for *go*. Once somebody has arrived, a screen still
-/// throbbing at them is nagging about a decision they have already made, so the
-/// `with` state holds steady and dimmer — the same red, because the emergency
-/// did not end when they got there.
+/// **It does not flash.** It used to breathe, faster the closer the thing got,
+/// which is the obvious way to say "urgent" and the wrong one here: the whole
+/// design of this wash is that an operator can see through it while they walk,
+/// and a surface changing brightness twice a second is harder to see past than
+/// the same surface held still. Urgency that costs visibility is not urgency,
+/// it is interference. The rhythm lives in the haptics instead, where it costs
+/// nothing to look at — same tempo, same weight, same `Ambient` behind both.
+///
+/// Intensity still rises as the thing gets nearer. A closer hazard is a deeper
+/// amber and a harder buzz; it is simply never a blinking one.
 struct HUDAmbientView: View {
     let ambient: HubHUDMirror.Ambient?
-    /// Fired on the bright edge of every beat, with the ambient's own
-    /// intensity. The light and the buzz come off the same loop on purpose:
-    /// two clocks would drift, and a screen flashing out of time with the hand
-    /// is worse than either on its own.
+    /// The beat, felt and not seen. The wash itself holds steady — a screen
+    /// that flashes is harder to see past than a solid one, and somebody
+    /// walking toward a casualty is trying to see past it the whole time — so
+    /// the rhythm moved into the hand, where it costs no visibility at all.
     var onPulse: @MainActor (Double) -> Void = { _ in }
 
     /// Eases the wash in and out rather than snapping between situations.
     @State private var shown = false
-    @State private var dim = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -44,7 +49,7 @@ struct HUDAmbientView: View {
                     endRadius: max(geometry.size.width, geometry.size.height) * 0.8)
             }
         }
-        .opacity(shown ? (dim ? 0.5 : 1) : 0)
+        .opacity(shown ? 1 : 0)
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -52,28 +57,20 @@ struct HUDAmbientView: View {
             withAnimation(.easeInOut(duration: gone ? 0.45 : 0.35)) { shown = !gone }
         }
         .onAppear { withAnimation(.easeInOut(duration: 0.35)) { shown = ambient != nil } }
-        // Re-keyed whenever the rhythm changes, so closing on something restarts
-        // the loop at the new tempo instead of finishing the old beat first.
+        // Re-keyed whenever the rhythm changes, so closing on something picks up
+        // the new tempo instead of finishing the old beat first.
         .task(id: ambient?.pulseMs.rounded()) { await beat() }
     }
 
-    /// One heartbeat: a quick brighten with the buzz, then a slower decay. Not
-    /// `repeatForever`, because that animates without ever handing control back,
-    /// and the haptic has to land on the same edge as the light.
+    /// The haptic heartbeat. Its tempo and its weight both come from the same
+    /// `Ambient` the colour does, so what the hand feels and what the screen
+    /// says are one description of one situation.
     @MainActor
     private func beat() async {
-        guard let period = ambient?.pulseMs, period > 0 else {
-            withAnimation(.easeInOut(duration: 0.3)) { dim = false }
-            return
-        }
-        let rise = period * 0.3, fall = period * 0.7
+        guard let period = ambient?.pulseMs, period > 0 else { return }
         while !Task.isCancelled {
             onPulse(ambient?.intensity ?? 0.6)
-            withAnimation(.easeOut(duration: rise / 1000)) { dim = false }
-            try? await Task.sleep(for: .milliseconds(Int(rise)))
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeIn(duration: fall / 1000)) { dim = true }
-            try? await Task.sleep(for: .milliseconds(Int(fall)))
+            try? await Task.sleep(for: .milliseconds(Int(period)))
         }
     }
 }

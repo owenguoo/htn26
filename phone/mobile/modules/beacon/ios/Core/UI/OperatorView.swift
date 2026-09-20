@@ -221,12 +221,16 @@ public struct OperatorView: View {
         .onDisappear { model.detach() }
     }
 
-    /// "SAM · 12 m" under the takeover's arrow: the name the card is already
-    /// shouting, and how far there is to walk.
+    /// "SAM · 12 m" under the takeover's arrow.
+    ///
+    /// Only ever for the card that *has* an arrow. It used to be built from
+    /// whatever card was up, which on the hazard card labelled an arrow
+    /// pointing at a sector with the word "WATCH OUT" and the range to that
+    /// sector — three unrelated facts in one chip.
     private var takeoverChip: String? {
-        guard let title = model.frame.hud.takeover?.title,
+        guard let card = model.frame.hud.takeover, card.window == "arrow",
               let distance = overlay.arrow?.distance else { return nil }
-        let name = title.replacingOccurrences(of: " found", with: "").uppercased()
+        let name = card.title.replacingOccurrences(of: " found", with: "").uppercased()
         return String(format: "%@ · %.0f m", name, Double(distance))
     }
 
@@ -264,13 +268,6 @@ public struct OperatorView: View {
                     miniMap(room: room)
                 }
                 Spacer(minLength: 0)
-                // Opposite the map: the place you are, and the place you are
-                // being sent. The mirror decides whether there is anything to
-                // say here.
-                if let objective = model.frame.hud.objective, !chromeIsHidden {
-                    ObjectiveCardView(objective: objective)
-                        .transition(.opacity)
-                }
             }
         }
         .padding(.horizontal, Space.m)
