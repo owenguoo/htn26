@@ -226,6 +226,9 @@ public enum HubOutbound: Sendable, Equatable {
     case orient(heading: Double?, pitch: Double?, calibrated: Bool, tCapture: Double)
     case seat(HubSeat)
     case name(String)
+    /// The operator's "I see something". It carries nothing: the hub drops the
+    /// ping at the pose it already holds for this phone.
+    case mark
     case debug(HubDebug)
     /// `ts` echoed exactly as received; `tp` is this phone's epoch ms.
     case pong(ts: Double, tp: Double)
@@ -251,7 +254,7 @@ public enum HubOutbound: Sendable, Equatable {
 
     public var lane: Lane {
         switch self {
-        case .hello, .seat, .name, .pong: .control
+        case .hello, .seat, .name, .mark, .pong: .control
         case .slam, .orient: .slam
         case .frame: .frame
         case .debug: .debug
@@ -271,6 +274,7 @@ public enum HubOutbound: Sendable, Equatable {
         case .orient: "orient"
         case .seat: "seat"
         case .name: "name"
+        case .mark: "mark"
         case .debug: "debug"
         case .pong: "pong"
         case .frame: "frame"
@@ -296,6 +300,8 @@ public enum HubOutbound: Sendable, Equatable {
             return .text(try Self.string(encoder.encode(SeatMessage(seat: seat))))
         case .name(let name):
             return .text(try Self.string(encoder.encode(NameMessage(name: name))))
+        case .mark:
+            return .text(try Self.string(encoder.encode(MarkMessage())))
         case .debug(let debug):
             return .text(try Self.string(encoder.encode(Tagged(type: "debug", body: debug))))
         case .pong(let ts, let tp):
@@ -333,6 +339,9 @@ public enum HubOutbound: Sendable, Equatable {
     private struct NameMessage: Encodable {
         var type = "name"
         var name: String
+    }
+    private struct MarkMessage: Encodable {
+        var type = "mark"
     }
     private struct AudioEndMessage: Encodable {
         var type = "audio_end"

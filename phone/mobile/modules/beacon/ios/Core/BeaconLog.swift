@@ -21,7 +21,19 @@ public enum BeaconLog {
     // a `let` makes that not compile. Seeded from the argument domain so a run
     // can quiet it without a rebuild: `-BeaconLog NO` in the scheme's launch
     // arguments. Defaults to on — the device path is still being brought up.
-    public static var isEnabled: Bool = {
+    //
+    // `nonisolated(unsafe)` rather than an actor or a lock, and deliberately.
+    // Swift 6 is right that this is mutable global state read from every thread
+    // in the app, but the alternatives all cost more than the thing is worth:
+    // isolating it to an actor would make `log` async and it is called from
+    // ARKit's 60 Hz delegate and from CoreAudio's render thread, and a lock
+    // would put a serialising point in the one place whose entire job is to
+    // stay out of the way of the bring-up it is tracing. What is actually
+    // shared is one word-sized Bool, written at most twice in a process —
+    // once by this initialiser, once by a developer silencing the trace — and
+    // read the rest of the time. A racing read sees the old value and prints
+    // one extra line.
+    public nonisolated(unsafe) static var isEnabled: Bool = {
         guard UserDefaults.standard.object(forKey: "BeaconLog") != nil else { return true }
         return UserDefaults.standard.bool(forKey: "BeaconLog")
     }()
@@ -39,7 +51,22 @@ public enum BeaconLog {
 
     /// For a step that can hang: logs before and after, so a missing "done"
     /// line localises the halt to one call.
-    public static func step<T>(_ name: String, _ body: () async throws -> T) async rethrows -> T {
+    ///
+    /// **It runs on its caller's actor** (`isolation: #isolation`), and that is
+    /// not a detail. Every step this wraps is a piece of someone's bring-up
+    /// written in place — `ARKitPoseProvider.start` reaching for its own
+    /// `configuration`, `SwarmRuntime` reaching for the session it just built —
+    /// so the closures capture actor-isolated state by construction. Without
+    /// the isolated parameter this is a `nonisolated async` function, the
+    /// closure has to cross an isolation boundary to reach it, and Swift 6
+    /// rejects sending a task-isolated closure ("Sending value of non-Sendable
+    /// type '() async throws -> …' risks causing data races"). Inheriting the
+    /// caller's isolation means nothing crosses a boundary at all: no
+    /// `@Sendable` requirement on the body, and no hop inserted in the middle
+    /// of a join this exists to time.
+    public static func step<T>(_ name: String,
+                               isolation: isolated (any Actor)? = #isolation,
+                               _ body: () async throws -> T) async rethrows -> T {
         log("→ \(name)")
         do {
             let value = try await body()

@@ -130,6 +130,7 @@ struct HubWireTests {
         #expect(HubOutbound.pong(ts: 0, tp: 0).lane == .control)
         #expect(HubOutbound.seat(HubSeat(x: 0, y: 0)).lane == .control)
         #expect(HubOutbound.name("x").lane == .control)
+        #expect(HubOutbound.mark.lane == .control)
         #expect(HubOutbound.slam(x: 0, y: 0, heading: nil, pitch: nil).lane == .slam)
         #expect(HubOutbound.orient(heading: nil, pitch: nil, calibrated: false, tCapture: 0).lane == .slam)
         #expect(HubOutbound.frame(header, jpeg: Data()).lane == .frame)

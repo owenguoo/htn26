@@ -266,6 +266,12 @@ public actor SwarmClient {
         await transport.send(.name(name))
     }
 
+    /// The operator's "I see something, here". The hub answers with a `ping`
+    /// for everyone, this phone included, so there is nothing to draw locally.
+    public func mark() async {
+        await transport.send(.mark)
+    }
+
     /// Where the operator tapped on the floor plan, room metres.
     public func setSeat(x: Double, y: Double) async {
         let seat = HubSeat(x: x, y: y)

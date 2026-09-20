@@ -146,6 +146,12 @@ public final class OperatorViewModel {
         Task { await client.setSeat(x: x, y: y) }
     }
 
+    /// "I see something": a ping for everyone, where this operator stands.
+    public func mark() {
+        guard let client else { return }
+        Task { await client.mark() }
+    }
+
     /// For a marker lock that has gone wrong and is not fixing itself.
     public func resetOrigin() {
         guard let client else { return }

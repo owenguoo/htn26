@@ -32,6 +32,8 @@ public struct OperatorView: View {
     /// they give the genie its anchor — see `genieAnchor`.
     @State private var miniMapFrame: CGRect = .zero
     @State private var contentSize: CGSize = .zero
+    /// Held for a moment after a mark, so a nervous thumb is one ping, not five.
+    @State private var isMarkCoolingDown = false
 
     /// The mini-map's own size, which the drag clamp and the genie anchor both
     /// have to agree with, so neither gets to write it down separately.
@@ -282,6 +284,17 @@ public struct OperatorView: View {
                     miniMap(room: room)
                 }
                 Spacer(minLength: 0)
+                // Under the thumb, because it is the one thing here the operator
+                // does rather than reads. Only with a room position: the hub
+                // places the mark, and with no pose it has nowhere to put it.
+                if !chromeIsHidden, !isShowingMap, overlay.roomPose != nil {
+                    MarkButton(action: mark)
+                        .disabled(isMarkCoolingDown)
+                        // The Simulator's drive stick owns this corner; stand
+                        // clear above it. A device has no stick.
+                        .padding(.bottom, model.isDrive ? 112 : 0)
+                        .transition(.opacity)
+                }
             }
         }
         .padding(.horizontal, Space.m)
@@ -363,6 +376,17 @@ public struct OperatorView: View {
                          y: min(1, max(0, miniMapFrame.midY / contentSize.height)))
     }
 
+    /// The ping the hub sends back is the confirmation — it lands on the
+    /// mini-map and plays the ping haptic — so this only has to send and wait.
+    private func mark() {
+        model.mark()
+        isMarkCoolingDown = true
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            isMarkCoolingDown = false
+        }
+    }
+
     private func showMap(_ showing: Bool) {
         withAnimation(Motion.genie) { isShowingMap = showing }
     }
@@ -382,6 +406,24 @@ struct SettingsButton: View {
             .buttonStyle(.glass)
             .tint(.hudInk)
             .accessibilityLabel("Settings")
+    }
+}
+
+/// "I see something, here." The same glass circle as Settings: one family of
+/// controls over the camera, told apart by where they sit and what they show.
+struct MarkButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button("Mark here", systemImage: "mappin.and.ellipse", action: action)
+            .labelStyle(.iconOnly)
+            .font(TypeScale.inlineSymbol)
+            .controlSize(.large)
+            .buttonBorderShape(.circle)
+            .buttonStyle(.glass)
+            .tint(.hudInk)
+            .accessibilityLabel("Mark here")
+            .accessibilityHint("Tells everyone you see something where you are standing.")
     }
 }
 

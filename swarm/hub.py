@@ -390,6 +390,14 @@ class Hub:
             self._on_gps(phone, msg)
         elif kind == "pong":
             self._on_pong(phone, msg)
+        elif kind == "mark":
+            # the operator's "I see something": a ping where they stand, for everyone.
+            # Placed from the hub's own pose for them — a phone with none marks nothing.
+            pose = phone.pose(now_ms())
+            if pose:
+                # a 24-char name plus this still fits ping()'s 32-char label
+                label = f"{phone.name or '#' + str(phone.index)} marked"
+                asyncio.create_task(self.ping(pose["x"], pose["y"], label))
 
     def _apply_orientation(self, phone: Phone, msg: dict) -> None:
         if msg.get("heading") is not None:
