@@ -78,6 +78,16 @@ public struct OperatorView: View {
         return PhaseCardText.covers(phase, alignment: overlay.alignment) || calibrationConfirmed
     }
 
+    /// This phone has no lock and the operator is expected to do something
+    /// about it — so the middle of the screen belongs to the viewfinder.
+    ///
+    /// Not while the map is up, and not in the lobby or after the search: in
+    /// neither of those is anybody being asked to scan anything.
+    private var isHuntingMarker: Bool {
+        guard model.isJoined, !isShowingMap, overlay.alignment == .none else { return false }
+        return overlay.phase != "lobby" && overlay.phase != "end"
+    }
+
     /// Something is over the camera, so the chrome around the edges is noise
     /// rather than context.
     private var chromeIsHidden: Bool { isShowingMap || phaseCardIsUp }
@@ -145,13 +155,40 @@ public struct OperatorView: View {
                 ElevationCueView(cue: elevation)
             }
 
+            // Somewhere to aim. Keyed off *this phone having no lock* rather
+            // than off the hub's calibrate phase, because the other time the
+            // operator has to find a marker is after a recalibrate or a lost
+            // origin mid-search — when the hub is still saying "search" and no
+            // card comes up at all.
+            if isHuntingMarker {
+                MarkerReticleView()
+            }
+
             if phaseCardIsUp, let phase = overlay.phase {
-                PhaseCardView(phase: phase, lookingFor: overlay.world?.lookingFor,
-                              confirmed: calibrationConfirmed,
-                              onRequestSettings: onRequestSettings)
+                // Calibrate is the one card that asks the operator to *use* the
+                // camera it is sitting on top of. Centred, it covered the exact
+                // part of the frame they were being told to aim at — so while
+                // the reticle is up the words go to the bottom and the
+                // viewfinder gets the middle. Lobby and end ask for nothing and
+                // keep the middle.
+                VStack(spacing: 0) {
+                    if isHuntingMarker { Spacer(minLength: 0) }
+                    PhaseCardView(phase: phase, lookingFor: overlay.world?.lookingFor,
+                                  confirmed: calibrationConfirmed,
+                                  again: overlay.isRecalibrating)
+                }
+                .padding(.bottom, isHuntingMarker ? Space.xxl : 0)
             }
 
             if isShowingMap, let room = overlay.room {
+                // Tap anywhere off the card to put it away. The card itself is
+                // the only thing in this frame that takes a touch, so this is
+                // what a tap "outside the map" lands on.
+                Color.black.opacity(0.28)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { showMap(false) }
+                    .transition(.opacity)
                 RoomMapView(room: room, world: overlay.world, me: overlay.roomPose,
                             pings: overlay.pings, onClose: { showMap(false) })
                     // Full-bleed so the genie's anchor, which is a fraction of
@@ -212,11 +249,13 @@ public struct OperatorView: View {
             ZStack(alignment: .top) {
                 HStack(alignment: .top, spacing: Space.s) {
                     Spacer(minLength: 0)
-                    // Hidden under a phase card and under the map, both of
-                    // which carry their own way out. Two gears on one screen
-                    // is one gear too many.
-                    if !chromeIsHidden {
-                        ChromeControlsView(model: model, onSettings: onRequestSettings)
+                    // Stays up under a phase card: the card used to carry its
+                    // own gear because it covered the screen, and now that the
+                    // calibrate card stands aside for the viewfinder there is
+                    // one gear, in the one place, for every state. Only the map
+                    // takes it away, and the map is dismissed by tapping it.
+                    if !isShowingMap, let onRequestSettings {
+                        SettingsButton(action: onRequestSettings)
                             .transition(.opacity)
                     }
                 }
@@ -316,63 +355,6 @@ public struct OperatorView: View {
 
     private func showMap(_ showing: Bool) {
         withAnimation(Motion.genie) { isShowingMap = showing }
-    }
-}
-
-/// The two controls the operator needs while they are sweeping, stacked out of
-/// the way at the top-right: Settings, and a recalibrate that does not make
-/// them go and find it.
-///
-/// Leave is deliberately *not* here — it lives in Settings, because an
-/// accidental tap on the camera chrome must not drop the hub mid-demo.
-/// Recalibrating is not in that class: the worst it costs is the few seconds
-/// of pointing at a printed marker that the card then asks for.
-struct ChromeControlsView: View {
-    let model: OperatorViewModel
-    var onSettings: (() -> Void)?
-
-    var body: some View {
-        VStack(spacing: Space.s) {
-            if let onSettings {
-                SettingsButton(action: onSettings)
-            }
-            // Nothing to reset before joining, and a control that does nothing
-            // is worse than one that is not there.
-            if model.isJoined {
-                RecalibrateButton { model.resetOrigin() }
-            }
-        }
-    }
-}
-
-/// Drops the marker lock and asks for another one — `resetOrigin`, which puts
-/// the session into `recalibrating` and the calibrate card back on screen.
-///
-/// For the case the status pill cannot fix by itself: the lock is holding, so
-/// nothing is reported as wrong, but the dot is plainly in the wrong part of
-/// the room. Before this the only cure was to leave and rejoin.
-struct RecalibrateButton: View {
-    let action: () -> Void
-
-    /// Bumped on each tap so the glyph turns once. `resetOrigin` is quiet —
-    /// the phase card takes a moment to arrive — and a control that does not
-    /// answer gets tapped again.
-    @State private var turns = 0
-
-    var body: some View {
-        Button("Recalibrate", systemImage: "arrow.clockwise") {
-            turns += 1
-            action()
-        }
-        .labelStyle(.iconOnly)
-        .font(TypeScale.inlineSymbol)
-        .controlSize(.large)
-        .buttonBorderShape(.circle)
-        .buttonStyle(.glass)
-        .tint(.hudInk)
-        .symbolEffect(.rotate, value: turns)
-        .accessibilityLabel("Recalibrate")
-        .accessibilityHint("Drops the current lock and waits for a printed marker")
     }
 }
 

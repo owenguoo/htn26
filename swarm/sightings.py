@@ -52,7 +52,7 @@ class Sightings:
     def __init__(self, room: dict) -> None:
         self.room = room
         self.hfov, self.vfov = fovs(room)
-        self.items: list[dict] = []  # {id, x, y, phones: {pid: {score, t}}, persons, t, announced}
+        self.items: list[dict] = []  # {id, x, y, phones: {pid: {score, similarity, t}}, persons, t, announced}
         self.ids = itertools.count(1)
 
     def reset(self) -> None:
@@ -87,18 +87,22 @@ class Sightings:
             if score < POSSIBLE_CONF:
                 continue  # faint hint: heatmap only
             who = box.get("person")  # which reference person this matched, when there are several
+            # The model's own number, carried through untouched. `score` is derived from it and is
+            # the thing the thresholds run on; `similarity` is what the model actually said, and it
+            # is what an operator (or anything reading this later) should be shown.
+            evidence = {"score": score, "similarity": box.get("similarity"), "t": now_s}
             near = min(self.items, key=lambda s: math.dist((s["x"], s["y"]), spot), default=None)
             if near and math.dist((near["x"], near["y"]), spot) <= CLUSTER_M:
                 w = score / (score + sum(self.weights(near, now_s).values()))
                 near["x"] += w * (spot[0] - near["x"])
                 near["y"] += w * (spot[1] - near["y"])
-                near["phones"][pid] = {"score": score, "t": now_s}
+                near["phones"][pid] = evidence
                 near["t"] = now_s
                 if who:
                     near["persons"].add(who)
             else:
                 self.items.append({"id": next(self.ids), "x": spot[0], "y": spot[1],
-                                   "phones": {pid: {"score": score, "t": now_s}},
+                                   "phones": {pid: evidence},
                                    "persons": {who} if who else set(),
                                    "t": now_s, "announced": False})
         self.items = [s for s in self.items if now_s - s["t"] < FORGET_S]
@@ -144,16 +148,21 @@ class Sightings:
 
     def snapshot(self) -> list[dict]:
         """`confidence` is a combination and can only be read next to what it was combined from,
-        so the raw evidence ships with it: how many phones are looking at this right now and the
-        best single score among them."""
+        so the raw evidence ships with it: how many phones are looking at this right now, the best
+        single score among them, and — in a real search — the model's own similarity behind that
+        score, unrescaled. `similarity` is None in a rehearsal, where the mock detector emits a
+        score directly and there is no embedding to compare."""
         now_s = time.time()
         out = []
         for s in self.items:
             live = self.weights(s, now_s)
-            best = max((e["score"] for e in s["phones"].values()), default=0.0)
+            strongest = max(s["phones"].values(), key=lambda e: e["score"], default=None)
+            sim = strongest.get("similarity") if strongest else None
             out.append({"id": s["id"], "x": round(s["x"], 2), "y": round(s["y"], 2),
                         "confidence": round(self.confidence(s, now_s), 3),
-                        "agree": len(live), "bestScore": round(best, 3),
+                        "agree": len(live),
+                        "bestScore": round(strongest["score"], 3) if strongest else 0.0,
+                        "similarity": round(sim, 3) if sim is not None else None,
                         "ageMs": round((now_s - s["t"]) * 1000),
                         "phones": list(live), "persons": sorted(s["persons"])})
         return out

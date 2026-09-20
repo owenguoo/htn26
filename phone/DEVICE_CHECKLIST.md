@@ -237,9 +237,18 @@ covers it, not `ArrowView`.
 
 ## 12. Haptics and flash
 
-- [ ] A `haptic` command produces a sharp transient you can feel.
-- [ ] Backgrounding and returning does **not** kill the haptic engine
-      permanently (it stops on interruption; `HapticPlayer` restarts it).
+Haptics are `UIFeedbackGenerator` now, not `CHHapticEngine` — see `Haptics`.
+There is no engine to interrupt or restart, and system feedback obeys
+Settings › Sounds & Haptics, so **check that first if nothing is felt**: on
+silent with "Play Haptics in Silent Mode" off, every cue is a silent no-op.
+
+- [ ] Locking onto a marker gives a success notification you can feel.
+- [ ] A `ping` is felt, and a run of them stays distinct rather than running
+      together into one buzz.
+- [ ] `flash`, `message` and going on-target each feel different from a ping
+      and from each other.
+- [ ] Turning system haptics off in Settings silences them and breaks nothing
+      else.
 - [ ] A `flash` command fills the whole screen, edge to edge, and is visible
       from across the room.
 - [ ] A `flash` clears itself after its duration.

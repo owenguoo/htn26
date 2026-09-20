@@ -8,7 +8,8 @@ over WebSocket, and displays commands sent back (full-screen color flash,
 directional arrow). The operators walk around and sweep their cameras; they are
 not seated.
 
-**Beep and haptic cues are currently cut** — see "Stripped for device bring-up".
+**Beep cues are cut; haptics are back** on `UIFeedbackGenerator` — see
+"Stripped for device bring-up".
 
 **This Swift app is the mobile client.** There is no browser phone client —
 operators join with Beacon. Everything an operator sees or does on a phone —
@@ -157,8 +158,13 @@ Simulator exercises the code that can produce it: the Simulator takes the
 `CHHapticEngine`. So the optional device subsystems are out of the tree until
 the trap is found, leaving ARKit pose + camera preview + socket + voice:
 
-- **Haptics (`Haptics.swift`) — deleted.** `CHHapticEngine` delivers
-  `stoppedHandler` / `resetHandler` on its own internal queue.
+- **Haptics — restored, on `UIFeedbackGenerator` (`Haptics.swift`).** The
+  deleted version was `CHHapticEngine`, which delivers `stoppedHandler` /
+  `resetHandler` on its own internal queue; the replacement has no engine, no
+  handlers and nothing delivered off the main thread, so none of that trap
+  surface comes back with it. It plays system feedback rather than authored
+  patterns, and — unlike Core Haptics — it obeys Settings › Sounds & Haptics,
+  which is the first thing to check when a device feels nothing.
 - **Beeps (`SoundPlayer.swift`) — deleted.** It was a *second* `AVAudioEngine`
   sharing the one process-wide `AVAudioSession` with voice.
 - **`LiDARDepthSource.swift` and the `.sceneDepth` plumbing — deleted.** It was
@@ -181,8 +187,9 @@ of ours on the stack. Two structural problems are the place to start: a
 and `ARSessionHost` leaving `session.delegateQueue` nil so ARKit's 60 Hz
 delegate contends for that same thread.
 
-`OperatorViewModel` still drains `client.cues()` and logs each cue it drops;
-dropping the subscription would leave the stream buffering in `SwarmClient`.
+`OperatorViewModel` drains `client.cues()`, plays the haptics and logs each
+sound it drops; dropping the subscription would leave the stream buffering in
+`SwarmClient`.
 
 Restoring any of these is deliberate work, not a revert: the callbacks above
 are non-`Sendable` blocks that the system invokes off the main thread, and

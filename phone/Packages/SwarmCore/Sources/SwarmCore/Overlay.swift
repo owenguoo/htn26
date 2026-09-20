@@ -129,7 +129,12 @@ public struct OperatorStatus: Sendable, Equatable {
     /// wire protocol has them, `swarm-replay` uses them, and the drive-mode
     /// end-to-end test drives them through the JS API. What is gone is the
     /// operator-facing way in.
-    static let locateHint = "Point the camera at a printed marker"
+    /// Four words. The pill sits under the compass tape with the settings
+    /// control beside it, and a sentence this long — it was "Point the camera
+    /// at a printed marker" — wrapped to two lines and ran into the gear.
+    /// What the operator has to do is find the marker; the camera is already
+    /// in their hand and pointed at something.
+    static let locateHint = "Find a printed marker"
 
     /// How long a marker fix has to go unrefreshed before the operator is told
     /// their position may be drifting.
@@ -425,16 +430,32 @@ public struct PingCue: Sendable, Equatable, Identifiable {
     /// the same way it does for marker outlines.
     public var imagePoint: CGPoint?
 
-    public init(id: Int, x: Double, y: Double, label: String, until: Double) {
+    /// Seconds this cue lives for in total. `until` alone cannot say how much
+    /// of that has already gone, and the fade needs the fraction.
+    /// `PING_TTL_MS` in `swarm/hub.py`.
+    public var lifetime: Double = 12
+    /// How solid to draw it, 1 down to 0.25 as it ages out — `drawPings()` in
+    /// `web/console.js` sets `globalAlpha = Math.max(0.25, 1 - age)`, so a ping
+    /// that has been up a while is visibly on its way out. Resolved on every
+    /// overlay tick rather than at the draw site, because the map's animation
+    /// clock is not the clock `until` is measured on.
+    public var fade: Double = 1
+
+    public init(id: Int, x: Double, y: Double, label: String, until: Double, lifetime: Double = 12) {
         self.id = id
         self.x = x
         self.y = y
         self.label = label
         self.until = until
+        self.lifetime = lifetime
     }
 }
 
 public struct HapticCue: Sendable, Equatable {
+    /// One of `locked`, `flash`, `ping`, `message`, `onTarget`. The client
+    /// decides how each one feels — `Haptics` in the beacon iOS module — so
+    /// the name has to say what *happened*, not what it should feel like.
+    /// A client that does not know a name still plays something.
     public var pattern: String
     public var intensity: Float
     /// Distinguishes one firing from the next, so the view's change handler
@@ -486,6 +507,12 @@ public struct OverlayState: Sendable, Equatable {
     public var pill = StatusPill()
     /// What the operator is actually shown. Derived from `pill`.
     public var status: OperatorStatus { OperatorStatus(pill) }
+    /// This phone had an origin and lost it — an interruption, a tracking
+    /// failure, or the operator asking for a reset — rather than never having
+    /// had one. `SessionMachine` keeps the two apart precisely
+    /// (`calibrating` → first time, `recalibrating` → again), so the prompt can
+    /// say which of the two this is.
+    public var isRecalibrating: Bool { pill.sessionState == .recalibrating }
     public var flash: FlashCue?
     public var arrow: ArrowCue?
     public var banner: GuideBannerCue?
@@ -573,9 +600,29 @@ public struct OverlayModel: Sendable {
     private var guide: Guide?
     private var cueSerial: UInt64 = 0
     private var wasOnTarget = false
+    /// Whether this phone knew where it was on the previous tick, so that
+    /// *becoming* located can be celebrated once rather than every tick.
+    private var wasLocated = false
     /// Latched so the elevation cue can be released at a gentler angle than it
     /// appears at. See `GuideThresholds.elevationReleaseDegrees`.
     private var showingElevation = false
+    /// Metres above the floor of the printed alignment marker, from
+    /// `venue.json`. Set by `SwarmClient`; the hub's marker cue carries only a
+    /// floor position, and a marker is the one cue that is never on the floor.
+    public var markerHeightMetres: Double = 0
+
+    /// The success page a marker scan produces: `--accent` (#18834b), the same
+    /// green the console and the map use for "this is fine". Keeping it on the
+    /// palette matters more here than anywhere else — the flash is the largest
+    /// single block of colour the app ever puts on screen.
+    public static let lockFlashRGB: (red: Float, green: Float, blue: Float) =
+        (24 / 255, 131 / 255, 75 / 255)
+    /// Long enough to read at arm's length, short enough not to be in the way
+    /// of whatever the operator does next. The calibrate card's own "Calibrated"
+    /// state outlives it, so the page hands over to the card rather than
+    /// dropping straight back to the camera.
+    public static let lockFlashSeconds: Double = 1.1
+    public static let lockFlashText = "Calibrated ✓"
 
     /// A `delta` guide is a snapshot of where the phone was facing; the hub
     /// refreshes it several times a second. Three seconds without one means the
@@ -668,7 +715,8 @@ public struct OverlayModel: Sendable {
         case .ping(let id, let x, let y, let label, let ttlMs):
             let isNew = !state.pings.contains { $0.id == id }
             state.pings.removeAll { $0.id == id }
-            state.pings.append(PingCue(id: id, x: x, y: y, label: label, until: now + ttlMs / 1000))
+            state.pings.append(PingCue(id: id, x: x, y: y, label: label,
+                                       until: now + ttlMs / 1000, lifetime: ttlMs / 1000))
             if isNew {
                 cue(haptic: "ping", intensity: 0.8)
                 cue(sound: "ping")
@@ -780,19 +828,57 @@ public struct OverlayModel: Sendable {
                                 alignment: source)
         state.alignment = source
 
+        // A marker scan landing is the one moment on this phone that earns the
+        // whole screen. The operator is holding the phone up at a printed
+        // marker, often at arm's length across a room, and the only
+        // confirmation used to be a status line quietly changing colour — so
+        // people kept scanning a marker they had already scanned. `FlashCue`
+        // is what the hub uses when it needs to be seen from the back of a
+        // hall; success borrows it.
+        //
+        // **Every lock, including mid-search.** This used to stand down once
+        // the hub reached `search` or `found`, on the grounds that a
+        // full-screen page over the camera obstructs someone who is looking
+        // for a person. What that actually meant was that the one moment worth
+        // confirming — a phone that had lost its origin getting it back, in
+        // the middle of a live search — was the one moment confirmed by
+        // nothing but a status line going quiet. A second of green is worth
+        // it: the operator has just stopped searching to scan a marker anyway.
+        let located = source != .none
+        if located, !wasLocated {
+            state.flash = FlashCue(red: Self.lockFlashRGB.red, green: Self.lockFlashRGB.green,
+                                   blue: Self.lockFlashRGB.blue, text: Self.lockFlashText,
+                                   until: now + Self.lockFlashSeconds)
+            cue(haptic: "locked", intensity: 1)
+        }
+        wasLocated = located
+
         if let flash = state.flash, now > flash.until { state.flash = nil }
         if let toast = state.toast, now > toast.until { state.toast = nil }
         if let hazards = state.hazards, now > hazards.until { state.hazards = nil }
         if let detections = state.detections, now > detections.until { state.detections = nil }
         if let sound = state.directionalSound, now > sound.until { state.directionalSound = nil }
         state.pings.removeAll { now > $0.until }
+        // `drawPings()`: `globalAlpha = Math.max(0.25, 1 - age)` over the cue's
+        // whole life, so the two maps agree on how faded an old ping looks.
+        for i in state.pings.indices where state.pings[i].lifetime > 0 {
+            let left = (state.pings[i].until - now) / state.pings[i].lifetime
+            state.pings[i].fade = max(0.25, min(1, left))
+        }
 
         let usablePose = diagnostics.isStale ? nil : pose
         let roomPose = usablePose.flatMap { pose in alignment.map { $0.project(pose) } }
         state.roomPose = roomPose
 
         updateGuide(heading: roomPose?.heading, pitch: roomPose?.pitch, now: now)
-        updatePings(pose: usablePose, roomPose: roomPose, alignment: alignment, intrinsics: intrinsics)
+        // Nothing is located through an alignment this phone has stopped
+        // trusting. A recalibration takes the compass, the marker chip and the
+        // floating tag with it, on purpose: an unaligned phone drawing the
+        // marker through the mapping it just threw away is pointing at where
+        // the marker *was*, which is worse than pointing at nothing. The
+        // reticle is what says what to do instead.
+        updatePings(pose: usablePose, roomPose: roomPose, alignment: alignment,
+                    intrinsics: intrinsics)
     }
 
     /// Rewrites the banner from the *live* offset, every tick.
@@ -956,7 +1042,15 @@ public struct OverlayModel: Sendable {
             // venue origin is on the floor; a seat-tap frame's origin is wherever
             // ARKit started, so assume a phone held at chest height.
             let floor: Float = state.alignment == .marker ? 0 : pose.position.y - 1.4
-            let point = alignment.unproject(x: ping.x, y: ping.y, height: floor)
+            // …except the alignment marker, which is not a spot on the floor.
+            // The hub pushes it down the ping channel as a bare `x, y` (`hub.py`
+            // `marker_cue`) because that is all the console's map needs, and
+            // drawing it at height 0 put the diamond on the carpet under a
+            // marker taped to a wall or stood on a table — metres from the thing
+            // the operator is being asked to look at. `venue.json` measured it,
+            // so use that height.
+            let height = floor + (ping.label == "MARKER" ? Float(markerHeightMetres) : 0)
+            let point = alignment.unproject(x: ping.x, y: ping.y, height: height)
             ping.imagePoint = Projection.project(venuePoint: point, camera: pose, intrinsics: intrinsics)
         }
         return ping

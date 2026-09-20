@@ -7,14 +7,44 @@ struct RootView: View {
     @State private var name = PhoneIdentity.name
     @State private var error: String?
     @State private var isJoining = false
+    /// The gear in the camera chrome opens this. The Expo shell pushes its own
+    /// `/settings` route instead; this target had no way in at all, which left
+    /// the operator with no recalibrate, no toggles and no way out but the
+    /// app switcher.
+    @State private var isShowingSettings = false
+    @State private var showDebug = false
+    @State private var showMiniMap = true
+
+    /// The operator screen is worth showing.
+    ///
+    /// **Not `model.isJoined`.** The runtime publishes the session *before* it
+    /// starts ARKit and hands the preview its scene view — `SwarmRuntime.join`
+    /// only returns once all of that is done — so switching on `isJoined` put a
+    /// black "waiting for the camera…" screen in between the join spinner and
+    /// the camera. One tap, three pictures. `isJoining` is only false once the
+    /// join task has finished, so the form and its spinner hold the screen
+    /// until there is a camera to hand it to. A session that arrives some other
+    /// way (a deep link, a re-join) has no join task and shows immediately.
+    private var showsOperator: Bool { model.isJoined && !isJoining }
 
     var body: some View {
         Group {
-            if model.isJoined {
-                OperatorView(model: model)
+            if showsOperator {
+                OperatorView(model: model, showDebug: showDebug, showMiniMap: showMiniMap,
+                             onRequestSettings: { isShowingSettings = true })
+                    .transition(.opacity)
             } else {
                 joinForm
+                    .transition(.opacity)
             }
+        }
+        // One continuous hand-over rather than a hard swap: the form and the
+        // camera are very different pictures, and cutting between them read as
+        // another loading step.
+        .animation(.easeInOut(duration: 0.25), value: showsOperator)
+        .sheet(isPresented: $isShowingSettings) {
+            SettingsSheet(model: model, showDebug: $showDebug, showMiniMap: $showMiniMap,
+                          onLeave: leave)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // No `.background(.black)`: the `Form` brings `systemGroupedBackground`,
@@ -88,17 +118,48 @@ struct RootView: View {
                     Button {
                         join()
                     } label: {
-                        HStack {
+                        HStack(spacing: Space.s) {
                             Spacer()
-                            if isJoining { ProgressView() } else { Text("Join") }
+                            if isJoining {
+                                // **`.small`, explicitly.** A `ProgressView` in
+                                // this label inherits the button's `.large`
+                                // control size and comes out twice the height
+                                // of the words next to it.
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(.white)
+                            }
+                            // **One `Text` whose string changes**, not two
+                            // views swapping places. Swapped, they are two
+                            // identities, and the ambient animation cross-fades
+                            // them — "Join" and "Joining…" printed over each
+                            // other with the spinner on top.
+                            Text(isJoining ? "Joining…" : "Join")
+                                .font(TypeScale.action)
+                                // Said outright, because a *disabled* prominent
+                                // button greys its own label — which is what
+                                // turned "Joining…" into small grey text on
+                                // blue. This button is no longer disabled while
+                                // it works (`join()` guards instead), and the
+                                // label is as white as "Join" was.
+                                .foregroundStyle(.white)
                             Spacer()
                         }
+                        // Belt and braces: whatever animation is running
+                        // outside, the label never dissolves into itself.
+                        .transaction { $0.animation = nil }
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
+                    // Grey while it works, so the button reads as busy rather
+                    // than as something worth pressing again.
+                    .tint(isJoining ? Color(.systemGray) : Color.accentColor)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
-                    .disabled(isJoining || HubURL.derive(hub) == nil)
+                    // Only for an address that cannot be joined. Disabling it
+                    // while joining as well is what handed the label to the
+                    // system's disabled styling; `join()` ignores a second tap.
+                    .disabled(HubURL.derive(hub) == nil)
                 } footer: {
                 }
             }
@@ -107,15 +168,24 @@ struct RootView: View {
     }
 
     private func join() {
+        guard !isJoining else { return }
         isJoining = true
         error = nil
         Task {
             do {
+                // Returns with the socket up, ARKit running and the preview
+                // attached — everything the operator screen needs to open on a
+                // picture rather than on a placeholder.
                 try await SwarmRuntime.shared.join(hub: hub, name: name)
             } catch {
                 self.error = error.localizedDescription
             }
             isJoining = false
         }
+    }
+
+    private func leave() {
+        isShowingSettings = false
+        Task { await SwarmRuntime.shared.leave() }
     }
 }

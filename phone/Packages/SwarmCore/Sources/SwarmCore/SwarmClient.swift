@@ -209,6 +209,11 @@ public actor SwarmClient {
                                    factory: dependencies.channels, sleeper: dependencies.sleeper)
         self.pipeline = FrameEncodePipeline(encoder: dependencies.encoder,
                                             configuration: configuration.encoding)
+        // The hub's marker cue is a floor position; the printed marker is not
+        // on the floor. `venue.json` is the one place its real height is
+        // measured, and it is loaded at runtime, so a marker moved to a table
+        // on the day is a number change and not a rebuild.
+        self.model.markerHeightMetres = Double(configuration.venue.primaryMarker?.pose?.position.y ?? 0)
     }
 
     // MARK: - Lifecycle

@@ -91,6 +91,26 @@ export default function Settings() {
   return (
     <Host style={styles.fill} useViewportSizeMeasurement>
       <Form>
+        {state.joined ? (
+          <Section
+            title="Position"
+            footer={
+              <Text/>
+            }>
+            {/* Recalibrate belongs behind one more tap than a sweep. It spent a
+                while on the camera chrome as a bare ↻, where it read as
+                "reload" rather than as throwing the marker lock away. */}
+            <Button
+              label="Recalibrate"
+              systemImage="arrow.clockwise"
+              onPress={() => {
+                void Beacon.resetOrigin();
+                router.back();
+              }}
+            />
+          </Section>
+        ) : null}
+
         <Section title="Over the camera">
           <Toggle
             label="Marker outlines"

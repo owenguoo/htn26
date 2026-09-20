@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import UIKit
 import SwarmCore
 
 /// What the operator view observes. Wires the runtime's streams to the screen,
@@ -30,6 +29,7 @@ public final class OperatorViewModel {
     /// The last dimensions handed to the provider, so a 30 Hz overlay stream
     /// does not become 30 actor hops a second saying the same thing.
     private var driveBounds: DriveBounds?
+    private let haptics = Haptics()
 
     public init(runtime: SwarmRuntime = .shared) {
         self.runtime = runtime
@@ -71,15 +71,23 @@ public final class OperatorViewModel {
                 self?.forwardRoomBounds(next.overlay.room)
             }
         })
-        // UIKit feedback runs on the main actor without a separate haptic engine.
-        tasks.append(Task { @MainActor in
+        // Haptics and beeps were the two optional device subsystems on this
+        // screen, and both went out together when the device bring-up stopped
+        // being trustworthy: `CHHapticEngine` and a second `AVAudioEngine`
+        // sharing the one `AVAudioSession` with voice.
+        //
+        // Haptics are back, on `UIFeedbackGenerator` rather than the engine —
+        // no audio session, no lifecycle, nothing to restart after an
+        // interruption. Every cue goes through `Haptics`, which owns the
+        // mapping from cue name to feel — `possible_match` included, rather
+        // than one pattern being answered with a generator built inline here.
+        // Beeps are still only logged: a second `AVAudioEngine` is exactly the
+        // thing that caused the trouble, and audio has no equivalent free ride.
+        haptics.prepare()
+        tasks.append(Task { @MainActor [weak self] in
             for await cue in await client.cues() {
                 switch cue {
-                case .haptic(let haptic):
-                    if haptic.pattern == "possible_match" {
-                        // DEVICE-VERIFY: one vibration on a sustained match, with a 10-second cooldown.
-                        UINotificationFeedbackGenerator().notificationOccurred(.success)
-                    }
+                case .haptic(let haptic): self?.haptics.play(haptic)
                 case .sound(let sound): BeaconLog.log("cue sound \(sound.name) (ignored)")
                 }
             }

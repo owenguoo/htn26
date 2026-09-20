@@ -432,8 +432,16 @@ class MissionControl:
         open_sightings = [sg for sg in hub.sightings.items if not hub.target.at(sg["x"], sg["y"])]
         best = (max(open_sightings, key=hub.sightings.confidence, default=None)
                 if hub.search.mode == "rehearsal" else None)
-        sighting = ({"x": best["x"], "y": best["y"], "confidence": round(hub.sightings.confidence(best), 2)}
-                    if best and hub.sightings.confidence(best) >= 0.4 else None)
+        sighting = None
+        if best and hub.sightings.confidence(best) >= 0.4:
+            # Same shape the live sightings ship in, so the console describes a recorded sighting
+            # with the same words and the same raw numbers it used when the sighting was live.
+            strongest = max(best["phones"].values(), key=lambda e: e["score"], default=None)
+            sighting = {"x": best["x"], "y": best["y"],
+                        "confidence": round(hub.sightings.confidence(best), 2),
+                        "agree": len(hub.sightings.weights(best)),
+                        "bestScore": round(strongest["score"], 3) if strongest else 0.0,
+                        "similarity": strongest.get("similarity") if strongest else None}
         return {"tool": a["name"], "point": point, "sector": sector, "phones": phones, "speech": speech,
                 "sighting": sighting, "likely": hub.likely_sectors(3)}
 

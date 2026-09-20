@@ -38,7 +38,7 @@ struct OperatorStatusTests {
     @Test func gettingLocatedAlwaysMeansTheMarker() {
         let status = OperatorStatus(pill(.calibrating, alignment: .none, correction: nil))
         #expect(status.title == "Not located yet")
-        #expect(status.hint == "Point the camera at a printed marker")
+        #expect(status.hint == "Find a printed marker")
         #expect(status.hint?.contains("tap") == false, "there is no tap-your-spot card any more")
     }
 

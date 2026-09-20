@@ -610,6 +610,7 @@ class Hub:
                 continue
             score *= 0.6 + 0.4 * b.detectionScore  # a shaky detection counts for less
             boxes.append({"x": b.x, "y": b.y, "w": b.w, "h": b.h, "score": round(score, 3),
+                           "similarity": b.similarity,  # the model's number, before any rescaling
                            "heightM": PERSON_HEIGHT_M, "person": names.get(b.targetId)})
         placed = self.sightings.ingest(accepted.result.phoneId, pose, boxes, now_ms() / 1000,
                                        found=self.target.found_positions())

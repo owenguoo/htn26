@@ -101,6 +101,40 @@ struct OverlayTests {
                      transport: .init(), transportState: .connected, now: now)
     }
 
+    /// Locking onto a marker used to change a status line's colour and nothing
+    /// else, so operators kept scanning a marker they had already scanned.
+    @Test func lockingOntoAMarkerShowsAGreenSuccessPage() {
+        var model = OverlayModel()
+        tick(&model, pose: camera(at: .zero, yaw: 0), now: 1, alignment: nil)
+        #expect(model.state.flash == nil, "nothing to celebrate before the scan lands")
+
+        tick(&model, pose: camera(at: .zero, yaw: 0), now: 2)
+        let flash = model.state.flash
+        #expect(flash?.text == OverlayModel.lockFlashText)
+        #expect(flash?.red == OverlayModel.lockFlashRGB.red)
+        #expect(flash?.green == OverlayModel.lockFlashRGB.green)
+        #expect(flash?.blue == OverlayModel.lockFlashRGB.blue)
+        #expect(flash?.until == 2 + OverlayModel.lockFlashSeconds)
+
+        // Once, not on every tick for as long as the phone stays located.
+        model.update(pose: camera(at: .zero, yaw: 0), alignment: .identity, source: .marker,
+                     intrinsics: nil, diagnostics: diagnostics(), transport: .init(),
+                     transportState: .connected, now: 2 + OverlayModel.lockFlashSeconds + 0.1)
+        #expect(model.state.flash == nil, "the success page repeated itself")
+    }
+
+    /// Getting the origin back *during* a search is the lock most worth
+    /// confirming — the operator has already stopped sweeping to scan a
+    /// marker, and a status line going quiet is not an answer.
+    @Test func theSuccessPageAlsoLandsDuringASearch() throws {
+        var model = OverlayModel()
+        model.apply(phase: "search")
+        tick(&model, pose: camera(at: .zero, yaw: 0), now: 1, alignment: nil)
+        #expect(model.state.flash == nil, "nothing to celebrate before the scan lands")
+        tick(&model, pose: camera(at: .zero, yaw: 0), now: 2)
+        #expect(try #require(model.state.flash).text == OverlayModel.lockFlashText)
+    }
+
     /// Room heading h means a right-handed yaw of −h about +Y.
     private func facing(_ headingDegrees: Double, at position: SIMD3<Float> = [0, 1.5, 5]) -> Pose {
         camera(at: position, yaw: -Float(headingDegrees * .pi / 180))
@@ -347,6 +381,24 @@ struct OverlayTests {
         #expect(model.state.alignment == .marker)
         tick(&model, pose: facing(90), now: 1, alignment: nil)
         #expect(model.state.roomPose == nil)
+    }
+
+    /// The hub sends the alignment marker down the ping channel as a bare
+    /// floor position, so it used to be drawn on the carpet under a marker that
+    /// is on a wall or a table — metres from the thing being pointed at.
+    @Test func theAlignmentMarkerIsProjectedAtItsMeasuredHeight() throws {
+        var model = OverlayModel()
+        model.markerHeightMetres = 1.6
+        model.apply(.ping(id: 0, x: 3, y: 5, label: "MARKER", ttlMs: 12_000), heading: nil, now: 0)
+        model.apply(.ping(id: 1, x: 3, y: 5, label: "Check here", ttlMs: 12_000), heading: nil, now: 0)
+
+        // Facing it from (0, 5) with the camera at 1.5 m: the marker sits a
+        // little above the centre line, the floor ping below it.
+        tick(&model, pose: facing(90), now: 1, intrinsics: Sample.intrinsics())
+        let marker = try #require(model.state.pings.first { $0.label == "MARKER" }?.imagePoint)
+        let floor = try #require(model.state.pings.first { $0.label == "Check here" }?.imagePoint)
+        #expect(Float(marker.y) < Sample.intrinsics().cy, "a marker at 1.6 m is above the horizon")
+        #expect(marker.y < floor.y, "the marker must not be drawn on the floor with the pings")
     }
 
     @Test func hexColours() {

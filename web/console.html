@@ -304,6 +304,7 @@
     .system-details .metric { min-width: 0; padding: 12px; border-left: 0; border-top: 1px solid var(--line); }
     .system-details .metric:nth-child(even) { border-left: 1px solid var(--line); }
     .system-details .metric:nth-child(-n+2) { border-top: 0; }
+    .system-details .metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
     .system-details .metric .v { font-size: 20px; }
     @media (max-width: 900px) { body.chat-docked { padding-right: 0; } }
     @media (max-width: 640px) { .chat-launcher { right: 16px; } }
@@ -347,7 +348,13 @@
     .viewer { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; padding: 32px;
       background: rgba(0,0,0,0.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
     .viewer.on { display: grid; }
+    /* `.vimg` is `flex: 1 1 0`, so it eats every spare pixel and the children
+       always add up to exactly the box height — which left the last row of
+       camera details pinned against the bottom border with the 14px radius
+       clipping its corners. The gutter is on the box rather than on `.vstats`
+       so it is there whether the details are open or shut. */
     .vbox { width: min(1040px, 100%); height: min(88dvh, 960px); max-height: 100%; display: flex; flex-direction: column;
+      padding-bottom: 16px;
       background: var(--bg); border: 1px solid var(--line-2); border-radius: 14px; overflow-x: hidden; overflow-y: auto;
       box-shadow: 0 30px 80px rgba(0,0,0,0.6); animation: vIn .18s ease-out; }
     @keyframes vIn { from { opacity: 0; transform: scale(.98); } }
@@ -357,11 +364,6 @@
     .vh b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 320px; flex: 1 1 0; overflow: hidden; }
     .vimg img { display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
-    .vimg .live { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px;
-      font: 500 11px var(--mono); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; }
-    .vimg .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: breathe 1s infinite; }
-    .vimg .live.off { color: #ffc9d1; }
-    .vimg .live.off i { background: var(--red); animation: none; }
     .vnone { position: absolute; color: #b3cebd; font-size: 13px; }
     #vHudCanvas { position: absolute; left: 0; top: 0; pointer-events: none; }
     .vcap { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80%; display: none;
@@ -510,7 +512,7 @@
               <button class="btn sm icon-only" id="cameraNext" aria-label="Next cameras" aria-controls="phones"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clip-rule="evenodd"/></svg></button></div>
           </div>
           <div class="camera-track" id="phones" role="region" aria-label="Camera carousel" tabindex="0"></div>
-          <div class="empty" id="phonesEmpty">No cameras connected. Use Join QR to connect a phone.</div>
+          <div class="empty" id="phonesEmpty">No cameras connected.</div>
         </section>
       </div>
       <div class="stack">
@@ -519,7 +521,7 @@
           <div class="card-b">
             <fieldset id="searchTools" style="border:0;padding:0;margin:0">
               <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" multiple aria-label="Upload photos" hidden>
-              <button class="upload-zone" type="button" id="uploadPhoto"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg><strong id="uploadTitle">Drop photos here</strong><span id="uploadHint">one per person &middot; or click to choose</span></button>
+              <button class="upload-zone" type="button" id="uploadPhoto"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg><strong id="uploadTitle">Drop photos here</strong><span id="uploadHint"></span></button>
               <button class="btn" id="clearReference" type="button" hidden>Clear</button>
 </div>
               <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
@@ -542,6 +544,7 @@
       <div class="metric" title="Every phone that has joined this session, including ones that have gone quiet"><div class="k">Total phones</div><div class="v" id="mTotal">0</div></div>
       <div class="metric" id="mScannedBox" title="Phones that have locked onto a printed marker"><div class="k">Marker scanned</div><div class="v" id="mScanned">0/0</div></div>
       <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
+      <div class="metric" title="Phones whose position is tracked by the phone itself. The rest are shown at the seat they told us they were at — the map still draws them, but nothing has confirmed they are still there. Simulated phones are generated, not tracked."><div class="k">Position tracked</div><div class="v" id="mTracked">0/0</div></div>
     </div>
 
     </section>
@@ -578,7 +581,7 @@
         <button class="btn sm" id="vClose">Close</button>
       </div>
       <div class="vimg"><img id="vImg" alt=""><canvas id="vHudCanvas"></canvas><div class="vnone" id="vNone">Waiting for video…</div>
-        <div class="live" id="vLive"><i></i><span></span></div><div class="vhudnote" id="vHudNote" hidden></div><div class="vcap" id="vCap"></div></div>
+        <div class="vhudnote" id="vHudNote" hidden></div><div class="vcap" id="vCap"></div></div>
       <div class="analysis"><strong>Analyzed source frame</strong><div id="analysisMeta" class="muted">No current result</div><button class="btn" id="confirmSighting" hidden>Confirm visual sighting</button><canvas id="analyzedFrame" hidden></canvas></div>
       <details class="camera-details"><summary>Camera details</summary>
       <div class="vstats">

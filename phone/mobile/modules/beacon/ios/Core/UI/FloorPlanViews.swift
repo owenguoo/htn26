@@ -505,17 +505,18 @@ struct FloorPlanCanvas: View {
             let radius = CGFloat(6 + k * 18)
             context.stroke(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius,
                                                   width: radius * 2, height: radius * 2)),
-                           with: .color(MapInk.searcher.opacity(0.8 * (1 - k))), lineWidth: 1)
+                           with: .color(MapInk.searcher.opacity(0.8 * (1 - k) * ping.fade)),
+                           lineWidth: 1)
             var diamond = Path()
             diamond.move(to: CGPoint(x: p.x, y: p.y - 7))
             diamond.addLine(to: CGPoint(x: p.x + 7, y: p.y))
             diamond.addLine(to: CGPoint(x: p.x, y: p.y + 7))
             diamond.addLine(to: CGPoint(x: p.x - 7, y: p.y))
             diamond.closeSubpath()
-            context.fill(diamond, with: .color(MapInk.ping))
+            context.fill(diamond, with: .color(MapInk.ping.opacity(ping.fade)))
             guard showsDetail else { continue }
             context.draw(Text(ping.label).font(.system(size: 11, weight: .medium))
-                .foregroundStyle(MapInk.ping), at: CGPoint(x: p.x, y: p.y - 14))
+                .foregroundStyle(MapInk.ping.opacity(ping.fade)), at: CGPoint(x: p.x, y: p.y - 14))
         }
     }
 
@@ -578,6 +579,91 @@ struct FloorPlanCanvas: View {
     }
 }
 
+/// Eases the plan between pose updates, so walking scrolls the map instead of
+/// stepping it.
+///
+/// **The choppiness is the pose rate, not the frame rate.** Poses reach the
+/// overlay at about 10 Hz (`CLAUDE.md`: "pose at ~10 Hz"), and the mini-map
+/// keeps the operator centred — so the room moved in ten visible jumps a
+/// second while they walked. Nothing here redraws faster than before on its
+/// own: `Animatable` asks SwiftUI to hand back the interpolated value on each
+/// display frame *for the length of one tween*, so the plan is drawn at the
+/// screen's rate between two poses and then stops. A phone standing still
+/// redraws as rarely as it did.
+///
+/// The heading is unwrapped before it gets here, because interpolating 359 → 1
+/// the arithmetic way spins the cone 358° the wrong way.
+private struct SmoothedPose<Content: View>: View, Animatable {
+    var x: Double
+    var y: Double
+    var heading: Double
+    var hasHeading: Bool
+    var pitch: Double
+    @ViewBuilder var content: (RoomPose) -> Content
+
+    /// **`nonisolated`, and it has to be.** `View` is `@MainActor`, so a type
+    /// conforming to it is too — but `Animatable` is not, and SwiftUI drives
+    /// this property from its own animation machinery. Without the keyword the
+    /// conformance "crosses into main actor-isolated code" and Swift 6 rejects
+    /// it. Safe because the three values it touches are `Double`s in a value
+    /// type, which SE-0434 makes implicitly nonisolated; `content`, which is
+    /// not `Sendable`, is never read here.
+    nonisolated var animatableData: AnimatablePair<Double, AnimatablePair<Double, Double>> {
+        get { AnimatablePair(x, AnimatablePair(y, heading)) }
+        set {
+            x = newValue.first
+            y = newValue.second.first
+            heading = newValue.second.second
+        }
+    }
+
+    var body: some View {
+        content(RoomPose(x: x, y: y, heading: hasHeading ? heading : nil, pitch: pitch))
+    }
+}
+
+/// Hands the plan a pose that moves continuously. Both maps draw through it.
+struct MovingPlan<Content: View>: View {
+    let me: RoomPose?
+    @ViewBuilder var content: (RoomPose?) -> Content
+
+    /// The heading with the wrap taken out: it keeps accumulating past 360 so
+    /// every turn is interpolated the short way round.
+    @State private var heading: Double = 0
+
+    /// Just over the pose interval. Long enough that one tween runs into the
+    /// next — which is what makes a walk continuous rather than ten little
+    /// slides — and short enough that the dot is not visibly behind the
+    /// operator. Linear, because a walk at constant speed should not ease in
+    /// and out ten times a second.
+    private static var step: Animation { .linear(duration: 0.12) }
+
+    private struct Target: Equatable {
+        var x: Double
+        var y: Double
+        var heading: Double
+    }
+
+    var body: some View {
+        Group {
+            if let me {
+                // `content` takes an optional — the no-pose case below hands
+                // it nil — so it is adapted rather than passed straight on.
+                SmoothedPose(x: me.x, y: me.y, heading: heading,
+                             hasHeading: me.heading != nil, pitch: me.pitch) { content($0) }
+                    .animation(Self.step, value: Target(x: me.x, y: me.y, heading: heading))
+            } else {
+                content(nil)
+            }
+        }
+        .onChange(of: me?.heading) { _, next in
+            guard let next else { return }
+            heading += RoomMath.signedDiff(next, RoomMath.wrap360(heading))
+        }
+        .onAppear { heading = me?.heading ?? 0 }
+    }
+}
+
 /// Wraps the map in a clock only when something on it is actually animating.
 /// The console repaints on every animation frame regardless; a phone running
 /// ARKit, an encoder and a socket does not get to be that relaxed, so a map
@@ -609,10 +695,12 @@ struct MiniMapView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PulsingFloorPlan(isAnimating: !FloorPlanCanvas.drawablePings(pings, world: world).isEmpty
-                                 || world?.candidate != nil) { time in
-                FloorPlanCanvas(room: room, world: world, me: me, pings: pings,
-                                followsMe: true, showsDetail: false, time: time)
+            MovingPlan(me: me) { eased in
+                PulsingFloorPlan(isAnimating: !FloorPlanCanvas.drawablePings(pings, world: world).isEmpty
+                                     || world?.candidate != nil) { time in
+                    FloorPlanCanvas(room: room, world: world, me: eased, pings: pings,
+                                    followsMe: true, showsDetail: false, time: time)
+                }
             }
             if let searched = world?.searched {
                 HStack(spacing: Space.xs) {
@@ -665,29 +753,46 @@ struct RoomMapView: View {
 
     var body: some View {
         VStack(spacing: Space.m) {
-            HStack {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Search map").font(TypeScale.sheetTitle)
-                    Text("\(Int(room.width)) × \(Int(room.depth)) m · \(summary)")
-                        .font(TypeScale.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .symbolRenderingMode(.hierarchical)
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
+            HStack(spacing: Space.s) {
+                Text("Search map").font(TypeScale.sheetTitle)
+                Spacer(minLength: 0)
+                // A real close control, not a hand-built glyph with a tap
+                // gesture: the system draws the circle, the glass and the
+                // pressed state, and it comes with a 44-point target.
+                Button("Close", systemImage: "xmark", action: onClose)
+                    .labelStyle(.iconOnly)
+                    .buttonBorderShape(.circle)
+                    .buttonStyle(.glass)
+                    .tint(.secondary)
+                    .accessibilityLabel("Close map")
             }
 
             VStack(spacing: 0) {
-                PulsingFloorPlan(isAnimating: !FloorPlanCanvas.drawablePings(pings, world: world).isEmpty
-                                 || world?.candidate != nil) { time in
-                    FloorPlanCanvas(room: room, world: world, me: me, pings: pings, time: time)
+                // How the search is going, in a strip of its own above the
+                // plan. Floated over the plan it sat on the stage block and the
+                // MARKER label; as a subtitle under the title it was a grey
+                // line nobody read. A strip matching the legend below it reads
+                // as part of the plate and takes nothing off the room.
+                HStack(spacing: Space.xs) {
+                    Text(summary)
+                    Spacer(minLength: 0)
+                }
+                .font(TypeScale.readout)
+                .foregroundStyle(MapInk.labelSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, Space.m)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(MapInk.legendBackground)
+                .overlay(alignment: .bottom) { MapInk.line.frame(height: 1) }
+                .accessibilityLabel("Area searched")
+
+                MovingPlan(me: me) { eased in
+                    PulsingFloorPlan(isAnimating: !FloorPlanCanvas.drawablePings(pings, world: world).isEmpty
+                                         || world?.candidate != nil) { time in
+                        FloorPlanCanvas(room: room, world: world, me: eased, pings: pings, time: time)
+                    }
                 }
                 .aspectRatio(room.width / max(1, room.depth + (room.stage?.depth ?? 0)), contentMode: .fit)
                 .accessibilityLabel("Room plan. You, your team, and what has been searched.")
@@ -734,9 +839,13 @@ struct RoomMapView: View {
         }
         .padding(Space.xl)
         // Not a presented sheet, on purpose: this card sits over a live camera
-        // the operator is still aiming, and a sheet would cover the preview.
+        // the operator is still aiming, and a sheet would cover the preview —
+        // and could not collapse back into the mini-map the way this does.
+        // Close with the button, or by tapping the room behind it
+        // (`OperatorView` owns that scrim).
         .background(Surface.card, in: Radius.rect(Radius.sheet))
         .padding(Space.l)
+        .accessibilityAction(.escape, onClose)
     }
 }
 
@@ -765,6 +874,11 @@ private struct MapLegendKey: View {
     /// not a disc — the same distinction the map itself draws.
     var rounded = false
 
+    /// `.map-key` carries `box-shadow: 0 1px 4px rgba(23,55,38,.18)`; the
+    /// hollow person keys turn it off with `box-shadow: none`. So: the filled
+    /// keys lift off the strip, the outlined ones sit flat on it.
+    private var filled: Bool { fill != MapInk.markerBorder }
+
     var body: some View {
         HStack(spacing: 7) {
             Group {
@@ -776,6 +890,7 @@ private struct MapLegendKey: View {
                 }
             }
             .frame(width: 16, height: 16)
+            .shadow(color: filled ? MapInk.legendKeyShadow : .clear, radius: 2, x: 0, y: 1)
             Text(label)
         }
         .accessibilityElement(children: .combine)

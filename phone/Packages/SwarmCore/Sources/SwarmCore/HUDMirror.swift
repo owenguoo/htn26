@@ -94,18 +94,26 @@ public enum PhaseCardText {
         return phase != "calibrate" || alignment == .none
     }
 
-    public static func title(for phase: String) -> String {
+    /// - Parameter again: this phone had a lock and lost it — an interruption,
+    ///   a tracking failure, or the operator asking for a reset. The prompt is
+    ///   the same one, but "Calibrate" reads as a step that has not happened
+    ///   yet, and someone who has already scanned a marker and is being shown
+    ///   it a second time needs to know that this is the *same* card coming
+    ///   back rather than the app having forgotten where it was.
+    public static func title(for phase: String, again: Bool = false) -> String {
         switch phase {
         case "lobby": "You're in"
-        case "calibrate": "Calibrate"
+        case "calibrate": again ? "Recalibrate" : "Calibrate"
         default: "Search complete"
         }
     }
 
-    public static func detail(for phase: String) -> String {
+    public static func detail(for phase: String, again: Bool = false) -> String {
         switch phase {
-        case "lobby": "The operator starts the search."
-        case "calibrate": "Point at a printed marker until it locks."
+        case "lobby": "You may begin searching."
+        case "calibrate": again
+            ? "Point at a printed marker again."
+            : "Point at a printed marker until it locks."
         default: "You can lower your phone."
         }
     }
@@ -193,7 +201,14 @@ public enum HUDMirror {
         let soundSide = soundOffset.map { offset in
             offset < -20 ? "left" : offset > 20 ? "right" : "ahead"
         }
-        let banner = soundSide.map { HubHUDMirror.Banner(text: "Sound heard · \($0)", tone: "alert") }
+        // **One voice at a time.** The status pill is the phone's own account of
+        // itself and it is actionable; a hub directive is neither while
+        // tracking is lost — it was computed from a heading this phone no
+        // longer has. Both on screen together read as the app arguing with
+        // itself: "Hold your phone up" stacked over "Tracking lost". The
+        // directive stands down until the phone can act on it again.
+        let banner = overlay.status.level == .problem ? nil
+            : soundSide.map { HubHUDMirror.Banner(text: "Sound heard · \($0)", tone: "alert") }
             ?? overlay.banner.map { HubHUDMirror.Banner(text: $0.text, tone: $0.tone) }
 
         let searching = overlay.phase == "search" || overlay.phase == "found"
@@ -201,9 +216,11 @@ public enum HUDMirror {
 
         // The same test the phone's own renderer uses, so the console is not
         // told about a card the operator cannot see.
+        let again = overlay.isRecalibrating
         let card = overlay.phase.flatMap { phase in
             PhaseCardText.covers(phase, alignment: overlay.alignment)
-                ? HubHUDMirror.Card(title: PhaseCardText.title(for: phase), text: PhaseCardText.detail(for: phase))
+                ? HubHUDMirror.Card(title: PhaseCardText.title(for: phase, again: again),
+                                    text: PhaseCardText.detail(for: phase, again: again))
                 : nil
         }
 

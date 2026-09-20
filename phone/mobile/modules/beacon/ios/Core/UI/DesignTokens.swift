@@ -109,6 +109,10 @@ enum MapInk {
 
     static let markerBorder = Color.white
     static let markerShadow = hex(0x17, 0x37, 0x26).opacity(0.16)
+    /// `.map-key`: `box-shadow: 0 1px 4px rgba(23,55,38,.18)`. A touch stronger
+    /// than the map pins' own shadow, and only on the filled keys — the hollow
+    /// person keys set `box-shadow: none`.
+    static let legendKeyShadow = hex(0x17, 0x37, 0x26).opacity(0.18)
 
     static let line = hex(0xd5, 0xe5, 0xda)              // `--line`
     static let legendBackground = hex(0xed, 0xf6, 0xef)  // `--bg-1`

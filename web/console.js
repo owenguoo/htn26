@@ -167,7 +167,10 @@ function renderMetrics() {
   const { scanned, ready } = readiness();
   setMetric('#mLive', live.length);
   setMetric('#mTotal', all.length);
-  setMetric('#mPlaced', live.filter((p) => p.pose).length);
+  // Not "has a position" — every phone that scanned a seat has one of those.
+  // How many are actually tracked, because that is what the map, the area
+  // searched and every sighting's placement are resting on.
+  setMetric('#mTracked', `${live.filter((p) => p.pose?.source === 'slam').length}/${live.length}`);
   setMetric('#mScanned', `${scanned}/${live.length}`);
   setMetric('#mSearched', `${Math.round((st.coverage?.searched || 0) * 100)}%`);
   $('#mScannedBox')?.classList.toggle('alert', live.length > 0 && !ready && !running());
@@ -211,10 +214,18 @@ function renderControls() {
       + (missing ? ` · still looking for ${missing}` : '');
   } else {
     const top = (st.sightings || []).reduce((a, b) => (b.confidence > (a?.confidence ?? 0) ? b : a), null);
-    const where = hidden.length === 1 ? `Hidden at (${hidden[0].x.toFixed(1)}, ${hidden[0].y.toFixed(1)})`
-      : `${plural(hidden.length, 'person', 'people')} hidden`;
+    // Say whose position this is. A bare "Hidden at (-5.1, 4.7)" reads as though the hub
+    // knew where a real missing person was — and a raw signed coordinate says nothing to
+    // anyone standing in the room. These are mock candidates the operator hid, and the
+    // planner's sector name is how the rest of the console names a spot on the floor.
+    const one = hidden.length === 1 ? hidden[0] : null;
+    const sector = one && sectorAt(one.x, one.y);
+    const where = !one ? `${plural(hidden.length, 'test candidate', 'test candidates')} hidden`
+      : sector ? `Test candidate hidden in ${sector}`
+      : `Test candidate hidden ${one.y.toFixed(1)} m from the stage`;
     s.textContent = `${where} · `
-      + (top && top.confidence >= 0.4 ? `possible sighting · ${sightingEvidence(top)}` : 'searching');
+      + (top && top.confidence >= 0.4 ? `possible sighting · ${sightingEvidence(top)}`
+         : one ? 'not found yet' : 'none found yet');
   }
   renderFoundList(victims);
   renderPeople(st.search?.people);
@@ -241,8 +252,27 @@ function renderControls() {
 // same person from the same side are one look, not three. The number is still
 // what the thresholds use, but what an operator is shown is the evidence it came
 // from: the best single match, and how many phones are currently looking.
+// The planner's name for a spot on the floor — "D2" — the same grid the map labels,
+// the recommendations and the phone guidance all speak. Null before the planner has
+// published a grid, or for a point outside it.
+function sectorAt(x, y) {
+  const size = st?.planner?.sectorSize;
+  if (!size || !room) return null;
+  const col = Math.floor((x + room.width / 2) / size), row = Math.floor(y / size);
+  if (col < 0 || row < 0 || col >= (st.planner.cols ?? Infinity) || row >= (st.planner.rows ?? Infinity)) return null;
+  return `${String.fromCharCode(65 + col)}${row + 1}`;
+}
+
+// In a real search every score behind `confidence` is itself a rescale of the
+// model's similarity, so a percentage built from them is two derivations away
+// from anything measured. Show the model's own number against the threshold it
+// is judged by; fall back to the score only in a rehearsal, where the mock
+// detector emits one directly and there is no similarity to show.
 function sightingEvidence(sg) {
-  const best = `best match ${Math.round((sg.bestScore ?? sg.confidence) * 100)}%`;
+  const threshold = st?.search?.threshold;
+  const best = sg.similarity != null
+    ? `similarity ${sg.similarity.toFixed(2)}${threshold != null ? ` vs ${threshold.toFixed(2)}` : ''}`
+    : `best match ${Math.round((sg.bestScore ?? sg.confidence) * 100)}%`;
   return sg.agree > 1 ? `${best} · ${sg.agree} phones agree` : best;
 }
 
@@ -313,6 +343,21 @@ function fmtTilt(pitch) {
     : `${Math.abs(deg)}° ${deg > 0 ? 'up' : 'down'}${Math.abs(deg) > 65 ? deg > 0 ? ' · at the ceiling' : ' · at the floor' : ''}`;
 }
 
+// Whether this feed is real *right now*. `phoneStatus` deliberately does not
+// carry it: the card and the expanded viewer both want it first in the row and
+// everything else after, so it is prepended rather than mixed in.
+function liveBadge(p) {
+  return !p.connected ? ['Offline · last frame', ''] : p.stale ? ['No signal', 'r'] : ['Live', 'w'];
+}
+
+// The badge row. The expanded viewer used to print this *and* a second pill
+// over the video saying the same word, so a phone that had dropped announced
+// "No signal" twice, six millimetres apart. One fact, one badge.
+function statusBadges(p) {
+  return [liveBadge(p), ...phoneStatus(p).filter(([label]) => label !== 'Offline' && label !== 'No signal')]
+    .map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
+}
+
 function phoneStatus(p) {
   const out = [];
   const t = st.target;
@@ -370,8 +415,7 @@ function renderPhones() {
     card.querySelector('.hd').textContent = fmtHeading(pose);
     card.querySelector('.fps').textContent = p.fps.toFixed(1);
     card.querySelector('.lat').textContent = p.latencyMs != null ? `${p.latencyMs} ms` : '–';
-    const liveBadge = !p.connected ? ['Offline · last frame', ''] : p.stale ? ['No signal', 'r'] : ['Live', 'w'];
-    card.querySelector('.st').innerHTML = [liveBadge, ...phoneStatus(p).filter(([label]) => label !== 'Offline' && label !== 'No signal')].map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
+    card.querySelector('.st').innerHTML = statusBadges(p);
   });
   for (const card of existing.values()) card.remove();
   updateCameraNavigation();
@@ -441,10 +485,7 @@ function renderViewer() {
   cap.classList.toggle('on', !!(p.caption || p.speaking));
   $('#vName').textContent = p.name || 'Phone';
   $('#vDevice').textContent = p.device || '';
-  $('#vBadges').innerHTML = phoneStatus(p).map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
-  const pill = $('#vLive');
-  pill.classList.toggle('off', !isLive(p));
-  pill.querySelector('span').textContent = !p.connected ? 'OFFLINE' : p.stale ? 'NO SIGNAL' : 'LIVE';
+  $('#vBadges').innerHTML = statusBadges(p);
   const pose = p.pose;
   const job = st.planner?.assignments?.[p.id];
   // `gain` is the chance THIS look finds them, not the phone's odds overall —
@@ -713,7 +754,7 @@ function evidenceHtml(ev) {
   }
   if (ev.point) rows.push(['Target', `${ev.sector ? `sector ${ev.sector} ` : ''}${pos(ev.point[0], ev.point[1])}`]);
   for (const s of ev.speech || []) rows.push(['Heard', `#${s.index} ${pos(s.x, s.y)}: “${s.text}”`]);
-  if (ev.sighting) rows.push(['Sighting', `${Math.round(ev.sighting.confidence * 100)}% at ${pos(ev.sighting.x, ev.sighting.y)}`]);
+  if (ev.sighting) rows.push(['Sighting', `${sightingEvidence(ev.sighting)} at ${pos(ev.sighting.x, ev.sighting.y)}`]);
   if (ev.likely?.length) rows.push(['Most likely then', ev.likely.map((l) => `${l.sector} ${Math.round(l.share * 100)}%`).join(' · ')]);
   return `<div class="evidence">${rows.map(([k, v]) => `<div><span class="k">${k}</span>${escapeHtml(v)}</div>`).join('')}
     <div class="explain-hint">Highlighted on the map · click again or Esc to clear</div></div>`;
@@ -1454,9 +1495,7 @@ function renderPeople(people = []) {
     `<div class="person-row"><span class="who">${escapeHtml(person.label)}</span><span class="spacer"></span>`
     + `<button type="button" data-person="${escapeHtml(person.id)}">Remove</button></div>`).join('');
   $('#uploadTitle').textContent = people.length ? 'Drop another photo here' : 'Drop photos here';
-  $('#uploadHint').textContent = people.length
-    ? `${people.length} being searched for · or click to choose`
-    : 'one per person · or click to choose';
+  $('#uploadHint').textContent = people.length ? `${people.length} being searched for` : '';
 }
 
 $('#peopleRoster').addEventListener('click', (event) => {

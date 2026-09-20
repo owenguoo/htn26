@@ -187,9 +187,8 @@ struct PhaseCardView: View {
     /// `OperatorView` so that locking on reads as an answer rather than as the
     /// screen going away on its own.
     var confirmed = false
-    /// The card covers the whole screen, so it has to carry the way out to
-    /// Settings itself — a gear drawn behind it is a gear that does not exist.
-    var onRequestSettings: (() -> Void)?
+    /// This phone had a lock and lost it, so the prompt says "Recalibrate".
+    var again = false
 
     static func covers(_ phase: String) -> Bool { PhaseCardText.covers(phase) }
 
@@ -213,18 +212,6 @@ struct PhaseCardView: View {
         }
         .padding(Space.xxl)
         .frame(maxWidth: 340)
-        .overlay(alignment: .topTrailing) {
-            if let onRequestSettings {
-                Button("Settings", systemImage: "gearshape", action: onRequestSettings)
-                    .labelStyle(.iconOnly)
-                    .font(TypeScale.inlineSymbol)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .hitTarget()
-                    .padding(Space.xs)
-                    .accessibilityLabel("Settings")
-            }
-        }
         // This card covers the whole screen while it is up, so the camera behind
         // it is not the point: a thicker material is what keeps `.secondary`
         // body text readable over whatever the lens happens to be pointed at.
@@ -243,9 +230,65 @@ struct PhaseCardView: View {
 
     // The words live in SwarmCore so the console's mirror of this card matches.
     private var title: String {
-        confirmed ? PhaseCardText.confirmedTitle : PhaseCardText.title(for: phase)
+        confirmed ? PhaseCardText.confirmedTitle : PhaseCardText.title(for: phase, again: again)
     }
     private var detail: String {
-        confirmed ? PhaseCardText.confirmedDetail : PhaseCardText.detail(for: phase)
+        confirmed ? PhaseCardText.confirmedDetail : PhaseCardText.detail(for: phase, again: again)
+    }
+}
+
+/// Where to point the camera while calibrating.
+///
+/// The calibrate card used to be the whole answer: a sentence saying "point at
+/// a printed marker" over a camera the card itself was covering. The operator
+/// could not see what they were aiming at, which on a phone held at arm's
+/// length across a room is most of the task.
+///
+/// Four corner brackets and nothing between them: a closed box reads as a crop
+/// and invites people to fill it exactly, and the marker only has to land
+/// inside. Square caps and mitred corners, so the marks are four right angles
+/// rather than anything rounded. The tint is `MARKER_COLOR` — the same purple
+/// the map draws the alignment marker in and the compass chip wears — so the
+/// thing being hunted and the place to put it are named the same colour.
+struct MarkerReticleView: View {
+    /// Breathing, slowly. Enough to read as live while the operator moves the
+    /// phone around; not enough to compete with a marker entering the frame.
+    @State private var breathing = false
+
+    private static let side: CGFloat = 230
+    private static let arm: CGFloat = 46
+    /// Centre of the reticle to the centre of a corner arm.
+    private static let reach: CGFloat = (side - arm) / 2
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<4, id: \.self) { index in
+                Bracket()
+                    .stroke(MapInk.marker, style: StrokeStyle(lineWidth: 4, lineCap: .square,
+                                                              lineJoin: .miter))
+                    .frame(width: Self.arm, height: Self.arm)
+                    .rotationEffect(.degrees(Double(index) * 90))
+                    .offset(x: index == 0 || index == 3 ? -Self.reach : Self.reach,
+                            y: index < 2 ? -Self.reach : Self.reach)
+            }
+        }
+        .frame(width: Self.side, height: Self.side)
+        .shadow(color: .black.opacity(0.45), radius: 6)
+        .scaleEffect(breathing ? 1.03 : 0.99)
+        .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: breathing)
+        .onAppear { breathing = true }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    /// One corner: an L drawn top-left, rotated into the other three.
+    private struct Bracket: Shape {
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            return path
+        }
     }
 }

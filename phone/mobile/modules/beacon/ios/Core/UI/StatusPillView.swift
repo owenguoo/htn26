@@ -17,10 +17,11 @@ struct OperatorStatusView: View {
 
     var body: some View {
         content
-            // Without this a ZStack proposes the full row width and the card
-            // fills it, so a one-line title like "Reconnecting…" sits on the
-            // left even though the stack is meant to centre it.
-            .fixedSize(horizontal: status.hint == nil, vertical: true)
+            // Never truncated vertically, never stretched horizontally: the
+            // card is as wide as its words and no wider. It is bounded by the
+            // caller, so a long hint still wraps instead of running under the
+            // settings control.
+            .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
             .accessibilityLabel([status.title, status.hint].compactMap { $0 }.joined(separator: ". "))
     }
@@ -46,7 +47,10 @@ struct OperatorStatusView: View {
         }
         .padding(.horizontal, Space.m)
         .padding(.vertical, Space.s)
-        .frame(maxWidth: status.hint == nil ? nil : .infinity, alignment: .leading)
+        // **No `maxWidth: .infinity`.** That is what made a two-line card fill
+        // every point it was offered, so "Needs recalibrating · Find a printed
+        // marker" ran the full width of the screen and up against the gear,
+        // however short the words were.
         .background(background, in: shape)
         .overlay(shape.stroke(tint.opacity(0.7), lineWidth: 1))
     }

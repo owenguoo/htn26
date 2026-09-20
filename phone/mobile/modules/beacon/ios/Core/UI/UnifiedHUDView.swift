@@ -296,13 +296,31 @@ struct HUDFrameLayerView: View {
                 for marker in hud.ar {
                     let at = transform.rect(uprightFractionX: marker.x, y: marker.y, width: 0, height: 0).origin
                     let r = max(6, marker.r * size.height)
+                    let color = Color(hex: marker.color) ?? .yellow
+                    if marker.label.hasPrefix("MARKER") {
+                        // The alignment marker is a thing on a wall, not a spot
+                        // to walk to, and the map already draws that difference:
+                        // a rounded tag in `MARKER_COLOR` with a white border
+                        // (`drawMarker` in `FloorPlanViews`), never the ping
+                        // diamond. One shape for one thing, in both pictures.
+                        let side = r * 2.2
+                        let tag = Path(roundedRect: CGRect(x: at.x - side / 2, y: at.y - side / 2,
+                                                           width: side, height: side),
+                                       cornerRadius: side / 4)
+                        context.fill(tag, with: .color(color))
+                        context.stroke(tag, with: .color(.white), lineWidth: 2)
+                        HUDStyle.pill(&context, at: CGPoint(x: at.x, y: at.y - side / 2 - 13 * k),
+                                      text: marker.label, background: .black.opacity(0.7),
+                                      foreground: .white, size: 12 * k)
+                        continue
+                    }
                     var diamond = Path()
                     diamond.move(to: CGPoint(x: at.x, y: at.y - r))
                     diamond.addLine(to: CGPoint(x: at.x + r, y: at.y))
                     diamond.addLine(to: CGPoint(x: at.x, y: at.y + r))
                     diamond.addLine(to: CGPoint(x: at.x - r, y: at.y))
                     diamond.closeSubpath()
-                    context.fill(diamond, with: .color(Color(hex: marker.color) ?? .yellow))
+                    context.fill(diamond, with: .color(color))
                     context.stroke(diamond, with: .color(.black.opacity(0.6)), lineWidth: 2)
                     HUDStyle.pill(&context, at: CGPoint(x: at.x, y: at.y - r - 13 * k), text: marker.label,
                                   background: .black.opacity(0.7), foreground: .white, size: 12 * k)
