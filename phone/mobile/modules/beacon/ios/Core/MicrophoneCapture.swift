@@ -271,6 +271,14 @@ public final class MicrophoneCapture {
 
         guard install() else {
             BeaconLog.log("mic ✗ install failed")
+            // Both observers registered above have to come off here too.
+            // `isTapped` stays false on this path, so a later `start()` walks
+            // straight past its guard and registers a second pair — after which
+            // every route change fires `restart()` once per accumulated pair.
+            if let reconfigureHandler { AudioSessionOwner.shared.removeHandler(reconfigureHandler) }
+            reconfigureHandler = nil
+            if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+            configurationObserver = nil
             AudioSessionOwner.shared.end(.record)
             Registry.shared.set(availability: .unsupported)
             return
@@ -345,7 +353,25 @@ public final class MicrophoneCapture {
         // `hasLoggedFirstBuffer` is touched only from the tap, which AVAudioEngine
         // serialises, and only ever set true — never read for correctness.
         nonisolated(unsafe) var hasLoggedFirstBuffer = false
-        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, when in
+        // `@Sendable` is load-bearing, and is the prime suspect for
+        // `_dispatch_assert_queue_fail`.
+        //
+        // `AVAudioNodeTapBlock` is imported from ObjC as a plain
+        // `@convention(block)` type, *not* `@Sendable`. Under SE-0434 a
+        // non-`@Sendable` closure formed inside an actor-isolated context
+        // inherits that isolation — and this method belongs to a `@MainActor`
+        // class, so without this annotation the block is `@MainActor`. Swift
+        // then emits a reabstraction thunk that calls `swift_task_checkIsolated`,
+        // which for `MainActor` bottoms out in
+        // `dispatch_assert_queue(dispatch_get_main_queue())`. CoreAudio invokes
+        // the tap on its own render thread, so that assert fires on the *first*
+        // invocation — after `engine.start()` has returned, before the body runs
+        // (so "first mic buffer" never prints), on CoreAudio's `RootQueue`, with
+        // no frame of ours on the stack. That is exactly the recorded trap.
+        //
+        // The capture hygiene above was already right, which is why this
+        // compiled clean: inferred isolation is not a capture problem.
+        input.installTap(onBus: 0, bufferSize: 4096, format: nil) { @Sendable buffer, when in
             if !hasLoggedFirstBuffer {
                 hasLoggedFirstBuffer = true
                 BeaconLog.log("first mic buffer")
@@ -431,7 +457,12 @@ public final class MicrophoneCapture {
         case .denied: return false
         case .undetermined:
             return await withCheckedContinuation { continuation in
-                AVAudioApplication.requestRecordPermission { granted in
+                // `@Sendable` for the same reason as the tap block: this is a
+                // static member of a `@MainActor` class, the completion handler
+                // is delivered on an internal queue, and inferred isolation
+                // would put a main-queue assert in front of it. Only reachable
+                // on the undetermined branch — first launch after an install.
+                AVAudioApplication.requestRecordPermission { @Sendable granted in
                     continuation.resume(returning: granted)
                 }
             }

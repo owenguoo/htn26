@@ -29,7 +29,7 @@ import {
 } from '@expo/ui/swift-ui/modifiers';
 import { CameraView } from 'expo-camera';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -85,12 +85,16 @@ function useSeededField(initial: string) {
     if (latest.current) void ref.current?.setText(latest.current);
   }, []);
 
-  return { ref, set, track, flush };
+  // Memoised: without this the handle is a fresh object every render, which
+  // gives `hubField`/`nameField` new identity on every keystroke. That re-ran
+  // the auto-join effect (which lists `hubField` in its deps) and rebuilt the
+  // `scan` callback, so every character retyped a template literal and made a
+  // synchronous `resolveHubURL` call into native.
+  return useMemo(() => ({ ref, set, track, flush }), [set, track, flush]);
 }
 
 /** "10.0.0.5:8000" out of whatever was typed or scanned, for the summary row. */
-function hubHost(hub: string): string {
-  const resolved = Beacon.resolveHubURL(hub);
+function hubHost(hub: string, resolved: string | null): string {
   return resolved?.match(/^[a-z]+:\/\/([^/]+)/i)?.[1] ?? hub;
 }
 
@@ -124,7 +128,10 @@ export default function Join() {
   const hubField = useSeededField(stored.lastHubURL || stored.venueHubURL);
   const nameField = useSeededField(stored.name);
 
-  const valid = Beacon.resolveHubURL(hub) !== null;
+  // `resolveHubURL` crosses into native. It was called 2-3× per render — on
+  // every keystroke — for a value that only depends on `hub`.
+  const resolvedHub = useMemo(() => Beacon.resolveHubURL(hub), [hub]);
+  const valid = resolvedHub !== null;
   // Nothing to confirm until there is a hub and a name, so a first launch
   // opens on the form; a returning or deep-linked operator gets the summary.
   const [editing, setEditing] = useState(() => !valid || !stored.name.trim());
@@ -192,7 +199,10 @@ export default function Join() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setTimeout(() => subscription.remove(), 30_000);
+      // Synchronous. On a 30 s timer, dismissing the sheet without scanning
+      // left the listener live, and tapping scan again stacked another — after
+      // which one scan fired every accumulated listener.
+      subscription.remove();
     }
   }, [hubField]);
 
@@ -242,7 +252,7 @@ export default function Join() {
             <View style={styles.row}>
               <Text style={styles.rowLabel}>Hub</Text>
               <Text style={styles.rowValue} numberOfLines={1} selectable>
-                {hubHost(hub)}
+                {hubHost(hub, resolvedHub)}
               </Text>
             </View>
           </View>

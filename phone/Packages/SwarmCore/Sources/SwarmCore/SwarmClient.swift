@@ -303,6 +303,10 @@ public actor SwarmClient {
         let (stream, continuation) = AsyncStream<OverlayFrame>.makeStream(bufferingPolicy: .bufferingNewest(1))
         frameContinuation?.finish()
         frameContinuation = continuation
+        // Seed the new subscriber. The ticker only yields when the frame
+        // actually changes, so without this a view that attached during a
+        // still moment would wait for the first change to draw anything.
+        continuation.yield(latestFrame)
         return stream
     }
 
@@ -619,12 +623,26 @@ public actor SwarmClient {
                                                         intrinsics: intrinsics)
             }
             let width = latestIntrinsics?.imageWidth ?? 1_920, height = latestIntrinsics?.imageHeight ?? 1_440
-            latestFrame = OverlayFrame(overlay: model.state, markerProjections: projections,
-                                       captureWidth: width, captureHeight: height,
-                                       hud: HUDMirror.make(from: model.state, captureWidth: width,
-                                                           captureHeight: height, screenAspect: screenAspect))
-            frameContinuation?.yield(latestFrame)
-            try? await Task.sleep(nanoseconds: 33_000_000)
+            let next = OverlayFrame(overlay: model.state, markerProjections: projections,
+                                    captureWidth: width, captureHeight: height,
+                                    hud: HUDMirror.make(from: model.state, captureWidth: width,
+                                                        captureHeight: height, screenAspect: screenAspect))
+            // Only invalidate SwiftUI when something actually changed. The
+            // overlay is recomputed on a clock because the arrow has to follow
+            // the camera, but poses arrive at 10 Hz and most ticks produce a
+            // byte-identical frame. Yielding those anyway redrew the whole
+            // operator tree — camera host, reticle, flash and all — for nothing.
+            //
+            // This only bites because the fields that would otherwise tick every
+            // frame (correction age, offline seconds, ping fade) are quantised
+            // at the source in `OverlayModel`.
+            let changed = next != latestFrame
+            latestFrame = next
+            if changed { frameContinuation?.yield(next) }
+            // 15 Hz. Nothing on this screen has content that moves faster than
+            // the 10 Hz pose feeding it, and every tick costs `HUDMirror.make`
+            // plus `Projection.visibleMarkers` on the same core as the encoder.
+            try? await Task.sleep(nanoseconds: 66_000_000)
         }
     }
 
@@ -669,8 +687,31 @@ public actor SwarmClient {
     }
 
     private func watchThermal() async {
+        var lastShed: ThermalState?
         while !Task.isCancelled {
-            await session.setThermalState(dependencies.thermal())
+            let state = dependencies.thermal()
+            await session.setThermalState(state)
+
+            // Shed pixels as well as frames.
+            //
+            // `SessionMachine` already multiplies `frameFPS` down at `.serious`
+            // and `.critical`. That halves how *often* the encoder runs but not
+            // what each run costs, and each run is a full software JPEG — the
+            // single largest CPU consumer on the phone after ARKit itself.
+            // Stepping the long edge down is the cheaper half of the same
+            // relief: 960 px is 0.56x the pixels of 1280, so it takes roughly
+            // 44% off every encode *and* 44% off the bytes on the wire, while
+            // costing the detector far less than dropping frames does.
+            if state != lastShed {
+                lastShed = state
+                var encoding = configuration.encoding
+                switch state {
+                case .nominal, .fair: break
+                case .serious: encoding.targetLongEdge = min(encoding.targetLongEdge, 960)
+                case .critical: encoding.targetLongEdge = min(encoding.targetLongEdge, 640)
+                }
+                await pipeline.setConfiguration(encoding)
+            }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }

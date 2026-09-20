@@ -10,6 +10,18 @@ import SwarmCore
 private final class EventSink: @unchecked Sendable {
   private let lock = NSLock()
   private weak var module: Module?
+  /// How many JS listeners `onState` currently has. The 2 Hz snapshot pump is
+  /// the only sustained native→JS traffic in the app, and Settings — the one
+  /// screen that subscribes — is a sheet the operator has closed almost all of
+  /// the time. Without this the pump builds a ~430-byte payload and takes a
+  /// JSI hop twice a second, for nobody, while ARKit is running.
+  private var stateListeners = 0
+
+  var wantsState: Bool { lock.withLock { stateListeners > 0 } }
+
+  func setStateListeners(_ count: Int) {
+    lock.withLock { stateListeners = max(0, count) }
+  }
 
   func attach(_ module: Module) {
     lock.withLock { self.module = module }
@@ -29,6 +41,9 @@ public class BeaconModule: Module {
     Name("Beacon")
 
     Events("onState", "onWelcome", "onPhase", "onError")
+
+    OnStartObserving("onState") { self.events.setStateListeners(1) }
+    OnStopObserving("onState") { self.events.setStateListeners(0) }
 
     OnCreate {
       self.events.attach(self)
@@ -210,11 +225,16 @@ private final class SessionBinder: @unchecked Sendable {
       next.append(Task {
         var lastPhase: String?
         while !Task.isCancelled {
-          let snapshot = await client.snapshot()
-          events.send("onState", BeaconModule.payload(snapshot))
-          if snapshot.phase != lastPhase, let phase = snapshot.phase {
-            lastPhase = phase
-            events.send("onPhase", ["phase": phase])
+          // Nobody watching: skip the snapshot actor hop and the payload
+          // build entirely, and keep ticking so the pump resumes the moment
+          // Settings opens.
+          if events.wantsState {
+            let snapshot = await client.snapshot()
+            events.send("onState", BeaconModule.payload(snapshot))
+            if snapshot.phase != lastPhase, let phase = snapshot.phase {
+              lastPhase = phase
+              events.send("onPhase", ["phase": phase])
+            }
           }
           try? await Task.sleep(nanoseconds: 500_000_000)
         }

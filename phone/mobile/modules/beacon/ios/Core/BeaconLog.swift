@@ -17,7 +17,14 @@ import QuartzCore
 /// all three at once, which is why every line appeared in triplicate.) Set
 /// `isEnabled = false` to silence it.
 public enum BeaconLog {
-    public static let isEnabled = true
+    // A `var`, because CLAUDE.md tells you to set it false to silence this and
+    // a `let` makes that not compile. Seeded from the argument domain so a run
+    // can quiet it without a rebuild: `-BeaconLog NO` in the scheme's launch
+    // arguments. Defaults to on — the device path is still being brought up.
+    public static var isEnabled: Bool = {
+        guard UserDefaults.standard.object(forKey: "BeaconLog") != nil else { return true }
+        return UserDefaults.standard.bool(forKey: "BeaconLog")
+    }()
 
     public static func log(_ message: @autoclosure () -> String) {
         guard isEnabled else { return }

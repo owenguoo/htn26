@@ -311,7 +311,17 @@ public actor SessionMachine {
     /// Moves to `permissions`. The app calls `permissionsGranted()` once the
     /// camera, motion and local-network prompts have been answered.
     public func start() -> AsyncStream<SessionEvent> {
-        let (stream, continuation) = AsyncStream<SessionEvent>.makeStream(bufferingPolicy: .unbounded)
+        // Bounded, because "backpressure drops, never queues" has to hold here
+        // too: this stream carries poses at 10 Hz and frame tickets at 15, and
+        // its consumer hops into the transport actor for every one. An
+        // unbounded buffer turns any transport stall into a growing backlog of
+        // back-dated poses — a phone reporting where it was thirty seconds ago.
+        // 64 rather than a tighter bound because the stream also carries
+        // one-off control events (`stateChanged`, `correctionApplied`,
+        // `failed`) that must survive an ordinary burst; at 25 events/s that is
+        // ~2.5 s of headroom, so the newest-wins drop only bites in a real
+        // stall, which is exactly when shedding poses is correct.
+        let (stream, continuation) = AsyncStream<SessionEvent>.makeStream(bufferingPolicy: .bufferingNewest(64))
         self.continuation = continuation
         transition(to: .permissions)
         return stream
@@ -742,11 +752,18 @@ public actor SessionMachine {
             emitFrameIfDue { self.makePoseUpdate(pose: pose) }
             return
         }
-        // The next slot is measured from now, not from the slot that was missed.
-        // Measuring from the missed slot would make the phone emit a burst of
-        // back-dated poses the moment tracking recovered after a long gap, which
-        // is the opposite of useful: they all describe the same instant.
-        nextPoseDue = now + poseInterval
+        // Keep the phase, the way `emitFrameIfDue` does. Samples arrive at
+        // 60 Hz, so a deadline measured from `now` is really measured from the
+        // first sample *at or after* the deadline, and that quantisation
+        // compounds: 100 ms from a sample that was already 16.67 ms late makes
+        // the next slot 116.67 ms away, and 10 Hz becomes 8.57 Hz.
+        //
+        // The `- interval` arm keeps the original protection: when we are a
+        // whole interval or more behind — tracking recovered after a long gap —
+        // the phase is abandoned and the slot restarts from now, so the phone
+        // does not emit a burst of back-dated poses that all describe the same
+        // instant.
+        nextPoseDue = nextPoseDue < now - poseInterval ? now + poseInterval : nextPoseDue + poseInterval
 
         let update = makePoseUpdate(pose: pose)
         diagnostics.posesEmitted += 1
@@ -770,7 +787,9 @@ public actor SessionMachine {
         }
         var emitted: PoseUpdate?
         if now >= nextPoseDue {
-            nextPoseDue = now + 1.0 / max(0.001, configuration.rates.poseHz)
+            // Same phase-keeping as the venue-frame path above.
+            let poseInterval = 1.0 / max(0.001, configuration.rates.poseHz)
+            nextPoseDue = nextPoseDue < now - poseInterval ? now + poseInterval : nextPoseDue + poseInterval
             let update = raw()
             emitted = update
             continuation?.yield(.rawPose(update))

@@ -307,7 +307,14 @@ enum TypeScale {
     ///
     /// A size, not a text style, because these are read at arm's length in one
     /// glance and Dynamic Type shrinking them would defeat the card.
-    static func alert(_ size: CGFloat) -> Font { .system(size: size, weight: .black) }
+    ///
+    /// `weight` is `.black` for the takeover plates, which interrupt. The flash
+    /// passes something lighter: a lock landing is a confirmation, not an
+    /// interruption, and it was being shouted in the heaviest type on the phone
+    /// at a size no other surface uses.
+    static func alert(_ size: CGFloat, weight: Font.Weight = .black) -> Font {
+        .system(size: size, weight: weight)
+    }
 }
 
 // MARK: - Environment

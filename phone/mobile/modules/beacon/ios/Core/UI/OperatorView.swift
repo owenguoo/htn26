@@ -144,22 +144,29 @@ public struct OperatorView: View {
             // card comes up at all.
             if isHuntingMarker {
                 MarkerReticleView()
+                    // The calibrate prompt rides on the reticle, directly above
+                    // it. It used to sit at the bottom of the screen, which put
+                    // the instruction a hand's width away from the thing it is
+                    // an instruction about: the operator is looking at the
+                    // brackets, so the words go where the eyes already are, and
+                    // above rather than below so the hand holding the phone up
+                    // is never over them. Hung off the reticle rather than
+                    // placed by a spacer, so it stays a fixed gap from the
+                    // brackets on every screen size — and outside the
+                    // reticle's own breathing, so the words hold still.
+                    .overlay(alignment: .top) {
+                        if phaseCardIsUp, overlay.phase == "calibrate" {
+                            calibratePrompt
+                                .fixedSize()
+                                .alignmentGuide(.top) { $0[.bottom] + Space.l }
+                                .transition(.opacity)
+                        }
+                    }
             }
 
-            if phaseCardIsUp, let phase = overlay.phase {
-                // Calibrate is the one card that asks the operator to *use* the
-                // camera it is sitting on top of. Centred, it covered the exact
-                // part of the frame they were being told to aim at — so while
-                // the reticle is up the words go to the bottom and the
-                // viewfinder gets the middle. Lobby and end ask for nothing and
-                // keep the middle.
-                VStack(spacing: 0) {
-                    if isHuntingMarker { Spacer(minLength: 0) }
-                    PhaseCardView(phase: phase, lookingFor: overlay.world?.lookingFor,
-                                  again: overlay.isRecalibrating, index: overlay.index,
-                                  colorHex: overlay.colorHex, world: overlay.world)
-                }
-                .padding(.bottom, isHuntingMarker ? Space.xxl : 0)
+            // Lobby and end ask for nothing and keep the middle.
+            if phaseCardIsUp, let phase = overlay.phase, phase != "calibrate" {
+                phaseCard(phase)
             }
 
             if isShowingMap, let room = overlay.room {
@@ -219,6 +226,14 @@ public struct OperatorView: View {
         .onAppear { model.attach() }
         .onDisappear { model.detach() }
     }
+
+    private func phaseCard(_ phase: String) -> some View {
+        PhaseCardView(phase: phase, lookingFor: overlay.world?.lookingFor,
+                      again: overlay.isRecalibrating, index: overlay.index,
+                      colorHex: overlay.colorHex, world: overlay.world)
+    }
+
+    private var calibratePrompt: some View { phaseCard("calibrate") }
 
     /// "SAM · 12 m" under the takeover's arrow.
     ///

@@ -748,7 +748,7 @@ public struct OverlayModel: Sendable {
     /// This is the *held* part only. `FlashView` eases the page in before this
     /// starts and eases it out after it ends, so what the operator sees is
     /// roughly this plus three quarters of a second of fade.
-    public static let lockFlashSeconds: Double = 2.2
+    public static let lockFlashSeconds: Double = 1.7
     /// No "✓". The page is a full screen of green with one word on it; the
     /// tick was a second, smaller way of saying the same thing, and it made
     /// the line sit off-centre for the sake of it.
@@ -1003,8 +1003,14 @@ public struct OverlayModel: Sendable {
                                 inFlight: transport.inFlight,
                                 dropped: transport.dropped,
                                 thermalState: diagnostics.thermalState,
-                                secondsSinceCorrection: diagnostics.lastCorrectionAge,
-                                secondsDisconnected: offlineSince.map { now - $0 },
+                                // Quantised to whole seconds, deliberately.
+                                // Both are shown as "Ns" and nothing else reads
+                                // them, but as raw Doubles they changed on every
+                                // tick — which made the overlay frame unequal to
+                                // the last one every time and defeated the
+                                // change-gate in `SwarmClient.runTicker`.
+                                secondsSinceCorrection: diagnostics.lastCorrectionAge?.rounded(),
+                                secondsDisconnected: offlineSince.map { (now - $0).rounded() },
                                 alignment: source)
         state.alignment = source
 
@@ -1044,7 +1050,11 @@ public struct OverlayModel: Sendable {
         // whole life, so the two maps agree on how faded an old ping looks.
         for i in state.pings.indices where state.pings[i].lifetime > 0 {
             let left = (state.pings[i].until - now) / state.pings[i].lifetime
-            state.pings[i].fade = max(0.25, min(1, left))
+            // Quantised to 1/64 for the same reason as the counters above: a raw
+            // fraction changes every tick, which would keep the overlay frame
+            // permanently unequal while any ping is alive. 1/64 is finer than
+            // the eye can follow on a fade from 1 to 0.25.
+            state.pings[i].fade = (max(0.25, min(1, left)) * 64).rounded() / 64
         }
 
         let usablePose = diagnostics.isStale ? nil : pose
@@ -1443,7 +1453,38 @@ public struct OverlayModel: Sendable {
 
 /// `#rrggbb` → 0…1 components. The hub only ever sends six-digit hex.
 public enum HexColor {
+    /// Memo for the handful of colours the hub actually sends.
+    ///
+    /// `parse` costs about four String allocations — a trim, a `removeFirst`,
+    /// sometimes a `map`/`joined` — and the HUD calls it per compass marker and
+    /// per chip, every redraw, on strings that are effectively constants. At
+    /// the old 30 Hz redraw with five markers that was well over a thousand
+    /// allocations a second to re-derive the same six numbers.
+    private final class Cache: @unchecked Sendable {
+        static let shared = Cache()
+        private let lock = NSLock()
+        private var entries: [String: (Float, Float, Float)?] = [:]
+
+        func value(for key: String, compute: (String) -> (Float, Float, Float)?) -> (Float, Float, Float)? {
+            lock.lock()
+            if let hit = entries[key] { lock.unlock(); return hit }
+            lock.unlock()
+            let computed = compute(key)
+            lock.lock()
+            // The hub's palette is small and fixed. The bound only exists so a
+            // malformed stream cannot grow this without limit.
+            if entries.count < 128 { entries[key] = computed }
+            lock.unlock()
+            return computed
+        }
+    }
+
     public static func parse(_ hex: String?) -> (Float, Float, Float)? {
+        guard let hex else { return nil }
+        return Cache.shared.value(for: hex) { uncached($0) }
+    }
+
+    private static func uncached(_ hex: String?) -> (Float, Float, Float)? {
         guard var text = hex?.trimmingCharacters(in: .whitespaces) else { return nil }
         if text.hasPrefix("#") { text.removeFirst() }
         if text.count == 3 { text = text.map { "\($0)\($0)" }.joined() }

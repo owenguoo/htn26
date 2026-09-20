@@ -32,6 +32,21 @@ const Value = ({ children }: { children: string }) => (
  * because nothing is listening", and the web client's struck-through pill made
  * exactly that distinction (`web/phone.html`, `.mic.off`).
  */
+// Hoisted out of `body`. This screen re-renders twice a second off the native
+// `onState` subscription, and every inline array here was a fresh object
+// crossing into SwiftUI as a changed prop — on a sheet presented over the live
+// operator screen, so it competes with ARKit on the main thread. The contents
+// are constants.
+const FORM_MODIFIERS = [tint(colors.accent), scrollContentBackground('hidden'), background(consoleInk.bg)];
+const FOOTNOTE = [font({ textStyle: textStyles.footnote })];
+const DISABLED: ReturnType<typeof disabled>[] = [disabled(true)];
+const ENABLED: ReturnType<typeof disabled>[] = [];
+const ERROR_TEXT = [
+  foregroundStyle(colors.problem),
+  font({ textStyle: textStyles.footnote }),
+  textSelection(true),
+];
+
 const MIC_STATUS: Record<MicState, string> = {
   unavailable: 'no microphone',
   muted: 'off',
@@ -92,7 +107,7 @@ export default function Settings() {
 
   return (
     <Host style={styles.fill} useViewportSizeMeasurement>
-      <Form modifiers={[tint(colors.accent), scrollContentBackground('hidden'), background(consoleInk.bg)]}>
+      <Form modifiers={FORM_MODIFIERS}>
         {state.joined ? (
           <Section
             title="Position"
@@ -132,7 +147,7 @@ export default function Settings() {
           title="Voice"
           footer={
             MIC_FOOTER[micState] ? (
-              <Text modifiers={[font({ textStyle: textStyles.footnote })]}>{MIC_FOOTER[micState]}</Text>
+              <Text modifiers={FOOTNOTE}>{MIC_FOOTER[micState]}</Text>
             ) : undefined
           }>
           <Toggle
@@ -140,7 +155,7 @@ export default function Settings() {
             systemImage={micState === 'unavailable' || micState === 'muted' ? 'mic.slash' : 'mic.fill'}
             isOn={micState !== 'muted' && micState !== 'unavailable'}
             onIsOnChange={(on) => void setMicrophoneOn(on)}
-            modifiers={micState === 'unavailable' ? [disabled(true)] : []}
+            modifiers={micState === 'unavailable' ? DISABLED : ENABLED}
           />
           <LabeledContent label="Status">
             <Value>{MIC_STATUS[micState]}</Value>
@@ -175,7 +190,7 @@ export default function Settings() {
             {state.lastError ? (
               <LabeledContent label="Last error">
                 <Text
-                  modifiers={[foregroundStyle(colors.problem), font({ textStyle: textStyles.footnote }), textSelection(true)]}>
+                  modifiers={ERROR_TEXT}>
                   {state.lastError}
                 </Text>
               </LabeledContent>

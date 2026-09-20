@@ -25,6 +25,16 @@ import UIKit
 // five-minute walk with and without markers; and that backgrounding produces
 // lost then recalibrating and sends no poses until a marker is seen again.
 // DEVICE_CHECKLIST.md items 1-8.
+/// A finished set of `ARReferenceImage`s on its way to the main actor.
+///
+/// ARKit does not mark `ARReferenceImage` `Sendable`, but each one here is
+/// fully constructed — including its `name` — before it is ever shared, and
+/// nothing mutates it afterwards. The wrapper states that promise in one place
+/// instead of scattering `nonisolated(unsafe)` across the call chain.
+struct MarkerImageSet: @unchecked Sendable {
+    let images: Set<ARReferenceImage>
+}
+
 public actor ARKitPoseProvider: PoseProvider {
 
     public struct Configuration: Sendable {
@@ -70,6 +80,85 @@ public actor ARKitPoseProvider: PoseProvider {
         self.configuration = configuration
     }
 
+    // MARK: - Marker reference images
+
+    /// Builds every marker reference image, concurrently and off the main
+    /// thread.
+    ///
+    /// Each one is a PNG decode plus ARKit's own feature extraction, and the
+    /// venue carries one per marker. Doing them serially inside
+    /// `ARSessionHost.start` put all of that on the main thread in the middle
+    /// of the join — competing with `ARSession`, `ARSCNView`'s Metal bring-up
+    /// and SwiftUI's first frame. They are independent of each other, so a task
+    /// group spreads them across cores and the finished set crosses to the main
+    /// actor once.
+    nonisolated static func referenceImages(
+        for configuration: Configuration
+    ) async throws -> MarkerImageSet {
+        // URLs are resolved up front so only `Sendable` values — an id, a URL,
+        // a width — cross into the concurrent tasks. The bundle lookup itself
+        // is a dictionary hit; the decode is the expensive half.
+        let work: [MarkerImageWork] = try configuration.venue.markers.map { marker in
+            guard let url = markerImageURL(marker.id, in: configuration.markerBundle) else {
+                throw ProviderError.missingMarkerImage(marker.id)
+            }
+            return MarkerImageWork(id: marker.id, url: url, physicalWidth: marker.physicalWidth)
+        }
+        let built = try await withThrowingTaskGroup(of: MarkerImageSet.self) { group in
+            for item in work {
+                group.addTask { MarkerImageSet(images: [try buildReferenceImage(item)]) }
+            }
+            var all: Set<ARReferenceImage> = []
+            for try await one in group { all.formUnion(one.images) }
+            return all
+        }
+        guard !built.isEmpty else { throw ProviderError.noMarkerImages }
+        return MarkerImageSet(images: built)
+    }
+
+    /// Serial fallback, for the path that still builds inside the session host.
+    nonisolated static func referenceImagesFromVenue(
+        _ configuration: Configuration
+    ) throws -> Set<ARReferenceImage> {
+        var images: Set<ARReferenceImage> = []
+        for marker in configuration.venue.markers {
+            guard let url = markerImageURL(marker.id, in: configuration.markerBundle) else {
+                throw ProviderError.missingMarkerImage(marker.id)
+            }
+            images.insert(try buildReferenceImage(
+                MarkerImageWork(id: marker.id, url: url, physicalWidth: marker.physicalWidth)))
+        }
+        guard !images.isEmpty else { throw ProviderError.noMarkerImages }
+        return images
+    }
+
+    struct MarkerImageWork: Sendable {
+        var id: String
+        var url: URL
+        var physicalWidth: Float
+    }
+
+    private nonisolated static func markerImageURL(_ id: String, in bundle: Bundle) -> URL? {
+        bundle.url(forResource: id, withExtension: "png", subdirectory: "Markers")
+            ?? bundle.url(forResource: id, withExtension: "png")
+    }
+
+    /// `physicalWidth` must be the true measured width in metres or all scale is
+    /// wrong — which is why it comes from the venue file rather than from the
+    /// asset catalogue, where it would be compiled in and need a rebuild to fix.
+    private nonisolated static func buildReferenceImage(
+        _ work: MarkerImageWork
+    ) throws -> ARReferenceImage {
+        guard let source = CGImageSourceCreateWithURL(work.url as CFURL, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw ProviderError.missingMarkerImage(work.id)
+        }
+        let reference = ARReferenceImage(cgImage, orientation: .up,
+                                         physicalWidth: CGFloat(work.physicalWidth))
+        reference.name = work.id
+        return reference
+    }
+
     // MARK: - PoseProvider
 
     public func start() async throws -> AsyncStream<PoseProviderEvent> {
@@ -81,10 +170,24 @@ public actor ARKitPoseProvider: PoseProvider {
         // ARSession + CoreMotion are created and started on the main actor:
         // ARKit's types are not Sendable and its own bring-up assumes the main
         // thread. Only Sendable values cross the hop.
+        // Marker images first, and deliberately *here*: this actor is not the
+        // main actor, so the PNG decodes and ARKit's feature extraction happen
+        // off the main thread. Building them inside `ARSessionHost.start` put
+        // all five on main, in the middle of the join, on the same thread
+        // ARKit, SceneKit and SwiftUI were all bringing up.
+        let markerImages: MarkerImageSet?
+        if configuration.referenceImageGroup == nil {
+            markerImages = try await BeaconLog.step("build marker images") {
+                try await Self.referenceImages(for: configuration)
+            }
+        } else {
+            markerImages = nil
+        }
+
         BeaconLog.log("provider start: building ARSessionHost")
         let host = await ARSessionHost()
         BeaconLog.log("→ ARSessionHost.start")
-        try await host.start(configuration: configuration, inbox: inbox)
+        try await host.start(configuration: configuration, markerImages: markerImages, inbox: inbox)
         BeaconLog.log("✓ ARSessionHost.start")
         self.host = host
         isRunning = true
@@ -198,9 +301,10 @@ private final class ARSessionHost {
     /// Live camera view sharing `session`. Nil until `start`.
     var previewView: UIView? { sceneView }
 
-    func start(configuration: ARKitPoseProvider.Configuration, inbox: FrameInbox) throws {
+    func start(configuration: ARKitPoseProvider.Configuration,
+               markerImages: MarkerImageSet?, inbox: FrameInbox) throws {
         BeaconLog.log("ARSessionHost.start on this queue")
-        let sessionConfiguration = try makeSessionConfiguration(configuration)
+        let sessionConfiguration = try makeSessionConfiguration(configuration, markerImages: markerImages)
         BeaconLog.log("session configuration built: \(sessionConfiguration.detectionImages?.count ?? 0) markers")
         let delegate = SessionDelegate(inbox: inbox)
         self.delegate = delegate
@@ -216,9 +320,27 @@ private final class ARSessionHost {
         self.sceneView = sceneView
 
         session.delegate = delegate
-        // Default (main) queue. Custom serial queues still trapped on device
-        // once frames started.
-        session.delegateQueue = nil
+        // A real serial queue, off the main thread.
+        //
+        // This was `nil` (main) because custom queues "still trapped on device
+        // once frames started". The likely reason is now understood: if the SDK
+        // imports `ARSessionDelegate`'s requirements as `@MainActor`, the
+        // conformance methods inherit that isolation, and ARKit calling them
+        // from a non-main queue trips `dispatch_assert_queue(main)` on the
+        // first frame — the same inferred-isolation defect as the audio tap in
+        // `MicrophoneCapture.install`. `SessionDelegate`'s methods are now
+        // explicitly `nonisolated`, which removes the assert rather than
+        // satisfying it by accident.
+        //
+        // Why it matters: at 60 Hz on main the delegate competed with SwiftUI's
+        // full-tree redraw and with every blocking `AVAudioSession` call — and
+        // ARKit does not queue missed callbacks, it simply goes quiet, which is
+        // what made tracking read `notAvailable` after `microphone.start`.
+        //
+        // **If a queue-assertion trap comes back on the first frame, this line
+        // is the first thing to revert.** The `[beacon]` queue label on the last
+        // line before the trap will say so.
+        session.delegateQueue = DispatchQueue(label: "beacon.arkit.delegate", qos: .userInitiated)
         BeaconLog.log("ARSession.run")
         session.run(sessionConfiguration, options: [.resetTracking, .removeExistingAnchors])
         BeaconLog.log("ARSession.run returned")
@@ -237,7 +359,8 @@ private final class ARSessionHost {
     }
 
     private func makeSessionConfiguration(
-        _ configuration: ARKitPoseProvider.Configuration
+        _ configuration: ARKitPoseProvider.Configuration,
+        markerImages: MarkerImageSet?
     ) throws -> ARWorldTrackingConfiguration {
         guard ARWorldTrackingConfiguration.isSupported else {
             throw ARKitPoseProvider.ProviderError.worldTrackingUnsupported
@@ -254,9 +377,14 @@ private final class ARSessionHost {
 
         if let group = configuration.referenceImageGroup,
            let images = ARReferenceImage.referenceImages(inGroupNamed: group, bundle: nil) {
+            // Compiled descriptors out of the asset catalogue: a lookup, not a
+            // decode, so this one is cheap enough to stay on main.
             sessionConfiguration.detectionImages = images
+        } else if let markerImages {
+            sessionConfiguration.detectionImages = markerImages.images
         } else {
-            sessionConfiguration.detectionImages = try referenceImagesFromVenue(configuration)
+            sessionConfiguration.detectionImages =
+                try ARKitPoseProvider.referenceImagesFromVenue(configuration)
         }
         sessionConfiguration.maximumNumberOfTrackedImages = configuration.maximumConcurrentImages
         // Off: ARKit's own estimate of a marker's size is less trustworthy than a
@@ -266,32 +394,6 @@ private final class ARSessionHost {
         return sessionConfiguration
     }
 
-    /// Builds reference images from `Markers/<id>.png` in the bundle, using the
-    /// measured widths in `venue.json`.
-    ///
-    /// `physicalWidth` must be the true measured width in metres or all scale is
-    /// wrong — which is why it comes from the venue file rather than from the
-    /// asset catalogue, where it would be compiled in and need a rebuild to fix.
-    private func referenceImagesFromVenue(
-        _ configuration: ARKitPoseProvider.Configuration
-    ) throws -> Set<ARReferenceImage> {
-        var images: Set<ARReferenceImage> = []
-        for marker in configuration.venue.markers {
-            guard let url = configuration.markerBundle.url(forResource: marker.id, withExtension: "png",
-                                                           subdirectory: "Markers")
-                    ?? configuration.markerBundle.url(forResource: marker.id, withExtension: "png"),
-                  let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-                throw ARKitPoseProvider.ProviderError.missingMarkerImage(marker.id)
-            }
-            let reference = ARReferenceImage(cgImage, orientation: .up,
-                                             physicalWidth: CGFloat(marker.physicalWidth))
-            reference.name = marker.id
-            images.insert(reference)
-        }
-        guard !images.isEmpty else { throw ARKitPoseProvider.ProviderError.noMarkerImages }
-        return images
-    }
 }
 
 /// The hand-off point between ARKit's delegate queue and everything else.
@@ -385,7 +487,7 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
 
     private var hasLoggedFirstFrame = false
 
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+    nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // Fires at 60 Hz. Everything is copied out synchronously here; the frame
         // is never retained, because retaining it stalls the session.
         if !hasLoggedFirstFrame {
@@ -403,17 +505,17 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
                     pixelBuffer: PixelBufferHandoff(frame.capturedImage, deviceTimestamp: timestamp))
     }
 
-    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+    nonisolated func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
         forward(anchors, isUpdate: false)
     }
 
-    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+    nonisolated func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
         // didUpdate is as important as didAdd: operators walk, ARKit drifts, and
         // every re-sighting is a correction rather than a repeat of calibration.
         forward(anchors, isUpdate: true)
     }
 
-    private func forward(_ anchors: [ARAnchor], isUpdate: Bool) {
+    private nonisolated func forward(_ anchors: [ARAnchor], isUpdate: Bool) {
         // ARImageAnchor is a reference type and is not Sendable, so everything
         // needed is copied into plain values first. One timestamp for the whole
         // callback: sharing it is what tells `SessionMachine` these were seen
@@ -432,23 +534,23 @@ private final class SessionDelegate: NSObject, ARSessionDelegate {
         inbox.markers(sightings)
     }
 
-    func sessionWasInterrupted(_ session: ARSession) {
+    nonisolated func sessionWasInterrupted(_ session: ARSession) {
         BeaconLog.log("ARSession interrupted")
         inbox.event(.interrupted)
     }
 
-    func sessionInterruptionEnded(_ session: ARSession) {
+    nonisolated func sessionInterruptionEnded(_ session: ARSession) {
         // ARKit has thrown its map away. Everything is untrustworthy until a
         // marker is seen again; SwarmCore's state machine decides what that means.
         inbox.event(.interruptionEnded)
     }
 
-    func session(_ session: ARSession, didFailWithError error: any Error) {
+    nonisolated func session(_ session: ARSession, didFailWithError error: any Error) {
         BeaconLog.log("ARSession failed: \(error.localizedDescription)")
         inbox.event(.failed(error.localizedDescription))
     }
 
-    func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+    nonisolated func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
         BeaconLog.log("tracking state → \(ARKitPoseProvider.quality(of: camera.trackingState).wireValue)")
     }
 }

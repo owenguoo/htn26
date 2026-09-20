@@ -278,8 +278,8 @@ private enum Metrics {
     static let arrivalRise: CGFloat = 6
 }
 
-/// About 2 s from first frame to gone, and the join form is readable under
-/// the dissolve from about 1.8 s.
+/// About 2.3 s from first frame to gone, and the join form is readable under
+/// the dissolve from about 2 s.
 ///
 /// It was 1.4 s, which is long enough on paper and not on a phone: each step
 /// was shorter than the eye needs to register it as a step (a 0.15 s hold is
@@ -290,19 +290,19 @@ private enum Metrics {
 /// short.
 private enum Timing {
     /// Flat colour only, while the launch settles. See `play()`.
-    static let startDelay = 0.15
-    static let arrive = 0.45
+    static let startDelay = 0.2
+    static let arrive = 0.5
     /// Naming starts before the arrival has finished, so the two read as one
     /// gesture rather than as two steps with a gap.
-    static let nameAt = 0.35
-    static let name = 0.55
-    static let hold = 0.25
-    static let settle = 0.5
+    static let nameAt = 0.4
+    static let name = 0.65
+    static let hold = 0.35
+    static let settle = 0.55
     /// None. The dissolve used to start a tenth of a second before the lockup
     /// landed, which meant it cross-faded while still a few points short of
     /// the header — the same misregistration, from timing instead of layout.
     static let leaveOverlap = 0.0
-    static let leave = 0.25
+    static let leave = 0.3
     static let reducedHold = 1.0
 
     /// Cubic ease-out and ease-in-out. Deliberately not `Motion`'s springs:

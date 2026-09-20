@@ -79,7 +79,13 @@ public final class OperatorViewModel {
         }
         tasks.append(Task { @MainActor [weak self] in
             for await next in await client.overlayFrames() {
-                self?.frame = next
+                // `@Observable`'s setter calls `withMutation` whether or not the
+                // value changed, and every view in `OperatorView` reads `frame`
+                // — so an unconditional assignment invalidated the camera host,
+                // the reticle, the flash and the takeover on every tick. The
+                // client already gates its yields; this is the second belt,
+                // for the seed frame and for any future producer.
+                if self?.frame != next { self?.frame = next }
                 self?.forwardRoomBounds(next.overlay.room)
             }
         })

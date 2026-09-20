@@ -230,7 +230,16 @@ public final class SwarmRuntime: @unchecked Sendable {
             let client = SwarmClient(configuration: configuration,
                                      dependencies: .init(provider: provider, encoder: encoder,
                                                          uptime: uptime, thermal: thermal))
-            let microphone = await MainActor.run { MicrophoneCapture(client: client) }
+            // Only built when voice is actually on. `MicrophoneCapture` holds
+            // an `AVAudioEngine` in a stored property, so constructing it
+            // allocates and initialises CoreAudio state on the main thread — in
+            // the middle of the join, on the same thread ARKit is bringing its
+            // capture session up on — for a subsystem that is then never
+            // started. `isVoiceEnabled` is read once here rather than only at
+            // the start site below.
+            let microphone = Self.isVoiceEnabled
+                ? await MainActor.run { MicrophoneCapture(client: client) }
+                : nil
             arkitProvider = provider
             session = RuntimeSession(client: client, preview: preview, venue: venue,
                                      socketURL: socketURL, microphone: microphone)
@@ -314,7 +323,7 @@ public final class SwarmRuntime: @unchecked Sendable {
             // capture session up is asking two subsystems to reconfigure the
             // same session at once. Waiting for the first frame costs a beat of
             // voice at join and serialises the two.
-            if let microphone = session.microphone, Self.isVoiceEnabled {
+            if let microphone = session.microphone {
                 if let arkitProvider {
                     let arrived = await BeaconLog.step("wait for first ARKit frame") {
                         await arkitProvider.waitForFirstFrame(timeout: 5)
@@ -324,8 +333,8 @@ public final class SwarmRuntime: @unchecked Sendable {
                     if !arrived { BeaconLog.log("no ARKit frame within 5s — starting mic regardless") }
                 }
                 await BeaconLog.step("microphone.start") { await microphone.start() }
-            } else if session.microphone != nil {
-                BeaconLog.log("microphone start skipped — voice off (-BeaconVoice YES to enable)")
+            } else if source == .arkit {
+                BeaconLog.log("microphone not built — voice off (-BeaconVoice YES to enable)")
             }
             BeaconLog.log("join complete")
         } catch {

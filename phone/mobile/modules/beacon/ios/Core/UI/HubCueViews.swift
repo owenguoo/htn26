@@ -202,8 +202,9 @@ struct PhaseCardView: View {
     }
 
     /// Calibrate asks the operator to use the camera, so it is camera chrome:
-    /// a pill at the bottom, the shape `drawHud` gives everything it puts over
-    /// video, and the viewfinder keeps the middle.
+    /// a pill, the shape `drawHud` gives everything it puts over video.
+    /// `OperatorView` hangs it directly above the reticle, which keeps the
+    /// middle.
     private var prompt: some View {
         HStack(spacing: Space.s) {
             Image(systemName: "scope")

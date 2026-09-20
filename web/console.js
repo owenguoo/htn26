@@ -1,5 +1,5 @@
 import { frameKey } from '/web/inference-ui.js';
-import { makeView, drawRoom, drawCone, heatLevels, heatCanvas, heatGradientCSS } from '/web/room.js';
+import { makeView, drawRoom, drawCone, headingVector, heatLevels, heatCanvas, heatGradientCSS } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
 // Before a search the show sits in "calibrate": every phone is scanning the
@@ -693,6 +693,90 @@ function toggleHud() {
   $('#vHud').classList.toggle('on', showHud);
 }
 
+// The phone's mini-map, mirrored into the corner of its feed.
+//
+// `MiniMapView` in `FloorPlanViews.swift`: a 132x164 plate resting bottom-left,
+// the room drawn with `followsMe` — which scrolls the plan so the operator is
+// in the middle, and does *not* rotate it — at `padding: 6` and `showsDetail:
+// false`, with a "x% searched" strip under it.
+//
+// Drawn from the console's own world rather than from anything the phone sends,
+// because both are drawing the same hub state. What the phone does not send is
+// where the plate actually is: the operator can drag it to another corner and
+// can hide it, so this is the resting position, not a promise about theirs.
+const MINI_W = 132, MINI_H = 164, MINI_FOOT = 22;
+
+function drawHudMiniMap(ctx, sx, sy, sw, sh, k) {
+  const me = phones.get(viewing)?.pose;
+  if (!room || !me || !view) return;
+  const w = Math.min(MINI_W * k, sw * 0.42), h = w * (MINI_H / MINI_W);
+  if (w < 60) return;                       // too small to read: better nothing
+  const foot = MINI_FOOT * (w / MINI_W);
+  const x = sx + 12 * k, y = sy + sh - h - 12 * k;
+  const planH = h - foot;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, 10 * (w / MINI_W));
+  ctx.clip();
+  ctx.fillStyle = '#f7fbf8';
+  ctx.fillRect(x, y, w, h);
+
+  // Same fit the phone uses, then shifted so the operator sits in the middle.
+  const mv = makeView(room, w, planH, 6 * (w / MINI_W));
+  const [fx, fy] = mv.toPx(me.x, me.y);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, planH);
+  ctx.clip();
+  ctx.translate(x + w / 2 - fx, y + planH / 2 - fy);
+  drawRoom(ctx, room, mv, {
+    grid: false, label: false,
+    colors: { floor: '#ffffff', wall: '#789b85', stage: '#deeee3', text: '#466653' },
+  });
+  const dot = (px, py, r, fill) => {
+    ctx.fillStyle = fill;
+    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+  };
+  for (const h2 of st?.hazards || []) { const [px, py] = mv.toPx(h2.x, h2.y); dot(px, py, 2.5, '#d97706'); }
+  for (const v of st?.target?.victims || []) { const [px, py] = mv.toPx(v.x, v.y); dot(px, py, 4, '#b72f36'); }
+  for (const other of phones.values()) {
+    if (other.id === viewing || !other.pose || !isLive(other)) continue;
+    const [px, py] = mv.toPx(other.pose.x, other.pose.y);
+    dot(px, py, 3, 'rgba(24,131,75,.55)');
+  }
+  const [px, py] = mv.toPx(me.x, me.y);
+  if (me.heading != null) {
+    const [hx, hy] = headingVector(me.heading);
+    ctx.strokeStyle = '#18834b';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + hx * 11, py + hy * 11); ctx.stroke();
+  }
+  dot(px, py, 4.5, '#18834b');
+  ctx.restore();
+
+  // The strip under it: how much of the room has been swept, and by how many.
+  ctx.fillStyle = '#edf6ef';
+  ctx.fillRect(x, y + planH, w, foot);
+  ctx.fillStyle = 'rgba(23,55,38,.12)';
+  ctx.fillRect(x, y + planH, w, 1);
+  ctx.fillStyle = '#466653';
+  ctx.font = `500 ${Math.round(10 * (w / MINI_W))}px Geist, system-ui`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${Math.round((st?.coverage?.searched || 0) * 100)}% searched`,
+               x + 6 * (w / MINI_W), y + planH + foot / 2);
+  ctx.textAlign = 'right';
+  ctx.fillText(String([...phones.values()].filter(isLive).length), x + w - 6 * (w / MINI_W), y + planH + foot / 2);
+  ctx.restore();
+
+  ctx.strokeStyle = 'rgba(23,55,38,.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(x + .5, y + .5, w - 1, h - 1, 10 * (w / MINI_W));
+  ctx.stroke();
+}
+
 // ---------------------------------------------------------------- phone HUD mirror
 // Redraws what's on the viewed phone's screen over its feed, from the description the phone sends.
 const CARD = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SW', 270: 'W', 315: 'NW' };
@@ -792,6 +876,9 @@ function drawHud() {
   }
   if (hud.lookingFor) { pill(ctx, sx + sw / 2, top + 12 * k, hud.lookingFor, 'rgba(12,17,32,0.85)', '#eef2ff', 12 * k); top += 30 * k; }
   if (hud.toast) { pill(ctx, sx + sw / 2, top + 14 * k, hud.toast, 'rgba(255,255,255,0.95)', '#05070f', 13 * k, true); top += 36 * k; }
+  // The mini-map the searcher has in the corner of their own screen.
+  drawHudMiniMap(ctx, sx, sy, sw, sh, k);
+
   // The full-screen card, drawn last so it covers the HUD it stands in for —
   // with a real hole in it, so the operator sees the same window onto the feed
   // that the searcher is looking through.

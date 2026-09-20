@@ -155,6 +155,54 @@ struct FloorPlanGeometry {
 /// leaves out is what the console alone can do — planner sector overlays, the
 /// draggable rehearsal target, the marker pin, the explain overlay — because
 /// the phone's `world` message does not carry any of it.
+/// One-entry memo for the coverage heat field.
+///
+/// `heatLevels` + `heatImage` are a pure function of `(heat, cells, cols,
+/// rows)` and the hub only changes that input at 2 Hz (`WORLD_HZ`). But they
+/// were being called from inside a `Canvas` draw closure — on the main thread,
+/// on every map redraw, and the map redraws at display rate while the
+/// operator's dot is tweening through `MovingPlan`. For a 40x30 room that was a
+/// 9-tap convolution over 1200 cells (10,800 iterations), a fresh `CGImage`, a
+/// fresh `CGColorSpace` and ~10 KB of transient allocation **per frame**, on
+/// the same thread ARKit's delegate and SwiftUI's commit share.
+///
+/// Lock-guarded rather than `@MainActor` so it does not depend on the isolation
+/// of SwiftUI's draw closure. Output is pixel-identical; only the recomputation
+/// is removed.
+private final class HeatFieldCache: @unchecked Sendable {
+    static let shared = HeatFieldCache()
+
+    private let lock = NSLock()
+    private var heat: String?
+    private var cells: String?
+    private var cols = 0
+    private var rows = 0
+    private var image: CGImage?
+
+    func image(heat: String?, cells: String, cols: Int, rows: Int) -> CGImage? {
+        lock.lock()
+        if self.cells == cells, self.heat == heat, self.cols == cols, self.rows == rows {
+            defer { lock.unlock() }
+            return image
+        }
+        lock.unlock()
+
+        // Computed outside the lock: this is the expensive half, and holding a
+        // lock across it would serialise the two maps against each other.
+        let next = FloorPlanCanvas.heatLevels(heat: heat, cells: cells, cols: cols, rows: rows)
+            .flatMap { FloorPlanCanvas.heatImage($0, cols: cols, rows: rows) }
+
+        lock.lock()
+        self.heat = heat
+        self.cells = cells
+        self.cols = cols
+        self.rows = rows
+        self.image = next
+        lock.unlock()
+        return next
+    }
+}
+
 struct FloorPlanCanvas: View {
     let room: HubRoom
     let world: HubWorld?
@@ -263,9 +311,8 @@ struct FloorPlanCanvas: View {
     private func coverage(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
         guard let coverage = world?.coverage else { return }
         let cols = max(1, coverage.cols), rows = max(1, coverage.rows)
-        guard let levels = Self.heatLevels(heat: coverage.heat, cells: coverage.cells,
-                                           cols: cols, rows: rows),
-              let field = Self.heatImage(levels, cols: cols, rows: rows) else { return }
+        guard let field = HeatFieldCache.shared.image(heat: coverage.heat, cells: coverage.cells,
+                                                      cols: cols, rows: rows) else { return }
 
         let topLeft = plan.point(x: coverage.x0, y: 0)
         let bottomRight = plan.point(x: coverage.x0 + Double(cols) * coverage.cell,
@@ -350,11 +397,12 @@ struct FloorPlanCanvas: View {
     /// `heatGradientCSS()` in `web/room.js`: the ramp as gradient stops for the
     /// legend key, off the same numbers the field is painted with, so the
     /// swatch cannot drift away from the thing it explains.
-    static var heatStops: [Gradient.Stop] {
-        (0..<6).map { step in
-            let level = Double(step) / 5
-            return Gradient.Stop(color: MapInk.heatField.opacity(heatAlpha(level)), location: level)
-        }
+    // `static let`, not a computed property: `HeatScaleBar`'s body reads this,
+    // and as a computed property it allocated six `Gradient.Stop`s on every
+    // pass. The inputs are all compile-time constants.
+    static let heatStops: [Gradient.Stop] = (0..<6).map { step in
+        let level = Double(step) / 5
+        return Gradient.Stop(color: MapInk.heatField.opacity(heatAlpha(level)), location: level)
     }
 
     /// The field as a cols×rows bitmap in `MapInk.heatField`, one pixel per cell,
@@ -494,6 +542,13 @@ struct FloorPlanCanvas: View {
     /// nothing moving on it repainting at 30 Hz.
     static func drawablePings(_ pings: [PingCue], world: HubWorld?) -> [PingCue] {
         world?.marker == nil ? pings : pings.filter { $0.label != "MARKER" }
+    }
+
+    /// Whether `drawablePings` would return anything, without allocating the
+    /// array to find out. The two map hosts call this from `body` purely to
+    /// decide whether their animation clock should be running.
+    static func hasDrawablePings(_ pings: [PingCue], world: HubWorld?) -> Bool {
+        world?.marker == nil ? !pings.isEmpty : pings.contains { $0.label != "MARKER" }
     }
 
     /// `drawDetectedPeople()` and `drawHazards()`. Both used to be invented
@@ -698,7 +753,7 @@ struct MiniMapView: View {
     var body: some View {
         VStack(spacing: 0) {
             MovingPlan(me: me) { eased in
-                PulsingFloorPlan(isAnimating: !FloorPlanCanvas.drawablePings(pings, world: world).isEmpty
+                PulsingFloorPlan(isAnimating: FloorPlanCanvas.hasDrawablePings(pings, world: world)
                                      || world?.candidate != nil) { time in
                     FloorPlanCanvas(room: room, world: world, me: eased, pings: pings,
                                     followsMe: true, showsDetail: false, time: time)
@@ -791,7 +846,7 @@ struct RoomMapView: View {
                 .accessibilityLabel("Area searched")
 
                 MovingPlan(me: me) { eased in
-                    PulsingFloorPlan(isAnimating: !FloorPlanCanvas.drawablePings(pings, world: world).isEmpty
+                    PulsingFloorPlan(isAnimating: FloorPlanCanvas.hasDrawablePings(pings, world: world)
                                          || world?.candidate != nil) { time in
                         FloorPlanCanvas(room: room, world: world, me: eased, pings: pings, time: time)
                     }

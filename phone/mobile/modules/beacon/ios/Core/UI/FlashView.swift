@@ -55,7 +55,12 @@ struct FlashView: View {
                     vignette(held, in: geometry.size)
                     if let text = held.text {
                         label(text)
-                            .font(TypeScale.alert(40))
+                            // Smaller and lighter than a takeover plate, which
+                            // is the louder moment of the two. At 40pt `.black`
+                            // this line was the biggest, heaviest type in the
+                            // app, spread across two rows of a phone, for a
+                            // word that only confirms something went right.
+                            .font(TypeScale.alert(26, weight: .semibold))
                             .multilineTextAlignment(.center)
                             .minimumScaleFactor(0.5)
                             .foregroundStyle(.hudInk)

@@ -37,7 +37,9 @@ export function headingVector(deg) {
 /// `FloorPlanViews.swift` mirrors it.
 export const STAGE_GAP_PX = 3;
 
-export function drawRoom(ctx, room, view, { grid = true, colors = {} } = {}) {
+/// `label: false` leaves the STAGE word off — the phone's mini-map (`showsDetail`
+/// in `FloorPlanViews.swift`) has no room for it, and neither does its mirror.
+export function drawRoom(ctx, room, view, { grid = true, label = true, colors = {} } = {}) {
   const c = {
     floor: colors.floor || 'rgba(255,255,255,0.03)',
     wall: colors.wall || 'rgba(255,255,255,0.35)',
@@ -83,6 +85,7 @@ export function drawRoom(ctx, room, view, { grid = true, colors = {} } = {}) {
   ctx.strokeStyle = c.wall;
   ctx.lineWidth = 2;
   ctx.strokeRect(sx, top, ex - sx, bottom - top);
+  if (!label) return;
   ctx.fillStyle = c.text;
   ctx.font = `600 ${Math.max(10, view.scale * 0.6)}px ui-sans-serif, system-ui, sans-serif`;
   ctx.textAlign = 'center';
