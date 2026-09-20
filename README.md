@@ -29,6 +29,10 @@ uv run python -m swarm.hub --public-url https://<printed>.trycloudflare.com
 
 The console's join QR code then points at the tunnel.
 
+## Simulator
+
+The console's **Simulator** tab rehearses a search on a floor plan, and is the environment the commander policy is trained on: see [Rescue simulator](docs/simulator.md) and [Commander environment](docs/commander-env.md).
+
 ## Phone page options
 
 `/?fps=2&w=480&q=0.6` sets frames/sec, frame width, and JPEG quality. `/?fake` sends a test

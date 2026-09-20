@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Beacon · Simulator</title>
+  <link rel="icon" type="image/png" href="/web/beacon_logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script type="importmap">
+    {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+  </script>
+  <style>
+    /* Same tokens as console.html: the two pages are tabs of one console. */
+    :root {
+      --bg: #f5faf6; --bg-1: #edf6ef; --bg-2: #e2f0e6; --bg-3: #d4e7da;
+      --surface: #fff; color-scheme: light;
+      --line: #d5e5da; --line-2: #b3cebd;
+      --fg: #173726; --fg-2: #466653; --fg-3: #597562;
+      --accent: #18834b; --accent-hover: #126b3c; --accent-bg: #e0f5e7;
+      --red: #b72f36; --red-bg: #fcebed; --amber: #d97706;
+      --sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      --r: 10px;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans);
+      -webkit-font-smoothing: antialiased; }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .muted { color: var(--fg-2); }
+    .faint { color: var(--fg-3); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    input, select { accent-color: var(--accent); }
+
+    .wrap { max-width: 1440px; margin: 0 auto; padding: 0 24px 40px; }
+    header { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,0.94); backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+    .bar { max-width: 1440px; margin: 0 auto; padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 12px; }
+    .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
+    .logo img { display: block; width: 44px; height: 44px; object-fit: contain; }
+    .slash { color: var(--line-2); font-weight: 300; font-size: 20px; }
+    .spacer { flex: 1; }
+    .tabs { display: flex; gap: 2px; }
+    .tabs a { padding: 6px 12px; border-radius: 6px; color: var(--fg-2); text-decoration: none; font-weight: 500; }
+    .tabs a:hover { background: var(--bg-2); color: var(--fg); }
+    .tabs a[aria-current="page"] { background: var(--accent-bg); color: var(--accent-hover); }
+
+    .btn { height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg);
+      font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+      transition: background .15s, border-color .15s; }
+    .btn:hover { background: var(--bg-2); border-color: var(--accent); }
+    .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+    .btn.primary:hover { background: var(--accent-hover); }
+    .btn.danger { color: var(--red); }
+    .btn.danger:hover { background: var(--red-bg); border-color: var(--red); }
+    .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
+    .btn.big { height: 40px; padding: 0 22px; font-size: 14px; }
+    .btn:disabled { opacity: .4; cursor: default; }
+
+    .overview { padding: 24px 0 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .overview h1 { margin: 0; font-size: 24px; letter-spacing: -.03em; }
+    .overview select { min-width: 260px; }
+    select, input[type="number"], input[type="text"] { font: inherit; color: var(--fg); background: var(--bg-1);
+      border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 8px; height: 32px; }
+    input[type="number"] { width: 84px; }
+    #envNote { margin: -6px 0 16px; color: var(--fg-2); font-size: 13px; max-width: 900px; }
+
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; }
+    .stack { display: grid; gap: 16px; align-content: start; min-width: 0; }
+    .card { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); min-width: 0; }
+    .card-h { min-height: 48px; padding: 8px 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      border-bottom: 1px solid var(--line); }
+    .card-h h2 { margin: 0; font-size: 14px; font-weight: 500; }
+    .card-b { padding: 16px; display: grid; gap: 14px; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .row .label { font-weight: 500; }
+    .row .hint { font-size: 12px; color: var(--fg-3); }
+    .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: 6px; height: 28px; flex: none; }
+    .stepper button { width: 28px; height: 26px; color: var(--fg-2); }
+    .stepper button:hover { color: var(--fg); background: var(--bg-2); }
+    .stepper span { min-width: 28px; text-align: center; font-family: var(--mono); }
+    .seg { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1); flex: none; }
+    .seg button { padding: 5px 10px; font-size: 12px; border-radius: 5px; }
+    .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+
+    /* the map */
+    #mapWrap { position: relative; height: 560px; overflow: hidden; background:
+      radial-gradient(circle at 50% 45%, #fbfdfb 0, #f1f7f3 72%, #e8f1eb 100%); }
+    #map, #scene3d { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #scene3d { overflow: hidden; }
+    .s3d-canvas, .s3d-labels { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .s3d-labels { pointer-events: none; }
+    .s3d-tag { padding: 2px 6px; background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 6px;
+      color: var(--fg); font: 500 11px var(--mono); }
+    .s3d-tag.hot { color: #fff; background: var(--red); border-color: var(--red); }
+    .s3d-room { color: var(--fg-3); font-size: 11px; font-weight: 500; text-shadow: 0 0 4px #fff, 0 0 4px #fff; }
+    .s3d-tools { position: absolute; top: 10px; left: 10px; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; }
+    .s3d-tools button { background: var(--surface); color: var(--fg); border: 1px solid var(--line); padding: 5px 8px;
+      border-radius: 6px; font-size: 11px; }
+    .s3d-tools button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+    #mapHint { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 3; padding: 6px 12px;
+      border-radius: 999px; background: var(--fg); color: #fff; font-size: 12px; font-weight: 500; pointer-events: none; }
+    .transport { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); }
+    .transport input[type="range"] { flex: 1; min-width: 0; }
+    .transport .clock { font: 500 14px var(--mono); min-width: 96px; text-align: right; }
+    .map-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; padding: 10px 16px;
+      border-top: 1px solid var(--line); background: var(--bg-1); color: var(--fg-2); font-size: 12px;
+      border-radius: 0 0 var(--r) var(--r); }
+    .map-legend span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .key { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #fff;
+      box-shadow: 0 1px 4px rgba(23,55,38,.18); }
+    .key.resp { background: var(--amber); }
+    .key.cas { background: #fff; border: 2px dashed var(--fg-3); box-shadow: none; }
+    .key.found { background: #fff; border-color: var(--red); box-shadow: none; }
+    .key.wall { border-radius: 3px; background: #466653; border: 0; box-shadow: none; }
+    .key.furn { border-radius: 3px; background: #c2d6c9; border: 1px solid var(--line-2); box-shadow: none; }
+    .key.fire { border-radius: 3px; background: #e4572e; border: 0; box-shadow: none; }
+    .key.smoke { border-radius: 3px; background: #9aa39e; border: 0; box-shadow: none; }
+    .key.unk { border-radius: 3px; border: 0; box-shadow: none; background: rgba(24,131,75,.22); }
+    .key.voice { border-radius: 3px; border: 0; box-shadow: none; background: rgba(217,119,6,.3); }
+    .btn.toggle[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: #fff; }
+    .incident { margin: 16px 16px 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; background: var(--bg-1);
+      border: 1px solid var(--line); color: var(--fg-2); }
+    .incident b { color: var(--fg); font-weight: 500; }
+    table.score { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+    table.score th { text-align: right; font-weight: 500; font-size: 12px; color: var(--fg-3); padding: 8px 16px; }
+    table.score th.on { color: var(--accent-hover); }
+    table.score td { text-align: right; padding: 8px 16px; border-top: 1px solid var(--line); font-family: var(--mono);
+      font-variant-numeric: tabular-nums; }
+    table.score td:first-child { text-align: left; font-family: var(--sans); color: var(--fg-2); }
+    table.score td small { display: block; font: 11px var(--sans); color: var(--fg-3); }
+    table.score td.best { color: var(--accent-hover); font-weight: 600; }
+    table.score td.best::before { content: "▲ "; font-size: 9px; vertical-align: 1px; }
+    table.score tr.ref td { color: var(--fg-3); }
+    .ev.k-ack { color: var(--fg-3); }
+    .ev.k-witness { font-style: italic; }
+    .key.heat { border-radius: 3px; border: 0; box-shadow: none; width: 40px;
+      background: linear-gradient(90deg, rgba(24,131,75,.04), rgba(24,131,75,.5)); }
+
+    /* results */
+    .kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kv div { padding: 10px 16px; border-top: 1px solid var(--line); min-width: 0; }
+    .kv div:nth-child(odd) { border-right: 1px solid var(--line); }
+    .kv div:nth-child(-n+2) { border-top: 0; }
+    .kv .k { font-size: 12px; color: var(--fg-2); }
+    .kv .v { font: 500 20px var(--mono); letter-spacing: -0.03em; margin-top: 2px; }
+    .kv .v small { font: 12px var(--sans); color: var(--fg-3); letter-spacing: 0; }
+    .banner { margin: 16px 16px 0; padding: 10px 12px; border-radius: 8px; font-size: 13px; background: var(--bg-1);
+      border: 1px solid var(--line); }
+    .banner.ok { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-hover); }
+    .banner.bad { background: var(--red-bg); border-color: var(--red); color: var(--red); }
+    #log { max-height: 320px; overflow: auto; }
+    .ev { display: grid; grid-template-columns: 52px 1fr; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line);
+      font-size: 12px; cursor: pointer; }
+    .ev:hover { background: var(--bg-1); }
+    .ev:last-child { border-bottom: 0; }
+    .ev.future { opacity: .4; }
+    .ev time { font: 12px var(--mono); color: var(--fg-3); }
+    .ev b { font-weight: 500; font-family: var(--mono); }
+    .ev.hot { color: var(--red); }
+    .empty { padding: 28px 16px; text-align: center; color: var(--fg-3); font-size: 13px; }
+
+    /* batch */
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chips button { min-width: 32px; height: 28px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-2);
+      font: 500 12px var(--mono); color: var(--fg-2); }
+    .chips button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+    progress { width: 100%; height: 6px; accent-color: var(--accent); }
+    #batchOut h3 { margin: 0; font-size: 14px; font-weight: 500; }
+    #batchOut .sub { color: var(--fg-2); font-size: 12px; margin-top: 2px; }
+    .chart { position: relative; margin-top: 12px; }
+    .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+    .chart .axis { font: 11px var(--mono); fill: var(--fg-3); }
+    .chart .name { font: 500 12px var(--sans); fill: var(--fg); }
+    .chart .val { font: 500 12px var(--mono); fill: var(--fg); }
+    .chart .grid-line { stroke: var(--line); stroke-width: 1; }
+    .chart .band { fill: #a9d9bb; }
+    .chart .median { fill: var(--accent-hover); stroke: var(--surface); stroke-width: 2; }
+    .chart .hit { fill: transparent; cursor: pointer; }
+    .chart .rowbg { fill: transparent; }
+    .chart g.on .rowbg, .chart g:hover .rowbg { fill: var(--bg-1); }
+    .tip { position: absolute; z-index: 4; pointer-events: none; padding: 8px 10px; border-radius: 8px; background: var(--fg);
+      color: #fff; font-size: 12px; line-height: 1.5; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); }
+    .tip b { font-weight: 500; }
+    table.bt { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+    table.bt th { text-align: right; font-weight: 500; color: var(--fg-3); padding: 4px 0 4px 8px; }
+    table.bt td { text-align: right; padding: 5px 0 5px 8px; border-top: 1px solid var(--line); font-family: var(--mono);
+      font-variant-numeric: tabular-nums; }
+    table.bt th:first-child, table.bt td:first-child { text-align: left; padding-left: 0; }
+    table.bt tr.on td { background: var(--bg-1); }
+    .scale { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--fg-3); margin-top: 10px; }
+    .scale i { flex: 0 0 72px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #cfead9, #0d4a2a); }
+    .scale .x { color: var(--red); font-weight: 600; }
+
+    /* new environment + editor */
+    dialog { width: min(560px, calc(100% - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 14px;
+      background: var(--surface); color: var(--fg); box-shadow: 0 24px 80px rgba(23,55,38,.2); }
+    dialog::backdrop { background: rgba(15,35,24,.4); backdrop-filter: blur(4px); }
+    .dh { padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+    .dh h2 { margin: 0; font-size: 18px; }
+    .choices { display: grid; gap: 10px; padding: 16px; }
+    .choice { display: grid; gap: 2px; text-align: left; padding: 14px 16px; border: 1px solid var(--line-2); border-radius: 10px;
+      background: var(--bg); transition: background .15s, border-color .15s; }
+    .choice:hover:not(:disabled) { background: var(--accent-bg); border-color: var(--accent); }
+    .choice:disabled { opacity: .55; cursor: default; }
+    .choice strong { font-weight: 500; }
+    .choice span { color: var(--fg-2); font-size: 13px; }
+    .choice .soon { font: 500 10px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--fg-3); }
+    #editBar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+      background: var(--bg-1); }
+    #editBar label { font-size: 12px; color: var(--fg-2); display: inline-flex; align-items: center; gap: 6px; }
+    #editBar input[type="number"] { width: 68px; height: 28px; }
+    #editBar input[type="text"] { width: 200px; height: 28px; }
+    #editMsg { padding: 8px 16px; font-size: 12px; color: var(--fg-2); border-bottom: 1px solid var(--line); }
+    #editMsg.err { color: var(--red); }
+
+    @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } #mapWrap { height: 440px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="logo"><img src="/web/beacon_logo.png" width="44" height="44" alt="">Beacon</div>
+      <span class="slash">/</span>
+      <nav class="tabs" aria-label="Console sections">
+        <a href="/console">Console</a>
+        <a href="/simulator" aria-current="page">Simulator</a>
+      </nav>
+      <span class="spacer"></span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="overview">
+      <h1>Rescue simulator</h1>
+      <span class="spacer"></span>
+      <label class="muted" for="envPick">Environment</label>
+      <select id="envPick" aria-label="Environment"></select>
+      <button class="btn" id="envNew" type="button">New environment</button>
+      <button class="btn danger" id="envDelete" type="button" hidden>Delete</button>
+    </div>
+    <p id="envNote"></p>
+
+    <section class="grid">
+      <div class="stack">
+        <div class="card">
+          <div class="card-h">
+            <h2 id="mapTitle">Floor plan</h2><span class="faint mono" id="envSize"></span><span class="spacer"></span>
+            <div class="seg" id="policyPick" role="group" aria-label="Whose run is on the map" hidden></div>
+            <button class="btn sm toggle" id="refereeBtn" type="button" aria-pressed="true"
+              title="Shows the hidden incident: where the casualty is and which doorways are blocked. Neither policy ever sees this.">Referee view</button>
+            <div class="seg" id="viewModes" role="group" aria-label="View">
+              <button type="button" data-mode="2d" aria-pressed="true">Plan</button>
+              <button type="button" data-mode="3d" aria-pressed="false">3D</button>
+            </div>
+          </div>
+          <div id="editBar" hidden>
+            <div class="seg" id="tools" role="group" aria-label="Drawing tool">
+              <button type="button" data-tool="#" aria-pressed="true" title="Blocks walking and sight">Wall</button>
+              <button type="button" data-tool="o" aria-pressed="false" title="Blocks walking; people can see over it">Furniture</button>
+              <button type="button" data-tool="d" aria-pressed="false" title="Open floor that marks a doorway. Doors are what divide the plan into rooms, and what can turn out to be blocked">Door</button>
+              <button type="button" data-tool="." aria-pressed="false">Floor</button>
+              <button type="button" data-tool=" " aria-pressed="false" title="Not part of the building">Outside</button>
+              <button type="button" data-tool="f" aria-pressed="false" title="Nobody can walk through it: routes go round, or the rooms behind it are cut off">Fire</button>
+              <button type="button" data-tool="s" aria-pressed="false" title="Can be crossed, slowly. People in it, or looking out of it, are hard to spot">Smoke</button>
+              <button type="button" data-tool="entry" aria-pressed="false" title="Where the team comes in">Entry</button>
+            </div>
+            <label>Brush <input id="brush" type="number" min="1" max="8" value="1"></label>
+            <span id="scanTools" hidden>
+              <label>Scale <input id="scanScale" type="number" min="0.01" max="100" step="0.01" value="1"></label>
+              <label>Turn ° <input id="scanTurn" type="number" min="-180" max="180" step="1" value="0"></label>
+              <label>Cell m <input id="scanCell" type="number" min="0.1" max="1" step="0.05" value="0.25"></label>
+              <button class="btn sm" id="scanRetrace" type="button">Retrace</button>
+            </span>
+            <span class="spacer"></span>
+            <input id="editName" type="text" placeholder="Name this environment" aria-label="Environment name">
+            <button class="btn sm" id="editCancel" type="button">Cancel</button>
+            <button class="btn sm primary" id="editSave" type="button">Save</button>
+          </div>
+          <div id="editMsg" hidden></div>
+          <div id="mapWrap">
+            <canvas id="map" aria-label="Floor plan"></canvas>
+            <div id="scene3d" aria-label="3D view of the simulation" hidden></div>
+            <div id="mapHint" hidden></div>
+          </div>
+          <div class="transport" id="transport">
+            <button class="btn sm" id="playBtn" type="button" disabled>Play</button>
+            <input id="scrub" type="range" min="0" max="1" step="0.1" value="0" disabled aria-label="Time in the run">
+            <select id="speed" aria-label="Playback speed">
+              <option value="1">1×</option><option value="2">2×</option><option value="4">4×</option>
+              <option value="8">8×</option><option value="16">16×</option><option value="32">32×</option>
+            </select>
+            <span class="clock" id="clock">0:00 / 0:00</span>
+          </div>
+          <div class="map-legend" aria-label="Legend">
+            <span><i class="key"></i>Rescuer</span><span><i class="key resp"></i>Responding</span>
+            <span><i class="key cas"></i>Casualty (hidden)</span><span><i class="key found"></i>Found</span>
+            <span><i class="key wall"></i>Wall</span><span><i class="key furn"></i>Furniture</span>
+            <span id="keyFire" hidden><i class="key fire"></i>Fire</span><span id="keySmoke" hidden><i class="key smoke"></i>Smoke</span>
+            <span><i class="key unk"></i>Not checked</span><span><i class="key voice"></i>Called in, no answer</span>
+            <span><i class="key wall" style="background:#fff;border:1px solid var(--line-2)"></i>Searched</span>
+            <span><b style="color:var(--red)">✕</b>Blocked doorway</span>
+          </div>
+        </div>
+
+        <div class="card" id="batchCard">
+          <div class="card-h"><h2>Compare team sizes</h2><span class="spacer"></span>
+            <span class="hint faint" style="font-size:12px">Many runs, casualty somewhere new each time</span></div>
+          <div class="card-b">
+            <div class="row"><div><div class="label">Team sizes</div><div class="hint">Each size faces the same casualties</div></div>
+              <div class="chips" id="sizeChips"></div></div>
+            <div class="row"><div><div class="label"><label for="batchRuns">Runs per size</label></div></div>
+              <div style="display:flex;gap:8px;align-items:center"><input id="batchRuns" type="number" min="5" max="200" step="5" value="40">
+                <button class="btn primary" id="batchBtn" type="button">Run comparison</button></div></div>
+            <div id="batchProgress" hidden><progress id="batchBar" max="1" value="0"></progress>
+              <div class="hint faint" id="batchMsg" style="font-size:12px"></div></div>
+            <div id="batchOut" hidden></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stack">
+        <div class="card">
+          <div class="card-h"><h2>Scenario</h2></div>
+          <div class="card-b">
+            <div class="row"><div><div class="label">Rescuers</div><div class="hint">People searching</div></div>
+              <div class="stepper"><button id="resMinus" aria-label="Fewer rescuers">&minus;</button><span id="resN">3</span><button id="resPlus" aria-label="More rescuers">+</button></div></div>
+            <div class="row"><div><div class="label">Responders</div><div class="hint">Must reach the casualty to call it a rescue</div></div>
+              <div class="stepper"><button id="respMinus" aria-label="Fewer responders">&minus;</button><span id="respN">2</span><button id="respPlus" aria-label="More responders">+</button></div></div>
+            <div class="row"><div><div class="label">Casualty</div><div class="hint" id="casHint">Somewhere random each run</div></div>
+              <div class="seg" id="casMode" role="group" aria-label="Casualty placement">
+                <button type="button" data-cas="random" aria-pressed="true">Random</button>
+                <button type="button" data-cas="place" aria-pressed="false">Place</button></div></div>
+            <div class="row"><div><div class="label"><label for="maxTime">Time limit</label></div><div class="hint">Minutes before the run is called off</div></div>
+              <input id="maxTime" type="number" min="1" max="60" step="1" value="10"></div>
+            <button class="btn primary big" id="runBtn" type="button" style="justify-content:center">Run simulation</button>
+          </div>
+        </div>
+
+        <div class="card" aria-live="polite">
+          <div class="card-h"><h2>Same incident, two commanders</h2></div>
+          <div id="runEmpty" class="empty">Run a simulation: the same hidden incident is played twice, once per policy.</div>
+          <div id="runOut" hidden>
+            <div class="incident" id="incident"></div>
+            <table class="score"><thead><tr id="scoreHead"></tr></thead><tbody id="scoreBody"></tbody></table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h2 id="logTitle">Radio</h2></div>
+          <div id="log"><div class="empty">Nothing yet</div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="newDialog" aria-labelledby="newTitle">
+    <div class="dh"><h2 id="newTitle">New environment</h2><button class="btn sm" id="newClose" type="button">Close</button></div>
+    <div class="choices">
+      <input id="scanFile" type="file" accept=".glb,model/gltf-binary" hidden>
+      <button class="choice" id="newScan" type="button"><strong>From a 3D scan</strong>
+        <span>Choose a .glb from a walkthrough scan. Beacon traces the walls and furniture off it; you touch up the plan and mark the way in.</span></button>
+      <button class="choice" id="newCopy" type="button"><strong>Edit a copy of this floor plan</strong>
+        <span>Move walls, block a corridor, start a fire or fill a wing with smoke, then save it as a new environment.</span></button>
+      <button class="choice" id="newBlank" type="button"><strong>Draw a floor plan</strong>
+        <span>Start from an empty 20 × 15 m floor.</span></button>
+      <button class="choice" type="button" disabled><span class="soon">Coming later</span><strong>From photos of a building</strong>
+        <span>Beacon builds a rough 3D model from pictures and plans the rescue with the team on hand.</span></button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/web/simulator.js"></script>
+</body>
+</html>

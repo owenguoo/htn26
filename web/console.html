@@ -43,6 +43,10 @@
     input { accent-color: var(--accent); }
     .slash { color: var(--line-2); font-weight: 300; font-size: 20px; }
     .spacer { flex: 1; }
+    .tabs { display: flex; gap: 2px; }
+    .tabs a { padding: 6px 12px; border-radius: 6px; color: var(--fg-2); text-decoration: none; font-weight: 500; }
+    .tabs a:hover { background: var(--bg-2); color: var(--fg); }
+    .tabs a[aria-current="page"] { background: var(--accent-bg); color: var(--accent-hover); }
 
     .btn { height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg);
       font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
@@ -431,7 +435,10 @@
         Beacon
       </div>
       <span class="slash">/</span>
-      <span class="muted">Console</span>
+      <nav class="tabs" aria-label="Console sections">
+        <a href="/console" aria-current="page">Console</a>
+        <a href="/simulator">Simulator</a>
+      </nav>
       <span class="spacer"></span>
       <div class="joinWrap"><button class="btn" id="joinBtn">Join QR</button>
         <div class="joinPop" id="joinPop"><img id="joinQr" alt="Scan to join"><div class="mono" id="joinUrl"></div>
