@@ -16,6 +16,17 @@ struct HubWireTests {
         return try #require(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }
 
+    @Test func worldDecodesPersistentHazardsAndLegacyMessages() throws {
+        let world = try JSONDecoder().decode(HubWorld.self, from: Data(
+            #"{"hazards":[{"id":"object-1","x":2.5,"y":4,"stale":true}]}"#.utf8))
+        #expect(world.hazards?.first?.x == 2.5)
+        #expect(world.hazards?.first?.stale == true)
+        let cleared = try JSONDecoder().decode(HubWorld.self, from: Data(#"{"hazards":[]}"#.utf8))
+        #expect(cleared.hazards?.isEmpty == true)
+        let legacy = try JSONDecoder().decode(HubWorld.self, from: Data("{}".utf8))
+        #expect(legacy.hazards == nil)
+    }
+
     // MARK: Framing
 
     @Test func goldenFramePackedByTheHubUnpacksHere() throws {

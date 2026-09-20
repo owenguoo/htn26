@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 import SwarmCore
 
 /// What the operator view observes. Wires the runtime's streams to the screen,
@@ -70,16 +71,15 @@ public final class OperatorViewModel {
                 self?.forwardRoomBounds(next.overlay.room)
             }
         })
-        // The cue stream is still drained, and only drained. Haptics and beeps
-        // were the two optional device subsystems on this screen — `CHHapticEngine`
-        // and a second `AVAudioEngine` sharing the one `AVAudioSession` with
-        // voice — and both are gone while the device bring-up is being trusted
-        // again. Dropping the subscription instead would leave the stream
-        // buffering inside `SwarmClient` for a consumer that never arrives.
+        // UIKit feedback runs on the main actor without a separate haptic engine.
         tasks.append(Task { @MainActor in
             for await cue in await client.cues() {
                 switch cue {
-                case .haptic(let haptic): BeaconLog.log("cue haptic \(haptic.pattern) (ignored)")
+                case .haptic(let haptic):
+                    if haptic.pattern == "possible_match" {
+                        // DEVICE-VERIFY: one vibration on a sustained match, with a 10-second cooldown.
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    }
                 case .sound(let sound): BeaconLog.log("cue sound \(sound.name) (ignored)")
                 }
             }

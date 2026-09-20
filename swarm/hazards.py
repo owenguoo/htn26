@@ -53,8 +53,7 @@ def floor_position(chair: ObjectDetection, pose: dict | None, width: int, height
     heading = math.radians(pose['heading'])
     x = pose['x'] + forward * math.sin(heading) + right * math.cos(heading)
     y = pose['y'] - forward * math.cos(heading) + right * math.sin(heading)
-    if not (-room['width'] / 2 <= x <= room['width'] / 2 and 0 <= y <= room['depth']):
-        return None
+    # The room outline is nominal; calibrated observations can lie beyond its walls.
     return x, y
 
 

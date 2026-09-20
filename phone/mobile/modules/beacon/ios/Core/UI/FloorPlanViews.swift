@@ -147,6 +147,7 @@ struct FloorPlanCanvas: View {
             var labels: [CGRect] = []
             drawMarker(&context, plan: plan, labels: &labels, size: size)
             drawPings(&context, plan: plan)
+            drawHazards(&context, plan: plan)
             drawCandidate(&context, plan: plan, labels: &labels, size: size)
             for who in people {
                 phone(&context, at: plan.point(x: who.x, y: who.y), heading: who.heading, number: who.index)
@@ -466,6 +467,34 @@ struct FloorPlanCanvas: View {
         world?.marker == nil ? pings : pings.filter { $0.label != "MARKER" }
     }
 
+    private func drawHazards(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
+        for person in world?.detectedPeople ?? [] {
+            guard person.x.isFinite, person.y.isFinite else { continue }
+            let p = plan.point(x: person.x, y: person.y)
+            let radius: CGFloat = showsDetail ? 7 : 5
+            let color: Color = person.stale ? .gray : .blue
+            let dot = Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius,
+                                            width: radius * 2, height: radius * 2))
+            context.fill(dot, with: .color(color))
+            context.stroke(dot, with: .color(.white), lineWidth: 1.5)
+        }
+        for hazard in world?.hazards ?? [] {
+            guard hazard.x.isFinite, hazard.y.isFinite else { continue }
+            let p = plan.point(x: hazard.x, y: hazard.y)
+            let radius: CGFloat = showsDetail ? 9 : 6
+            let color: Color = hazard.stale ? .gray : .orange
+            var triangle = Path()
+            triangle.move(to: CGPoint(x: p.x, y: p.y - radius))
+            triangle.addLine(to: CGPoint(x: p.x + radius, y: p.y + radius))
+            triangle.addLine(to: CGPoint(x: p.x - radius, y: p.y + radius))
+            triangle.closeSubpath()
+            context.fill(triangle, with: .color(color.opacity(0.18)))
+            context.stroke(triangle, with: .color(color), lineWidth: 1.5)
+            context.draw(Text("!").font(.system(size: radius * 1.4, weight: .bold))
+                .foregroundStyle(color), at: CGPoint(x: p.x, y: p.y + radius * 0.25))
+        }
+    }
+
     private var mapPings: [PingCue] { Self.drawablePings(pings, world: world) }
 
     /// `drawPings()`: an expanding ring, a dark diamond, and the label above it.
@@ -497,16 +526,17 @@ struct FloorPlanCanvas: View {
                                labels: inout [CGRect], size: CGSize) {
         guard let candidate = world?.candidate else { return }
         let p = plan.point(x: candidate.x, y: candidate.y)
+        let color: Color = candidate.possible == true ? .orange : MapInk.found
         // `(performance.now() / 1100) % 1` — a little slower than the pings.
         let k = (time * 1000 / 1100).truncatingRemainder(dividingBy: 1)
         let radius = MapMarker.radius + MapMarker.stroke + 1 + CGFloat(k * 24)
         context.stroke(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius,
                                               width: radius * 2, height: radius * 2)),
-                       with: .color(MapInk.found.opacity(0.7 * (1 - k))), lineWidth: 2)
-        person(&context, at: p, color: MapInk.found)
+                       with: .color(color.opacity(0.7 * (1 - k))), lineWidth: 2)
+        person(&context, at: p, color: color)
         guard showsDetail else { return }
         let y = p.y - MapMarker.radius - MapMarker.stroke / 2 - MapMarker.labelGap - MapMarker.labelHeight / 2
-        mapLabel(&context, "FOUND PERSON", at: CGPoint(x: p.x, y: y), background: MapInk.found,
+        mapLabel(&context, candidate.possible == true ? "POSSIBLE MATCH" : "FOUND PERSON", at: CGPoint(x: p.x, y: y), background: color,
                  labels: &labels, size: size)
     }
 

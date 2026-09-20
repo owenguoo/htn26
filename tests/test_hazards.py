@@ -125,3 +125,54 @@ def test_hazard_api_authentication_and_map_snapshot(monkeypatch):
     asyncio.run(hub.set_phase('calibrate', restart=True))
     assert not client.get('/api/state').json()['hazards']
     assert not client.get('/api/state').json()['detectedPeople']
+
+
+def test_phone_world_publishes_persistent_hazards_and_clears_after_reset():
+    from contextlib import suppress
+    from swarm.hub import Hub, Phone
+    async def run():
+        hub = Hub()
+        messages = asyncio.Queue()
+        class Socket:
+            async def send_json(self, message):
+                await messages.put(message)
+        phone = Phone('phone', 1)
+        phone.connected = True
+        phone.ws = Socket()
+        hub.phones[phone.id] = phone
+        hub.hazards.observations['h'] = dict(id='h', label='chair', x=1., y=2., hits=2, t=now_ms() - 20000)
+        hub.hazards.observations['p'] = dict(id='p', label='person', x=3., y=4., hits=2, t=now_ms())
+        hub.search.mode = 'real'
+        hub.search.map_sighting = dict(x=2., y=-1., t=now_ms())
+        task = asyncio.create_task(hub.world_loop())
+        try:
+            world = await asyncio.wait_for(messages.get(), 2)
+            assert world['hazards'] == [dict(id='h', x=1., y=2., stale=True)]
+            assert world['detectedPeople'] == [dict(id='p', x=3., y=4., stale=False)]
+            assert world['candidate'] == dict(x=2., y=-1., possible=True)
+            hub.hazards.reset()
+            world = await asyncio.wait_for(messages.get(), 2)
+            assert world['hazards'] == []
+        finally:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+    asyncio.run(run())
+
+
+def test_live_chair_outside_nominal_room_still_has_a_position():
+    detection = chair((277.12, 395.51, 554.54, 761.39))
+    camera = pose() | dict(x=-2.292, y=1.08, heading=42.61, pitch=-2.834)
+    point = floor_position(detection, camera, 720, 960, ROOM)
+    assert point is not None
+    assert -3 < point[1] < 0
+    search = SearchState()
+    search.connect('phone', 'stream')
+    hazards = Hazards()
+    for seq in (1, 2):
+        t = seq * 500.
+        search.record_frame(FrameSnapshot('phone', 'stream', seq, t, 720, 960, camera))
+        result = HazardResult(phoneId='phone', streamId='stream', seq=seq, t=t,
+                              width=720, height=960, searchRevision=search.revision, detections=[detection])
+        assert hazards.accept(result, search, ROOM, t + 100)
+    assert len(hazards.snapshot(1100, search.revision)) == 1

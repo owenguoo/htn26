@@ -412,6 +412,15 @@ public struct HubWelcome: Sendable, Equatable, Decodable {
 }
 
 public struct HubWorld: Sendable, Equatable, Decodable {
+    public struct Hazard: Sendable, Equatable, Decodable {
+        public var id: String
+        public var x: Double
+        public var y: Double
+        public var stale: Bool
+    }
+    public var hazards: [Hazard]? = nil
+    public var detectedPeople: [Hazard]? = nil
+
     public struct Peer: Sendable, Equatable, Decodable {
         public var id: String
         public var i: Int
@@ -458,6 +467,7 @@ public struct HubWorld: Sendable, Equatable, Decodable {
     public struct Point: Sendable, Equatable, Decodable {
         public var x: Double
         public var y: Double
+        public var possible: Bool? = nil
     }
 
     public var phase: String?
@@ -517,10 +527,13 @@ public struct HubDetectionBox: Sendable, Equatable, Codable {
     /// The confidence to show, whichever spelling arrived.
     public var confidence: Double? { detectionScore ?? score }
 
+    public var targetId: String?
+    public var possibleMatch: Bool?
+
     public var displayLabel: String {
         if label?.lowercased() == "person", let similarity, similarity.isFinite {
             let percent = Int((max(0, min(1, similarity)) * 100).rounded())
-            return "Person · \(percent)% match"
+            return possibleMatch == true ? "Possible match · \(percent)%" : "Person · \(percent)% match"
         }
         return label ?? ""
     }

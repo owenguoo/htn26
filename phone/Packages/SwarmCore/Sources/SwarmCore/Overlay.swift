@@ -551,6 +551,9 @@ public struct OverlayModel: Sendable {
     private var detectionRevision: String?
     private var detectionSeq: UInt64?
     private var hazardSeq: UInt64?
+    private var previousMatches: [HubDetectionBox] = []
+    private var previousMatchTime: Double = -.infinity
+    private var lastMatchAlert: Double = -.infinity
     private var detectionCaptures: [UInt64: Double] = [:]
 
     public mutating func recordDetectionCapture(seq: UInt64, at time: Double) {
@@ -597,6 +600,7 @@ public struct OverlayModel: Sendable {
     // MARK: - Hub messages
 
     public mutating func apply(_ welcome: HubWelcome) {
+        previousMatches = []
         detectionStream = welcome.streamId
         detectionRevision = nil
         detectionSeq = nil
@@ -677,6 +681,7 @@ public struct OverlayModel: Sendable {
             var until = now + ttlMs / 1000
             if let context {
                 if context.clear {
+                    previousMatches = []
                     detectionRevision = context.searchRevision
                     detectionSeq = nil
                     state.detections = nil
@@ -693,7 +698,33 @@ public struct OverlayModel: Sendable {
                 detectionSeq = seq
                 until = min(until, captured + 1.5)
             }
-            state.detections = DetectionsCue(boxes: boxes, until: until)
+            let markedBoxes = boxes.map { box in
+                var marked = box
+                marked.possibleMatch = context?.rehearsal != true
+                    && box.label?.lowercased() == "person"
+                    && box.similarity.map { $0.isFinite && $0 >= (context?.threshold ?? 0.7) } == true
+                return marked
+            }
+            let matches = markedBoxes.filter { $0.possibleMatch == true }
+            // Overlap avoids combining two people at unrelated positions into one alert.
+            let repeated = now - previousMatchTime < 1.5 && matches.contains { box in
+                previousMatches.contains { prior in
+                    guard box.targetId == prior.targetId else { return false }
+                    let width = max(0, min(box.x + box.w, prior.x + prior.w) - max(box.x, prior.x))
+                    let height = max(0, min(box.y + box.h, prior.y + prior.h) - max(box.y, prior.y))
+                    let intersection = width * height
+                    let union = box.w * box.h + prior.w * prior.h - intersection
+                    return union > 0 && intersection / union >= 0.3
+                }
+            }
+            if context != nil && repeated && now - lastMatchAlert >= 10 {
+                state.toast = ToastCue(text: "Possible target found", until: now + 3)
+                cue(haptic: "possible_match", intensity: 1)
+                lastMatchAlert = now
+            }
+            previousMatches = matches
+            previousMatchTime = now
+            state.detections = DetectionsCue(boxes: markedBoxes, until: until)
             state.detections?.threshold = context?.threshold
             state.detections?.rehearsal = context?.rehearsal ?? false
         case .hazards(let boxes, let ttlMs, let context):

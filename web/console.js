@@ -521,9 +521,10 @@ function drawHud() {
 
   // detection boxes and AR markers live in frame coordinates
   for (const d of hud.dets || []) {
-    ctx.strokeStyle = d.label === 'Hazard' ? '#f59e0b' : '#ff5d73';
+    ctx.strokeStyle = d.label === 'Hazard' ? '#f59e0b' : d.possibleMatch ? '#22c55e' : '#ff5d73';
     ctx.lineWidth = 2;
     ctx.strokeRect(d.x * W, d.y * H, d.w * W, d.h * H);
+    if (d.possibleMatch && Number.isFinite(d.similarity)) pill(ctx, (d.x + d.w / 2) * W, d.y * H - 12, `Possible match · ${Math.round(Math.max(0, Math.min(1, d.similarity)) * 100)}%`, '#15803d', '#fff', 11, true);
     if (d.label === 'Hazard') pill(ctx, (d.x + d.w / 2) * W, d.y * H - 12, 'Hazard', '#b45309', '#fff', 11, true);
   }
   for (const m of hud.ar || []) {

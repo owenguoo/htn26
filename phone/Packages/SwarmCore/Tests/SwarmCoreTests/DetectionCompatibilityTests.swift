@@ -22,17 +22,61 @@ struct DetectionCompatibilityTests {
     }
 
     private func command(seq: Int = 1, stream: String = "stream", revision: String = "revision",
-                         rehearsal: Bool = false, clear: Bool = false, hazard: Bool = false) throws -> HubCommand {
+                         rehearsal: Bool = false, clear: Bool = false, hazard: Bool = false, similarity: Double = 0.8) throws -> HubCommand {
         let data = Data("""
         {"type":"command","cmd":"\(hazard ? "hazard_detections" : rehearsal ? "rehearsal_detections" : "detections")",
         "streamId":"\(stream)","seq":\(seq),"searchRevision":"\(revision)","threshold":0.7,
         "clear":\(clear),"boxes":[{"x":0.1,"y":0.2,"w":0.3,"h":0.4,"label":"person",
-        "detectionScore":0.92,"similarity":0.8}],"ttlMs":1500}
+        "detectionScore":0.92,"similarity":\(similarity)}],"ttlMs":1500}
         """.utf8)
         guard case .command(let command)? = HubInbound.decode(data) else {
             throw CocoaError(.coderReadCorrupt)
         }
         return command
+    }
+
+    @Test func matchFeedbackRequiresFreshConsecutiveResultsAndRespectsCooldown() throws {
+        var model = OverlayModel()
+        model.apply(try welcome("stream"))
+        func deliver(_ seq: Int, _ time: Double, rehearsal: Bool = false) throws {
+            model.recordDetectionCapture(seq: UInt64(seq), at: time)
+            #expect(model.apply(try command(seq: seq, rehearsal: rehearsal), heading: nil, now: time))
+        }
+        try deliver(1, 1)
+        #expect(model.state.detections?.boxes.first?.displayLabel == "Possible match · 80%")
+        #expect(model.consumeHaptic() == nil)
+        #expect(!model.apply(try command(seq: 1), heading: nil, now: 1.1))
+        #expect(model.consumeHaptic() == nil)
+        try deliver(2, 1.5)
+        #expect(model.consumeHaptic()?.pattern == "possible_match")
+        #expect(model.state.toast?.text == "Possible target found")
+        try deliver(3, 2)
+        #expect(model.consumeHaptic() == nil)
+        try deliver(4, 12)
+        #expect(model.consumeHaptic() == nil)
+        try deliver(5, 12.5)
+        #expect(model.consumeHaptic()?.pattern == "possible_match")
+        try deliver(6, 23, rehearsal: true)
+        try deliver(7, 23.5, rehearsal: true)
+        #expect(model.state.detections?.boxes.first?.possibleMatch == false)
+        #expect(model.consumeHaptic() == nil)
+        try deliver(8, 24)
+        #expect(model.consumeHaptic() == nil)
+        model.apply(try command(clear: true), heading: nil, now: 24)
+        try deliver(9, 24.5)
+        #expect(model.consumeHaptic() == nil)
+    }
+
+    @Test func belowThresholdBreaksMatchStreak() throws {
+        var model = OverlayModel()
+        model.apply(try welcome("stream"))
+        for (index, score) in [0.8, 0.69, 0.8, 0.7].enumerated() {
+            let seq = index + 1
+            let time = Double(seq) * 0.4
+            model.recordDetectionCapture(seq: UInt64(seq), at: time)
+            model.apply(try command(seq: seq, similarity: score), heading: nil, now: time)
+            #expect((model.consumeHaptic() != nil) == (seq == 4))
+        }
     }
 
     @Test func scoresAndRehearsalRemainDistinct() throws {

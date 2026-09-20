@@ -276,7 +276,7 @@ struct HUDFrameLayerView: View {
             let k = geometry.size.width / 390
             Canvas { context, size in
                 for box in hud.dets ?? [] {
-                    let color: Color = box.label == "Hazard" ? .orange : HUDStyle.detection
+                    let color: Color = box.label == "Hazard" ? .orange : box.possibleMatch == true ? .green : HUDStyle.detection
                     let rect = transform.rect(uprightFractionX: box.x, y: box.y, width: box.w, height: box.h)
                     // 2, not 3: `web/console.js:367` strokes detections at 2 and
                     // the two renderers have to draw the same box.

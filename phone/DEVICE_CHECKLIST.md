@@ -492,3 +492,5 @@ with synthetic PCM over a real socket. Neither involved a microphone.
       450 ms burst limit; Simulator audio is not evidence for those values.
 - [ ] Thirty minutes with voice live: memory flat, no growth in the transport's
       in-flight count, thermal state no worse than with voice off.
+
+- [ ] Hold the camera on an enrolled person: two fresh results at the match threshold produce a green box, a brief possible-target banner, and one vibration; sustained matching produces at most one vibration per 10 seconds.

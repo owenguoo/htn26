@@ -875,14 +875,21 @@ class Hub:
             everyone = [{"x": round(v.fix[0], 2), "y": round(v.fix[1], 2)}
                         for v in (self.target.victims if rehearsing else [])]
             pings = self.active_pings(now)
+            objects = self.hazards.snapshot(now, self.search.revision)
+            if not rehearsing and self.search.map_sighting:
+                found = (self.search.map_sighting['x'], self.search.map_sighting['y'])
             base = {
                 "type": "world", "phase": self.phase, "phones": others,
                 "scanning": bool(self.mapper and self.mapper.enabled and not self.mapper.paused()),
+                "hazards": [{"id": h["id"], "x": h["x"], "y": h["y"], "stale": now - h["t"] > 15000}
+                            for h in objects if h["label"] == "chair"],
+                "detectedPeople": [{"id": h["id"], "x": h["x"], "y": h["y"], "stale": now - h["t"] > 15000}
+                                   for h in objects if h["label"] == "person"],
                 "coverage": {k: cov[k] for k in ("cols", "rows", "cell", "x0", "cells")},
                 "searched": cov["searched"], "searchers": len(live),
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
                 "marker": self.marker,
-                "candidate": None if found is None else {"x": found[0], "y": found[1]},
+                "candidate": None if found is None else {"x": found[0], "y": found[1], "possible": not rehearsing},
                 "candidates": everyone,   # every person found so far; `candidate` is the first
             }
             # Before the search starts, the marker rides the ping channel phones already
