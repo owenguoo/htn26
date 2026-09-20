@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Beacon · Console</title>
+  <title>beacon · Console</title>
   <link rel="icon" type="image/png" href="/web/beacon_logo.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -518,11 +518,13 @@
        of readings where a stray click lands on it. */
     .vacts { margin-top: auto; display: flex; padding: 16px; border-top: 1px solid var(--line); }
     .vacts .btn { width: 100%; justify-content: center; }
-    .vlog { padding: 4px 0 0; }
-    .vlog h3 { margin: 0; padding: 12px 16px 6px; font-size: 11px; font-weight: 500; letter-spacing: .06em;
+    .vlog { padding: 0; }
+    .vlog h3 { margin: 0; padding: 14px 16px 8px; font-size: 11px; font-weight: 500; letter-spacing: .06em;
       text-transform: uppercase; color: var(--fg-3); border-top: 1px solid var(--line); }
     .vlog .ev { grid-template-columns: 52px 1fr; padding: 7px 16px; }
-    .vlog .empty { text-align: left; }
+    /* The sentence sits where the first entry would, not a card's worth of air
+       below a label it belongs to. */
+    .vlog .empty { padding: 7px 16px 20px; text-align: left; }
     .vstats .k { font-size: 11px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase;
       color: var(--fg-3); }
     .vstats .v { margin-top: 3px; font-size: 14px; font-weight: 500; line-height: 1.35;
@@ -588,7 +590,7 @@
     <div class="bar">
       <div class="logo">
         <img src="/web/beacon_logo.png" width="44" height="44" alt="">
-        Beacon
+        beacon
       </div>
       <span class="slash">/</span>
       <span class="muted crumb">Console</span>

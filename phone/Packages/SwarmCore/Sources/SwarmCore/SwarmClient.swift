@@ -113,7 +113,7 @@ public actor SwarmClient {
 
         public init(socketURL: URL, phoneId: String, name: String, build: String = "beacon-ios",
                     venue: Venue,
-                    rates: SessionMachine.Rates = .init(poseHz: 10, frameFPS: 2, depthHz: 0),
+                    rates: SessionMachine.Rates = .init(poseHz: 10, frameFPS: 15, depthHz: 0),
                     encoding: FrameEncodingConfiguration = .standard,
                     anchorsClockToPoses: Bool = false,
                     voiceEnabled: Bool = false) {

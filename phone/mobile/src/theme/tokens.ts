@@ -35,12 +35,37 @@ export const colors = {
   opaqueSeparator: ios(Color.ios.opaqueSeparator, '#38383a'),
 
   // Meaning. These carry the OperatorStatus.level mapping.
-  accent: ios(Color.ios.systemBlue, '#0a84ff'),
+  // The console's `--accent`. It was system blue, beside a green console.
+  accent: '#18834b' as ColorValue,
   link: ios(Color.ios.link, '#0a84ff'),
   ok: ios(Color.ios.systemGreen, '#30d158'),
   attention: ios(Color.ios.systemOrange, '#ff9f0a'),
   problem: ios(Color.ios.systemRed, '#ff453a'),
 } as const;
+
+/**
+ * The operator console's chrome — `web/console.html`'s `:root`, value for
+ * value, and the twin of `ConsoleInk` in `DesignTokens.swift`. For surfaces
+ * that are Beacon's own rather than Apple's: the join summary. Fixed, not
+ * semantic, for the same reason the map palette is — it is shared with another
+ * renderer, and the app is pinned light anyway.
+ */
+export const consoleInk = {
+  bg: '#f5faf6',
+  bg1: '#edf6ef',
+  bg2: '#e2f0e6',
+  surface: '#ffffff',
+  line: '#d5e5da',
+  line2: '#b3cebd',
+  fg: '#173726',
+  fg2: '#466653',
+  fg3: '#597562',
+  accent: '#18834b',
+  red: '#b72f36',
+} as const;
+
+/** The console sets readouts in Geist Mono; Menlo is the monospace iOS ships for RN `Text`. */
+export const mono = 'Menlo';
 
 /**
  * There is deliberately no HUD palette here. Chrome drawn over the live camera

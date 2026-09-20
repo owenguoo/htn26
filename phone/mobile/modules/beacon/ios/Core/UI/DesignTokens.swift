@@ -46,7 +46,9 @@ extension ShapeStyle where Self == Color {
     ///
     /// They are system colours, so inside `.cameraChrome()` they resolve to the
     /// brighter dark-mode variants — which is what you want over video.
-    static var ssAccent: Color { Color(.tintColor) }
+    /// The console's `--accent`, not the system tint: left to `tintColor` the
+    /// phone was system blue beside a green console.
+    static var ssAccent: Color { ConsoleInk.accent }
     static var ssOK: Color { Color(.systemGreen) }
     static var ssAttention: Color { Color(.systemOrange) }
     static var ssProblem: Color { Color(.systemRed) }
@@ -132,6 +134,35 @@ enum MapInk {
     static let labelTertiary = hex(0x59, 0x75, 0x62)     // `--fg-3`
 }
 
+/// The operator console's chrome, **`web/console.html`'s `:root`, value for
+/// value** — for every phone surface that is a panel rather than camera chrome:
+/// the phase ticket, the map card, the status and objective plates' accents.
+///
+/// Same argument as `MapInk`: the phone and the console are one product, so a
+/// panel on one is drawn in the other's colours. **The colours, not the
+/// corners.** The console squares its panels off (`--r: 0`); a phone card
+/// floating over a camera keeps `Radius`'s continuous corners. What the two
+/// share in shape is the round controls: pills and circles.
+enum ConsoleInk {
+    private static func hex(_ r: Int, _ g: Int, _ b: Int) -> Color {
+        Color(red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255)
+    }
+
+    static let bg = hex(0xf5, 0xfa, 0xf6)            // `--bg`
+    static let bg1 = hex(0xed, 0xf6, 0xef)           // `--bg-1`
+    static let bg2 = hex(0xe2, 0xf0, 0xe6)           // `--bg-2`
+    static let surface = Color.white                 // `--surface`
+    static let line = hex(0xd5, 0xe5, 0xda)          // `--line`
+    static let line2 = hex(0xb3, 0xce, 0xbd)         // `--line-2`
+    static let fg = hex(0x17, 0x37, 0x26)            // `--fg`
+    static let fg2 = hex(0x46, 0x66, 0x53)           // `--fg-2`
+    static let fg3 = hex(0x59, 0x75, 0x62)           // `--fg-3`
+    static let accent = hex(0x18, 0x83, 0x4b)        // `--accent`
+    static let red = hex(0xb7, 0x2f, 0x36)           // `--red`
+    /// `.live.warn .live-dot`, and the map's sighting amber.
+    static let warn = hex(0xd9, 0x77, 0x06)          // '#d97706'
+}
+
 /// Ink for the Simulator's drive room. Light on purpose: this is a rehearsal
 /// wireframe, not a stand-in for a dark camera feed. The HUD chrome over it
 /// still opts into dark via `cameraChrome()`.
@@ -166,6 +197,10 @@ enum Radius {
     static let card: CGFloat = 14
     /// Cards that cover the camera: the phase card, the seat picker.
     static let sheet: CGFloat = 22
+    /// The join button. Rounder than a card and squarer than a capsule: a
+    /// full-width capsule at 58 pt tall reads as a lozenge rather than a
+    /// button, and the corner stops matching anything else on the page.
+    static let pill: CGFloat = 18
 
     /// Always `.continuous`. Every `RoundedRectangle` in this module used to be
     /// the default `.circular`, which is not the corner iOS draws anywhere else.

@@ -10,17 +10,12 @@ import SwarmCore
 /// app that is *not* drawn over a camera, so it should look like Settings rather
 /// than like the HUD. No `.cameraChrome()`, no invented colour.
 ///
-/// It reads `model.frame.overlay` directly. That is a 30 Hz value, but this is a
-/// modal with four rows on it, and Observation only invalidates on the fields
-/// actually read.
 struct SettingsSheet: View {
     let model: OperatorViewModel
     @Binding var showMiniMap: Bool
     let onLeave: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-
-    private var overlay: OverlayState { model.frame.overlay }
 
     var body: some View {
         NavigationStack {
@@ -46,17 +41,6 @@ struct SettingsSheet: View {
                     Toggle("Mini-map", systemImage: "map.fill", isOn: $showMiniMap)
                 }
 
-                Section("This phone") {
-                    LabeledContent("Status", value: overlay.status.title)
-                    LabeledContent("Located by", value: located)
-                    if let index = overlay.index {
-                        LabeledContent("Phone", value: "#\(index)")
-                    }
-                    if let phase = overlay.phase {
-                        LabeledContent("Phase", value: phase)
-                    }
-                }
-
                 Section {
                     Button(role: .destructive, action: onLeave) {
                         Label("Leave", systemImage: "rectangle.portrait.and.arrow.right")
@@ -80,12 +64,4 @@ struct SettingsSheet: View {
         }
     }
 
-    /// The operator's words for `RoomAligner.Source`, which is a wire value.
-    private var located: String {
-        switch overlay.alignment {
-        case .marker: "A printed marker"
-        case .seat: "The seat you tapped"
-        case .none: "Not located yet"
-        }
-    }
 }

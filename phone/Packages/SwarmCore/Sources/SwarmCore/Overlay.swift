@@ -742,9 +742,17 @@ public struct OverlayModel: Sendable {
     /// Long enough to read at arm's length, short enough not to be in the way
     /// of whatever the operator does next. This is the *only* confirmation a
     /// lock gets: the calibrate card used to hold a second "Calibrated" state
-    /// open behind it, which said the same word twice for one event.
-    public static let lockFlashSeconds: Double = 1.1
-    public static let lockFlashText = "Calibrated ✓"
+    /// open behind it, which said the same word twice for one event — so the
+    /// one page that remains is given time to be read rather than caught.
+    ///
+    /// This is the *held* part only. `FlashView` eases the page in before this
+    /// starts and eases it out after it ends, so what the operator sees is
+    /// roughly this plus three quarters of a second of fade.
+    public static let lockFlashSeconds: Double = 2.2
+    /// No "✓". The page is a full screen of green with one word on it; the
+    /// tick was a second, smaller way of saying the same thing, and it made
+    /// the line sit off-centre for the sake of it.
+    public static let lockFlashText = "Calibrated"
 
     /// A `delta` guide is a snapshot of where the phone was facing; the hub
     /// refreshes it several times a second. Three seconds without one means the

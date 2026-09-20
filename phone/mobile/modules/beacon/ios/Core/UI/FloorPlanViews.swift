@@ -9,8 +9,6 @@ import SwarmCore
 private enum MapMarker {
     static let radius: CGFloat = 10
     static let stroke: CGFloat = 2
-    static let labelHeight: CGFloat = 18
-    static let labelGap: CGFloat = 4
 }
 
 /// `drawPersonGlyph()`: a head and shoulders in a white disc, ringed in the
@@ -164,8 +162,8 @@ struct FloorPlanCanvas: View {
     let pings: [PingCue]
     /// Keep `me` in the middle and scroll the room underneath.
     var followsMe = false
-    /// Off on the mini-map, where there is no room for the STAGE word, the
-    /// labels over the pins or the scale bar.
+    /// Off on the mini-map, where there is no room for the STAGE word or the
+    /// scale bar.
     var showsDetail = true
     /// Seconds on a monotonic clock. The expanding rings derive their phase
     /// from it the way the console does, each with its own divisor:
@@ -206,11 +204,10 @@ struct FloorPlanCanvas: View {
 
             // `draw()`: marker, then pings, then the found person, then the
             // phone pins over all of it.
-            var labels: [CGRect] = []
             drawMarker(&context, plan: plan)
             drawPings(&context, plan: plan)
             drawHazards(&context, plan: plan)
-            drawCandidate(&context, plan: plan, labels: &labels, size: size)
+            drawCandidate(&context, plan: plan)
             for who in people {
                 phone(&context, at: plan.point(x: who.x, y: who.y), heading: who.heading,
                       number: who.index)
@@ -539,17 +536,18 @@ struct FloorPlanCanvas: View {
             diamond.addLine(to: CGPoint(x: p.x - 7, y: p.y))
             diamond.closeSubpath()
             context.fill(diamond, with: .color(MapInk.ping.opacity(ping.fade)))
-            guard showsDetail else { continue }
-            context.draw(Text(ping.label).font(.system(size: 11, weight: .medium))
-                .foregroundStyle(MapInk.ping.opacity(ping.fade)), at: CGPoint(x: p.x, y: p.y - 14))
+            // The operator's own words for a ping are the one caption here that
+            // is not derivable from the glyph — but they already ride the
+            // compass tape and the floating diamond in the camera view, which
+            // is the screen an operator is actually on. Repeating them over the
+            // floor plan only costs floor.
         }
     }
 
     /// The found-person half of `drawCandidate()`. The rehearsal target, the
     /// responder lines and the marker pin are console-only: nothing in the
     /// phone's `world` message describes them.
-    private func drawCandidate(_ context: inout GraphicsContext, plan: FloorPlanGeometry,
-                               labels: inout [CGRect], size: CGSize) {
+    private func drawCandidate(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
         guard let candidate = world?.candidate else { return }
         let p = plan.point(x: candidate.x, y: candidate.y)
         let color: Color = candidate.possible == true ? .orange : MapInk.found
@@ -560,34 +558,13 @@ struct FloorPlanCanvas: View {
                                               width: radius * 2, height: radius * 2)),
                        with: .color(color.opacity(0.7 * (1 - k))), lineWidth: 2)
         person(&context, at: p, color: color)
-        guard showsDetail else { return }
-        let y = p.y - MapMarker.radius - MapMarker.stroke / 2 - MapMarker.labelGap - MapMarker.labelHeight / 2
-        mapLabel(&context, candidate.possible == true ? "POSSIBLE MATCH" : "FOUND PERSON", at: CGPoint(x: p.x, y: y), background: color,
-                 labels: &labels, size: size)
+        // No caption. A red person glyph, a legend that explains the red person
+        // glyph, and a pill on top of the floor saying "FOUND PERSON" is one
+        // fact stated three times — and on a phone-sized map the pill covers
+        // more floor than the marker it is labelling. The map answers *where*;
+        // what the thing is, its shape and colour already say.
     }
 
-    /// `drawMapLabel()` plus `reserveMapLabel()`: a pill in the marker's colour,
-    /// nudged vertically until it is not sitting on another one.
-    private func mapLabel(_ context: inout GraphicsContext, _ text: String, at point: CGPoint,
-                          background: Color, labels: inout [CGRect], size: CGSize) {
-        let resolved = context.resolve(Text(text).font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(MapInk.markerBorder))
-        let width = resolved.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity)).width + 12
-        let half = width / 2
-        let x = max(half + 4, min(size.width - half - 4, point.x))
-        var rect = CGRect(x: x - half, y: point.y - 9, width: width, height: MapMarker.labelHeight)
-        for offset in [0, -22, -44, 22, 44, -66, 66] as [CGFloat] {
-            let y = max(MapMarker.labelHeight / 2 + 4,
-                        min(size.height - MapMarker.labelHeight / 2 - 4, point.y + offset))
-            rect = CGRect(x: x - half, y: y - 9, width: width, height: MapMarker.labelHeight)
-            if !labels.contains(where: { $0.insetBy(dx: -3, dy: -3).intersects(rect) }) { break }
-        }
-        labels.append(rect)
-        context.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(background))
-        context.draw(resolved, at: CGPoint(x: rect.midX, y: rect.midY + 0.5))
-    }
-
-    /// `.map-scale`: a 5 m rule in the bottom-right corner.
     private func scaleBar(_ context: inout GraphicsContext, plan: FloorPlanGeometry, size: CGSize) {
         let width = plan.length(5)
         guard width > 16, width < size.width - 60 else { return }
@@ -779,7 +756,7 @@ struct RoomMapView: View {
     var body: some View {
         VStack(spacing: Space.m) {
             HStack(spacing: Space.s) {
-                Text("Search map").font(TypeScale.sheetTitle)
+                Text("Search map").font(TypeScale.sheetTitle).foregroundStyle(ConsoleInk.fg)
                 Spacer(minLength: 0)
                 // A real close control, not a hand-built glyph with a tap
                 // gesture: the system draws the circle, the glass and the
@@ -870,16 +847,22 @@ struct RoomMapView: View {
                 .background(MapInk.legendBackground)
                 .overlay(alignment: .top) { MapInk.line.frame(height: 1) }
             }
-            .clipShape(Radius.rect(Radius.plate))
-            .overlay(Radius.rect(Radius.plate).stroke(MapInk.line, lineWidth: 1))
+            .clipShape(Radius.rect(Radius.card))
+            .overlay(Radius.rect(Radius.card).stroke(MapInk.line, lineWidth: 1))
         }
-        .padding(Space.xl)
+        .padding(Space.l)
         // Not a presented sheet, on purpose: this card sits over a live camera
         // the operator is still aiming, and a sheet would cover the preview —
         // and could not collapse back into the mini-map the way this does.
         // Close with the button, or by tapping the room behind it
         // (`OperatorView` owns that scrim).
-        .background(Surface.card, in: Radius.rect(Radius.sheet))
+        // The console's colours on a phone's shape: `--bg` and a hairline, but
+        // the soft continuous corner of a card that floats over a camera. The
+        // inner plate's radius is this one less the padding, so the two
+        // corners are concentric rather than merely both round.
+        .background(ConsoleInk.bg, in: Radius.rect(Radius.sheet + Space.s))
+        .overlay(Radius.rect(Radius.sheet + Space.s).stroke(ConsoleInk.line, lineWidth: 1))
+        .shadow(color: ConsoleInk.fg.opacity(0.22), radius: 28, y: 14)
         .padding(Space.l)
         .accessibilityAction(.escape, onClose)
     }

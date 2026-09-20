@@ -184,41 +184,119 @@ struct PhaseCardView: View {
     let lookingFor: String?
     /// This phone had a lock and lost it, so the prompt says "Recalibrate".
     var again = false
+    /// From `welcome`: which searcher this is, and the colour the console
+    /// draws it in. The ticket wears both, so the operator can find themselves
+    /// on the console's wall of feeds.
+    var index: Int?
+    var colorHex: String?
+    var world: HubWorld?
 
     static func covers(_ phase: String) -> Bool { PhaseCardText.covers(phase) }
 
-    /// The hero glyph grows with the operator's text size. It used to be a flat
-    /// 44, which stayed 44 while the sentence under it doubled.
-    @ScaledMetric(relativeTo: .largeTitle) private var symbolSize: CGFloat = 44
-
     var body: some View {
-        VStack(spacing: Space.m) {
-            Image(systemName: symbol)
-                .font(.system(size: symbolSize))
-                .foregroundStyle(Color.ssAccent)
-                // The glyph is the whole message at a glance, so it gets the
-                // one bit of motion on this card.
-                .contentTransition(.symbolEffect(.replace))
-            Text(title).font(TypeScale.coverTitle)
-            Text(detail)
-                .font(TypeScale.detail)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
+        if phase == "calibrate" {
+            prompt
+        } else {
+            ticket
         }
-        .padding(Space.xxl)
-        .frame(maxWidth: 340)
-        // This card covers the whole screen while it is up, so the camera behind
-        // it is not the point: a thicker material is what keeps `.secondary`
-        // body text readable over whatever the lens happens to be pointed at.
-        // Semantic, not pinned dark — a light-mode operator gets a light card.
-        .background(Surface.card, in: Radius.rect(Radius.sheet))
     }
 
-    private var symbol: String {
-        switch phase {
-        case "lobby": return "person.3.fill"
-        case "calibrate": return "scope"
-        default: return "flag.checkered"
+    /// Calibrate asks the operator to use the camera, so it is camera chrome:
+    /// a pill at the bottom, the shape `drawHud` gives everything it puts over
+    /// video, and the viewfinder keeps the middle.
+    private var prompt: some View {
+        HStack(spacing: Space.s) {
+            Image(systemName: "scope")
+                .font(TypeScale.inlineSymbol)
+                .foregroundStyle(MapInk.marker)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(TypeScale.statusTitle).foregroundStyle(.hudInk)
+                Text(detail).font(TypeScale.hint).foregroundStyle(.hudInkSecondary)
+            }
+        }
+        .padding(.horizontal, Space.l)
+        .padding(.vertical, Space.m)
+        .background(Surface.hudChrome, in: Capsule())
+        .cameraChrome()
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Lobby and end: the console's ink on the console's `--bg`, in a phone's
+    /// soft card. The identity colour runs along the top edge, and under the perforation the raw
+    /// figures the hub is already sending.
+    private var ticket: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            (Color(hex: colorHex) ?? ConsoleInk.accent).frame(height: 6)
+            VStack(alignment: .leading, spacing: Space.xs) {
+                if let index {
+                    Text("SEARCHER \(index)")
+                        .font(TypeScale.readout.monospaced())
+                        .foregroundStyle(ConsoleInk.fg3)
+                }
+                Text(title)
+                    .font(TypeScale.coverTitle)
+                    .foregroundStyle(ConsoleInk.fg)
+                Text(detail)
+                    .font(TypeScale.detail)
+                    .foregroundStyle(ConsoleInk.fg2)
+            }
+            .padding(Space.xl)
+            if !facts.isEmpty {
+                Perforation()
+                    .stroke(ConsoleInk.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .frame(height: 1)
+                    .padding(.horizontal, Space.xl)
+                HStack(alignment: .top, spacing: Space.xxl) {
+                    ForEach(facts, id: \.label) { fact in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(fact.label)
+                                .font(TypeScale.hint)
+                                .foregroundStyle(ConsoleInk.fg3)
+                            Text(fact.value)
+                                .font(.body.monospacedDigit().weight(.medium))
+                                .foregroundStyle(ConsoleInk.fg)
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(Space.xl)
+            }
+        }
+        .frame(maxWidth: 340)
+        .background(ConsoleInk.bg)
+        // Clipped, so the identity stripe takes the card's corner with it.
+        .clipShape(Radius.rect(Radius.sheet))
+        .overlay(Radius.rect(Radius.sheet).stroke(ConsoleInk.line, lineWidth: 1))
+        .shadow(color: ConsoleInk.fg.opacity(0.22), radius: 28, y: 14)
+        .padding(.horizontal, Space.xl)
+        .accessibilityElement(children: .combine)
+    }
+
+    private struct Fact { let label: String; let value: String }
+
+    /// Only what the hub measured, as it sent it. A fact with no value is left
+    /// off rather than shown as a dash.
+    private var facts: [Fact] {
+        var facts: [Fact] = []
+        if phase == "end", let searched = world?.searched {
+            facts.append(Fact(label: "Searched", value: "\(Int((searched * 100).rounded()))%"))
+        }
+        if let searchers = world?.searchers, searchers > 0 {
+            facts.append(Fact(label: "Searchers", value: "\(searchers)"))
+        }
+        if let lookingFor, !lookingFor.isEmpty {
+            facts.append(Fact(label: "Looking for", value: lookingFor))
+        }
+        return facts
+    }
+
+    private struct Perforation: Shape {
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            path.move(to: CGPoint(x: rect.minX, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+            return path
         }
     }
 

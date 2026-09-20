@@ -158,9 +158,13 @@ public struct SessionDiagnostics: Sendable, Equatable {
 public actor SessionMachine {
     public struct Rates: Sendable, Equatable {
         /// Frames are scheduled on their own clock, against every incoming
-        /// sample, so `frameFPS` may exceed `poseHz` — the hub asks for 8–15 fps
-        /// when a console expands a phone. Depth chunks are still considered
-        /// only when a pose is emitted, so `poseHz` bounds `depthHz`.
+        /// sample, so `frameFPS` may exceed `poseHz`. The app runs every phone
+        /// at 15 — the console's whole camera wall is live video now, not a
+        /// strip of stills that only moves for whichever tile is expanded — and
+        /// the hub's focus command asks for the same 15, so focusing a phone
+        /// changes nothing about its rate. Thermal shedding still multiplies
+        /// this down on a hot phone. Depth chunks are still considered only
+        /// when a pose is emitted, so `poseHz` bounds `depthHz`.
         public var poseHz: Double
         public var frameFPS: Double
         public var depthHz: Double

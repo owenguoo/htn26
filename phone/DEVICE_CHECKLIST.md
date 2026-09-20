@@ -523,3 +523,20 @@ nothing.
 - [ ] **Arrival is not mistaken for a hazard.** Reaching the person plays a
       one-off double thump and then goes silent. Confirm that reads as "you are
       here" and not as the repeating obstacle pattern.
+
+## 14. Scanning the console's Join QR
+
+The Simulator has no camera, so none of this can be seen off a device.
+
+- [ ] **It reads the real thing.** Open **Join QR** on the console and point the
+      phone at the laptop screen from a couple of feet. The address fills in and
+      the sheet closes on the first read, without a second tap.
+- [ ] **It ignores what is not a hub.** Any other QR code in the room — a
+      poster, a Wi-Fi code, a ticket — must leave the field alone rather than
+      replacing an address the operator was about to join with.
+- [ ] **Declining the camera explains itself.** Deny camera access and open the
+      scanner: it says so and offers typing instead, rather than showing a black
+      rectangle.
+- [ ] **It lets go.** Cancel the sheet, then join: the camera preview and ARKit
+      must not fight over the device. Watch for a frozen preview on the operator
+      screen straight after a scan.

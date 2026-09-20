@@ -19,7 +19,11 @@ struct BeaconApp: App {
             // `.cameraChrome()`; pinning the whole window also pinned the join
             // form, which is an ordinary iOS form and should follow the phone.
             // Status bar likewise: hidden over the camera, present over a form.
-            RootView()
+            //
+            // `SplashHost` overlays the launch animation; `RootView` is mounted
+            // under it from the first frame, so its `onAppear` and `onOpenURL`
+            // run exactly when they did before.
+            SplashHost { RootView() }
         }
     }
 }

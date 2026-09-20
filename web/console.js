@@ -23,7 +23,10 @@ let lastDragSend = 0;
 // ---------------------------------------------------------------- socket
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=2`);
+  // Every tile on the wall runs at the same rate the expanded feed does. The
+  // hub still relays latest-wins, so a slow socket skips frames rather than
+  // queueing them.
+  ws = new WebSocket(`${proto}://${location.host}/ws/dashboard?role=console&thumb_fps=15`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => setConn(true);
   ws.onclose = () => { setConn(false); setTimeout(connect, 1000); };

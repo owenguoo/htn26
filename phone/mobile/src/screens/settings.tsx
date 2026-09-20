@@ -1,10 +1,12 @@
 import { Host } from '@expo/ui';
 import { Button, Form, Label, LabeledContent, Section, Text, Toggle } from '@expo/ui/swift-ui';
 import {
+  background,
   disabled,
   font,
   foregroundStyle,
   monospacedDigit,
+  scrollContentBackground,
   textSelection,
   tint,
 } from '@expo/ui/swift-ui/modifiers';
@@ -14,7 +16,7 @@ import { StyleSheet } from 'react-native';
 
 import Beacon, { type Diagnostics, type MicState } from '../../modules/beacon';
 import { setPreference, usePreferences } from '../preferences';
-import { colors, secondaryStyle, textStyles } from '../theme/tokens';
+import { colors, consoleInk, secondaryStyle, textStyles } from '../theme/tokens';
 
 /**
  * A row value. Hierarchical `secondary` rather than a hardcoded grey, and
@@ -90,7 +92,7 @@ export default function Settings() {
 
   return (
     <Host style={styles.fill} useViewportSizeMeasurement>
-      <Form>
+      <Form modifiers={[tint(colors.accent), scrollContentBackground('hidden'), background(consoleInk.bg)]}>
         {state.joined ? (
           <Section
             title="Position"

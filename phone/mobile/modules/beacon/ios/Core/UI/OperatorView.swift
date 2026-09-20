@@ -156,7 +156,8 @@ public struct OperatorView: View {
                 VStack(spacing: 0) {
                     if isHuntingMarker { Spacer(minLength: 0) }
                     PhaseCardView(phase: phase, lookingFor: overlay.world?.lookingFor,
-                                  again: overlay.isRecalibrating)
+                                  again: overlay.isRecalibrating, index: overlay.index,
+                                  colorHex: overlay.colorHex, world: overlay.world)
                 }
                 .padding(.bottom, isHuntingMarker ? Space.xxl : 0)
             }
@@ -189,17 +190,15 @@ public struct OperatorView: View {
                     .transition(.opacity)
             }
             // Last, and over everything: a flash the audience can see from the
-            // back of the room is the point of the flash.
-            if let flash = overlay.flash {
-                FlashView(flash: flash)
-            }
+            // back of the room is the point of the flash. Always mounted, and
+            // handed the cue including when there is none — it eases itself in
+            // and back out, which an `if let` here could not do: the cue
+            // expiring pulled the view out of the tree in the same frame and
+            // the green cut rather than faded.
+            FlashView(flash: overlay.flash)
         }
         .coordinateSpace(.named(Self.space))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { contentSize = $0 }
-        // Matches `FlashView.fadeOut`: the view eases its own way in, and this
-        // is what carries it back out when the cue expires. 0.12 s was a cut,
-        // not a fade, and read as the screen glitching rather than answering.
-        .animation(.easeInOut(duration: FlashView.fadeOut), value: overlay.flash)
         .animation(.easeOut(duration: 0.2), value: overlay.phase)
         // A lock is confirmed once, by the full-screen green flash
         // (`OverlayEngine.lockFlashText`). The calibrate card used to be held
