@@ -503,3 +503,23 @@ with synthetic PCM over a real socket. Neither involved a microphone.
       in-flight count, thermal state no worse than with voice off.
 
 - [ ] Hold the camera on an enrolled person: two fresh results at the match threshold produce a green box, a brief possible-target banner, and one vibration; sustained matching produces at most one vibration per 10 seconds.
+
+## 13. The two repeating pulses
+
+Only a hand can judge these; the Simulator has no Taptic Engine and plays
+nothing.
+
+- [ ] **Closing on a person quickens.** Place a rehearsal candidate and walk in
+      from about twelve metres. The single tap must noticeably speed up over
+      the last five metres — most of the change belongs there, not in the first
+      ten — and it must be a heavier tap near the end than at the start.
+- [ ] **An obstacle feels like a different thing.** Walk toward a hazard. The
+      double tap must be unmistakably distinct from the person's single tap at
+      the same range, with your eyes off the screen.
+- [ ] **Standing over an obstacle stays at full strength.** Walk right up to it
+      and stop, so the camera can no longer see it. The buzz must hold at its
+      fastest rather than fading out as the detector loses it, and it must ease
+      off within a few seconds of walking away.
+- [ ] **Arrival is not mistaken for a hazard.** Reaching the person plays a
+      one-off double thump and then goes silent. Confirm that reads as "you are
+      here" and not as the repeating obstacle pattern.

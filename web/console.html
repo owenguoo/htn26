@@ -79,12 +79,15 @@
     .upload-zone:hover, .upload-zone.dragging { background: var(--accent-bg); border-color: var(--accent); }
     .upload-zone:disabled { opacity: .5; cursor: wait; }
     .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .search-panel select, .settings input[type="number"], .person-dialog input[type="text"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 7px; }
+    .search-panel input[type="text"] { width: 100%; }
+    .field-label { display: block; margin: 16px 0 6px; font-size: 13px; font-weight: 500; }
+    .person-dialog .field-label:first-of-type { margin-top: 16px; }
+    .field-note { margin: 6px 0 0; font-size: 12px; color: var(--fg-3); }
+    .search-panel select, .settings input[type="number"], .search-panel input[type="text"], .person-dialog input[type="text"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 7px; }
     /* One button starts the whole flow; the sheet behind it asks for the name
        and the photo together, so nobody is half-added. */
     .add-person { width: 100%; justify-content: center; height: 38px; }
     .person-dialog { width: min(460px, calc(100% - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; }
-    .person-dialog .field-label { display: block; margin: 16px 0 6px; font-size: 13px; font-weight: 500; }
     .person-dialog input[type="text"] { width: 100%; }
     .person-dialog .upload-zone { margin-top: 14px; min-height: 92px; }
     .inference-note { margin: 8px 0 0; font-size: 12px; color: var(--fg-3); }
@@ -309,15 +312,17 @@
     /* A name turns "Person 2 found" on every searcher's phone into "Sam found",
        which is the difference between a record and a person. Optional: a search
        that starts before anybody knows the name must not wait for one. */
-    #personName { width: 100%; margin-top: 10px; padding: 7px 9px; font: inherit; font-size: 13px;
+    #personName, #personNote { width: 100%; margin-top: 10px; padding: 7px 9px; font: inherit; font-size: 13px;
                   border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1);
                   color: var(--fg-1); }
-    #personName:placeholder-shown { color: var(--fg-3); }
+    #personName:placeholder-shown, #personNote:placeholder-shown { color: var(--fg-3); }
     .people-roster { display: grid; gap: 4px; margin-top: 10px; }
     .people-roster:empty { display: none; }
     .person-row { display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 6px 8px;
                   border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-1); }
+    .person-row { align-items: baseline; }
     .person-row .who { font-weight: 600; color: var(--fg-1); }
+    .person-row .note { color: var(--fg-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .person-row .spacer { flex: 1; }
     .person-row button { border: 0; background: none; color: var(--fg-3); cursor: pointer;
                          font: inherit; padding: 0 2px; }
@@ -532,6 +537,14 @@
       .vstats > div.wide { grid-column: auto; }
       .vimg { min-height: 200px; }
     }
+    /* Radio: what searchers have actually said, pulled out of the activity log
+       so a voice from the room does not scroll past between two planner notes. */
+    .say { display: grid; grid-template-columns: 34px 1fr; gap: 10px; padding: 10px 16px;
+      border-bottom: 1px solid var(--line); font-size: 13px; }
+    .say:last-child { border-bottom: 0; }
+    .say .who { font: 12px var(--mono); color: var(--fg-3); padding-top: 2px; }
+    .say .text { color: var(--fg); }
+    .say time { display: block; margin-top: 2px; font: 11px var(--mono); color: var(--fg-3); }
     /* activity */
     #log { max-height: 180px; overflow: auto; }
     .ev { display: grid; grid-template-columns: 64px 1fr; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
@@ -627,7 +640,7 @@
             <div class="row"><div><div class="label">Responders</div><div class="hint">Nearest phones sent to a find</div></div>
               <div class="stepper"><button id="respMinus" aria-label="Fewer">&minus;</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
             <div class="row"><div><div class="label">Test candidates</div><div class="hint">Mock people on the map, for rehearsal</div></div>
-              <div class="row-control"><button class="btn sm" id="candClear" hidden>Clear</button><button class="btn sm" id="candBtn">Place candidate</button></div></div>
+              <div class="row-control"><button class="btn sm" id="candClear" hidden>Clear</button><!-- TEMPORARY: demo shortcut, drops a candidate on the printed marker --><button class="btn sm" id="candMarkerBtn">At marker</button><button class="btn sm" id="candBtn">Place candidate</button></div></div>
             <div class="row"><div><div class="label">Simulation</div><div class="hint">Stages a whole drill at random. Replaces what is staged</div></div>
               <div class="row-control"><button class="btn sm" id="simBtn">Run simulation</button></div></div>
           </div>
@@ -649,6 +662,9 @@
       <p>The name goes out to every searcher's phone. The photo is what each frame is matched against.</p>
       <label class="field-label" for="personName">Name</label>
       <input id="personName" type="text" maxlength="40" autocomplete="off" placeholder="e.g. Alex Rhee">
+      <label class="field-label" for="personNote">Description</label>
+      <input id="personNote" type="text" maxlength="80" autocomplete="off"
+             placeholder="e.g. grey jacket, may be unresponsive">
       <input id="referenceFile" type="file" accept="image/*" aria-label="Photo of this person" hidden>
       <button class="upload-zone" type="button" id="uploadPhoto"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg><strong id="uploadTitle">Choose a photo</strong><span id="uploadHint">or drop one here</span></button>
       <canvas id="referencePreview" hidden aria-label="Numbered people in the photo"></canvas>
@@ -670,22 +686,22 @@
               <p class="hint inference-note" id="inferenceNote" hidden>Inference is off.</p>
               <div class="people-roster" id="peopleRoster"></div>
             </fieldset>
+            <p class="hint field-note" id="lookingFor"></p>
             <div id="searchMessage" role="status"></div>
             <div class="divider"></div>
             <div class="empty" id="candStatus">No candidate placed</div>
             <div class="found-list" id="foundList"></div>
-            <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
           </div>
         </section>
         <section class="card" aria-label="Rescue team">
           <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM6 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.49 15.326a.78.78 0 0 1-.358-.442 3 3 0 0 1 4.308-3.516 6.484 6.484 0 0 0-1.905 3.959c-.023.222-.014.442.025.654a4.97 4.97 0 0 1-2.07-.655ZM16.44 15.98a4.97 4.97 0 0 0 2.07-.654.78.78 0 0 0 .357-.442 3 3 0 0 0-4.308-3.517 6.484 6.484 0 0 1 1.907 3.96 2.32 2.32 0 0 1-.026.654ZM18 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM5.304 16.19a.844.844 0 0 1-.277-.71 5 5 0 0 1 9.947 0 .843.843 0 0 1-.277.71A6.975 6.975 0 0 1 10 18a6.974 6.974 0 0 1-4.696-1.81Z"/></svg>Rescue team</h2><span class="spacer"></span>
             <span class="faint" id="teamCount"></span></div>
-          <div id="teamList"></div>
+          <div id="teamList"><div class="empty">Nobody has joined yet</div></div>
         </section>
         <section class="card" aria-label="Threats">
           <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M6.701 2.25c.577-1 2.02-1 2.598 0l5.2 9a1.5 1.5 0 0 1-1.299 2.25H2.8A1.5 1.5 0 0 1 1.5 11.25l5.2-9ZM8 5a.75.75 0 0 1 .75.75v2.5a.75.75 0 0 1-1.5 0v-2.5A.75.75 0 0 1 8 5Zm0 6.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clip-rule="evenodd"/></svg>Threats</h2><span class="spacer"></span>
             <span class="faint" id="threatCount"></span></div>
-          <div id="threatList"></div>
+          <div id="threatList"><div class="empty">Phones flag obstacles once the search starts</div></div>
         </section>
       </div>
       <div class="stack map-column">
@@ -718,6 +734,11 @@
         </section>
       </div>
       <div class="stack side-column right-column">
+        <section class="card" aria-label="Radio">
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a.75.75 0 0 1 .75.75v.5a.75.75 0 0 1-1.5 0v-.5A.75.75 0 0 1 8 1ZM5.5 5a2.5 2.5 0 0 1 5 0v3a2.5 2.5 0 0 1-5 0V5Z"/><path d="M4 7.25a.75.75 0 0 0-1.5 0V8a5.5 5.5 0 0 0 4.75 5.45v1.3a.75.75 0 0 0 1.5 0v-1.3A5.5 5.5 0 0 0 13.5 8v-.75a.75.75 0 0 0-1.5 0V8a4 4 0 0 1-8 0v-.75Z"/></svg>Radio</h2><span class="spacer"></span>
+            <span class="faint" id="radioCount"></span></div>
+          <div id="radio"><div class="empty">Nothing heard yet</div></div>
+        </section>
         <section class="card" aria-label="Activity">
           <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 4.75a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM6.25 3a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 7.25a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 11.5a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM4 12.25a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM3 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>Activity</h2></div>
           <div id="log"><div class="empty">Nothing yet</div></div>

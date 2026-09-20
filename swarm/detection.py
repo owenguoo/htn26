@@ -102,7 +102,7 @@ class SearchState:
         self.revision = str(uuid.uuid4())
         # The reference roster: everybody we're looking for, one entry per uploaded photo.
         # Every frame is matched against each of them, so a search can look for several people.
-        self.people: list[dict] = []   # {"id", "label", "version"}
+        self.people: list[dict] = []   # {"id", "label", "note", "version"}
         self._next_person = 1
         self.threshold = .70
         self.streams: dict[str, str] = {}
@@ -153,20 +153,23 @@ class SearchState:
         """The worker target id the next reference photo will be registered under."""
         return f'person-{self._next_person}'
 
-    def _person(self, version: str, label: str | None) -> dict:
+    def _person(self, version: str, label: str | None, note: str | None = None) -> dict:
+        # `note` is how the operator described them — what they were wearing,
+        # anything that tells a searcher they are looking at the right person.
         person = {'id': f'person-{self._next_person}', 'version': version,
-                  'label': (label or '').strip()[:60] or f'Person {self._next_person}'}
+                  'label': (label or '').strip()[:60] or f'Person {self._next_person}',
+                  'note': (note or '').strip()[:80]}
         self._next_person += 1
         return person
 
-    def add_person(self, version: str, label: str | None = None) -> dict:
+    def add_person(self, version: str, label: str | None = None, note: str | None = None) -> dict:
         """Another reference photo: somebody else to look for, searched at the same time as the
         people already on the roster. Their confirmed sightings survive; in-flight results don't,
         because the roster fingerprint they were matched under has changed."""
         if len(self.people) >= MAX_PEOPLE:
             raise ValueError(f'at most {MAX_PEOPLE} people can be searched for at once')
         self.mode = "real"
-        person = self._person(version, label)
+        person = self._person(version, label, note)
         self.people.append(person)
         self.reset(preserve_confirmation=True)
         return person

@@ -175,6 +175,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
             raise HTTPException(422, 'box requires four finite pixel coordinates')
         adding = request.query_params.get('add') in ('1', 'true') and bool(hub.search.people)
         label = request.query_params.get('label')
+        note = request.query_params.get('note')
         if adding and len(hub.search.people) >= MAX_PEOPLE:
             raise HTTPException(409, f'at most {MAX_PEOPLE} people can be searched for at once')
         if gate.locked():
@@ -202,13 +203,15 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
                 raise HTTPException(502, 'invalid target version')
             if adding:
                 try:
-                    hub.search.add_person(version, label)
+                    hub.search.add_person(version, label, note)
                 except ValueError as error:
                     raise HTTPException(409, str(error)) from error
             else:
                 hub.search.set_reference(version)
                 if label:
                     hub.search.people[0]['label'] = label.strip()[:60] or hub.search.people[0]['label']
+                if note:
+                    hub.search.people[0]['note'] = note.strip()[:80]
             status_value, status_at = 'available', time.monotonic()
             await hub.clear_detection_overlays()
             return state()

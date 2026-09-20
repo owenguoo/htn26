@@ -643,6 +643,23 @@ struct HUDMirrorTests {
         #expect(hud.takeover?.kind == "hazard")
     }
 
+    /// The beat has to change where the operator is actually looking for
+    /// somebody, not across the part of the walk where nothing is happening.
+    @Test func theBeatChangesMostOverTheLastFewMetres() {
+        func beat(at metres: Double) -> Double {
+            HUDMirror.beatMs(metres: metres, perMetre: HUDMirror.findBeatPerMetre,
+                             slowest: HUDMirror.findBeatSlowest, fastest: HUDMirror.findBeatFastest)
+        }
+        // The old linear ramp moved by 176 ms across this whole stretch, which
+        // is not something a hand can feel.
+        #expect(beat(at: 8) - beat(at: 2) > 400)
+        // Roughly halving as the distance halves: a parking sensor, which is
+        // the model everybody already has.
+        #expect(abs(beat(at: 8) / beat(at: 4) - 2) < 0.1)
+        #expect(beat(at: 0.5) == HUDMirror.findBeatFastest, "it floors rather than buzzing solid")
+        #expect(beat(at: 100) == HUDMirror.findBeatSlowest)
+    }
+
     /// Walking up to something is what stops the camera seeing it, so the
     /// warning used to be quietest at the moment it mattered most.
     @Test func standingOnTopOfAHazardIsStillFullStrength() throws {
@@ -652,7 +669,7 @@ struct HUDMirrorTests {
         let hud = mirror(overlay { $0.apply(onIt, now: 0) })
         #expect(hud.takeover?.kind == "hazard", "stale, but you are standing next to it")
         #expect(hud.ambient?.intensity == 1, "right there is maximum, not a fading ramp")
-        #expect(hud.ambient?.pulseMs == 300)
+        #expect(hud.ambient?.pulseMs == HUDMirror.hazardBeatFastest, "and as fast as it goes")
     }
 
     @Test func aStaleHazardAcrossTheRoomIsStillIgnored() throws {

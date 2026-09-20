@@ -452,6 +452,27 @@ public enum HUDMirror {
         return max(0, min(1, (from - value) / (from - to)))
     }
 
+    /// Milliseconds between beats, tied to the distance itself.
+    ///
+    /// This was a linear ramp across the whole approach, and it spent nearly
+    /// all of its range on the part of the walk where nothing is happening:
+    /// between eight metres and two, the stretch where an operator is actually
+    /// scanning a crowd for a face, the period moved by about a sixth of a
+    /// second. Nobody can feel that. Tying the period to the distance instead
+    /// gives the thing everybody already has a model for — a parking sensor —
+    /// where the beat roughly halves every time the distance does, and the
+    /// last few metres are where most of the change lives.
+    static func beatMs(metres: Double, perMetre: Double, slowest: Double, fastest: Double) -> Double {
+        max(fastest, min(slowest, metres * perMetre))
+    }
+
+    // A person is a single tap that quickens; an obstacle is a double tap.
+    // They used to be the same beat at slightly different rates, which the
+    // screen could tell apart and a hand could not — and the hand is what an
+    // operator has left when they are looking at the room instead of the phone.
+    static let findBeatPerMetre = 90.0, findBeatSlowest = 1400.0, findBeatFastest = 240.0
+    static let hazardBeatPerMetre = 160.0, hazardBeatSlowest = 900.0, hazardBeatFastest = 180.0
+
     static func objectiveDetail(offsetDegrees: Double, distance: Double?, onTarget: Bool) -> String {
         let turn = onTarget ? "straight ahead"
             : String(format: "%.0f° %@", abs(offsetDegrees), offsetDegrees < 0 ? "left" : "right")
@@ -635,20 +656,24 @@ public enum HUDMirror {
         // those two metres the obstacle is the emergency.
         let ambient: HubHUDMirror.Ambient? = {
             if imminent, let hazard {
-                // Full urgency at the blocking range, fading back out toward the
-                // range where it was only worth a chip.
-                let close = ramp(Double(hazard.distance ?? 0), from: Double(HazardCue.warnMetres),
+                let metres = Double(hazard.distance ?? 0)
+                let close = ramp(metres, from: Double(HazardCue.warnMetres),
                                  to: Double(HazardCue.blockingMetres))
                 return .init(kind: "hazard", color: hazardColor,
-                             intensity: 0.4 + 0.6 * close, pulseMs: 900 - 600 * close)
+                             intensity: 0.45 + 0.55 * close,
+                             pulseMs: beatMs(metres: metres, perMetre: hazardBeatPerMetre,
+                                             slowest: hazardBeatSlowest, fastest: hazardBeatFastest))
             }
             switch overlay.find {
             case .heading:
-                // Twenty metres away is a direction; two metres away is nearly
-                // there, and it should feel like it in the hand.
-                let close = ramp(overlay.arrow?.distance.map(Double.init) ?? 12, from: 20, to: 1.5)
+                // Twelve metres is a direction; two metres is nearly there, and
+                // it should feel like it — which means most of the change has to
+                // happen in the last few metres, not the first ten.
+                let metres = overlay.arrow?.distance.map(Double.init) ?? 12
                 return .init(kind: "find", color: alertColor,
-                             intensity: 0.55 + 0.45 * close, pulseMs: 1100 - 500 * close)
+                             intensity: 0.5 + 0.5 * ramp(metres, from: 12, to: 1.5),
+                             pulseMs: beatMs(metres: metres, perMetre: findBeatPerMetre,
+                                             slowest: findBeatSlowest, fastest: findBeatFastest))
             case .with:
                 // Standing with somebody: held, and silent. A phone still
                 // buzzing at a person kneeling over a casualty is nagging.

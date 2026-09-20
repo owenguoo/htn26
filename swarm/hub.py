@@ -1180,6 +1180,12 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                     phone.hidden = bool(msg.get("hidden"))
             elif msg.get("type") == "ping":
                 await hub.ping(msg["x"], msg["y"], msg.get("label") or "Check here", msg.get("phones"))
+            elif msg.get("type") == "looking_for":
+                # What every searcher sees on their own screen. Mission Control
+                # could already set this through its tool; the console could not,
+                # which left the one line that reaches the people in the room
+                # behind an LLM.
+                hub.set_looking_for(str(msg.get("text", "")))
             elif msg.get("type") == "mission" and hub.mission:
                 asyncio.create_task(hub.mission.run(str(msg.get("text", ""))))
             elif msg.get("type") == "scan" and hub.mapper:

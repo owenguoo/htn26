@@ -41,9 +41,10 @@ public final class OperatorViewModel {
     /// Driven by `HUDAmbientView`, not by the cue stream: a cue is something
     /// that happened once, and this is a rhythm. It is the same loop that
     /// animates the light, so the two cannot drift apart.
-    public func pulse(_ intensity: Double) {
+    public func pulse(_ intensity: Double, kind: String) {
         pulseSerial &+= 1
-        haptics.play(HapticCue(pattern: "pulse", intensity: Float(intensity), serial: pulseSerial))
+        haptics.play(HapticCue(pattern: kind == "hazard" ? "pulseHazard" : "pulse",
+                               intensity: Float(intensity), serial: pulseSerial))
     }
 
     public func attach() {

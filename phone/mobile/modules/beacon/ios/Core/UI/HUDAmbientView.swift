@@ -31,7 +31,7 @@ struct HUDAmbientView: View {
     /// that flashes is harder to see past than a solid one, and somebody
     /// walking toward a casualty is trying to see past it the whole time — so
     /// the rhythm moved into the hand, where it costs no visibility at all.
-    var onPulse: @MainActor (Double) -> Void = { _ in }
+    var onPulse: @MainActor (Double, String) -> Void = { _, _ in }
 
     /// Eases the wash in and out rather than snapping between situations.
     @State private var shown = false
@@ -69,7 +69,7 @@ struct HUDAmbientView: View {
     private func beat() async {
         guard let period = ambient?.pulseMs, period > 0 else { return }
         while !Task.isCancelled {
-            onPulse(ambient?.intensity ?? 0.6)
+            onPulse(ambient?.intensity ?? 0.6, ambient?.kind ?? "find")
             try? await Task.sleep(for: .milliseconds(Int(period)))
         }
     }

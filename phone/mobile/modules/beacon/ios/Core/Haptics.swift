@@ -24,6 +24,16 @@ import UIKit
 /// The cue names say what *happened*, not what it should feel like. Turning one
 /// into the other is this file's whole job.
 ///
+/// DEVICE-VERIFY: the two repeating pulses are the ones only a hand can judge.
+/// Walk toward a placed candidate from twelve metres: the single tap must
+/// noticeably quicken over the last five, not just somewhere in the first ten.
+/// Walk toward a hazard: the double tap must be unmistakably a *different*
+/// thing from the person's single tap at the same range, and it must stay at
+/// full strength when you are standing over the object rather than fading as
+/// the camera loses sight of it. Also confirm the one-off arrival thump is not
+/// mistaken for the hazard's repeating double tap.
+/// DEVICE_CHECKLIST.md item 13.
+///
 /// DEVICE-VERIFY: a human must confirm on hardware that each of the six cues
 /// is felt and that they are told apart by feel — the Simulator has no Taptic
 /// Engine and plays nothing, so no test here can see any of it. Also confirm a
@@ -57,6 +67,13 @@ final class Haptics {
         selection.prepare()
     }
 
+    /// One impact, weighted by how close the thing is.
+    private func tap(_ intensity: CGFloat) {
+        if intensity >= 0.8 { heavy.impactOccurred(intensity: intensity) }
+        else if intensity >= 0.5 { impact.impactOccurred(intensity: intensity) }
+        else { light.impactOccurred(intensity: intensity) }
+    }
+
     func play(_ cue: HapticCue) {
         let intensity = CGFloat(max(0, min(1, cue.intensity)))
         switch cue.pattern {
@@ -81,13 +98,22 @@ final class Haptics {
         case "message":
             light.impactOccurred(intensity: intensity)
         case "pulse":
-            // The beat under a pulsing screen. Which generator carries it is
-            // the whole message: a hazard three metres off should be felt as a
-            // tick, the same hazard at arm's length as a thump. One pattern,
-            // three weights, chosen by how close the thing is.
-            if intensity >= 0.8 { heavy.impactOccurred(intensity: intensity) }
-            else if intensity >= 0.5 { impact.impactOccurred(intensity: intensity) }
-            else { light.impactOccurred(intensity: intensity) }
+            // Walking toward a person: one tap, quickening. Which generator
+            // carries it is part of the message — somebody eight metres off is
+            // a tick, somebody at arm's length is a thump.
+            tap(intensity)
+        case "pulseHazard":
+            // An obstacle: two quick taps, every time. The rate says how close
+            // it is and the doubling says what it is, because a hazard and a
+            // person used to feel identical in the hand at the same range — the
+            // screen could tell them apart and the operator could not, which is
+            // backwards, since the hand is what they have while they are
+            // looking at the room.
+            tap(intensity)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(85))
+                self?.tap(intensity)
+            }
         case "onTarget":
             // Landing on the target is a detent, not an event — the same feel
             // a picker gives when it clicks into a value.

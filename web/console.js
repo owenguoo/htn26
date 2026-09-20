@@ -212,11 +212,12 @@ function renderControls() {
   s.className = quiet ? 'empty' : victims.length ? 'status found' : 'status';
   renderFoundList(victims);
   renderTeam();
+  renderRadio();
   renderThreats();
   renderLive(victims, t);
   renderPeople(st.search?.people);
   $('#respN').textContent = t ? t.respondersWanted : respondersPref;
-  $('#lookingFor').textContent = st.lookingFor ? `Looking for: ${st.lookingFor}` : '';
+  $('#lookingFor').textContent = st.lookingFor ? `Phones are told: ${st.lookingFor}` : '';
   // Before anyone has searched, every sector holds the same share and the "most
   // likely" one is whichever way the rounding fell. Say nothing until the map has
   // actually picked a favourite.
@@ -228,6 +229,7 @@ function renderControls() {
   const m = st.mission || {};
   renderAutonomy(m);
   $('#candBtn').disabled = st.search?.mode === 'real';
+  $('#candMarkerBtn').disabled = st.search?.mode === 'real' || !st.marker;  // TEMPORARY
   $('#candBtn').textContent = hidden.length ? 'Add another' : 'Place candidate';
   $('#candClear').hidden = !t || st.search?.mode === 'real';
   // Mock people may not be scattered through a search for a real one — the hub
@@ -364,6 +366,48 @@ function renderFoundList(victims) {
     return `<div class="found-row"><span class="who">${teamFull(v) ? '✓' : '→'} ${escapeHtml(v.label || `Person ${v.id}`)}</span>`
       + `<span>${escapeHtml(detail)}</span></div>`;
   }).join('');
+}
+
+// The line every phone shows is not a second thing to type: it is the roster,
+// written out. Each person contributes their name and, if the operator gave
+// one, how to recognise them; the hub clamps the result to 80 characters.
+let lookingForSent = null;
+
+function lookingForLine(people = []) {
+  return people.map((p) => p.note ? `${p.label} (${p.note})` : p.label).join(' · ').slice(0, 80);
+}
+
+function pushLookingFor(people) {
+  const text = lookingForLine(people);
+  const first = lookingForSent === null;
+  if (first) lookingForSent = st?.lookingFor ?? '';
+  // An empty roster at load means the console has nothing to say yet, not that
+  // the line should be cleared — Mission Control can set it too.
+  if (first && !people.length) return;
+  if (text === lookingForSent) return;
+  lookingForSent = text;
+  send({ type: 'looking_for', text });
+}
+
+// Radio: everything a searcher has said out loud. The phones transcribe speech
+// and the hub files it in the planner log as a quoted line; this pulls those
+// out so a voice from the room is a channel of its own rather than something
+// that scrolls past between two planner notes.
+const SAID = '🎙';
+let radioKey = '';
+
+function renderRadio() {
+  const said = (st.planner?.log || []).filter((e) => e.text.startsWith(SAID));
+  $('#radioCount').textContent = said.length ? `${said.length} heard` : '';
+  const key = JSON.stringify(said);
+  if (key === radioKey) return;
+  radioKey = key;
+  $('#radio').innerHTML = said.length ? [...said].reverse().slice(0, 6).map((e) => {
+    const p = e.phoneId && phones.get(e.phoneId);
+    const when = new Date(e.t).toLocaleTimeString([], { hour12: false });
+    return `<div class="say"><span class="who">${p ? `#${p.index}` : '·'}</span>`
+      + `<div><div class="text">${escapeHtml(e.text.slice(SAID.length).trim())}</div><time>${when}</time></div></div>`;
+  }).join('') : '<div class="empty">Nothing heard yet</div>';
 }
 
 // The rescue team: one row per phone, said as a person rather than a camera.
@@ -867,7 +911,8 @@ function removePhone(p) {
 let logSince = 0;
 
 function renderLog() {
-  const log = [...(st.planner?.log || [])].filter((e) => e.t > logSince).reverse().slice(0, 5);
+  const log = [...(st.planner?.log || [])]
+    .filter((e) => e.t > logSince && !e.text.startsWith(SAID)).reverse().slice(0, 5);
   if (!log.length) { $('#log').innerHTML = '<div class="empty">Nothing yet</div>'; return; }
   $('#log').innerHTML = log.map((e) => {
     const p = e.phoneId && phones.get(e.phoneId);
@@ -1074,7 +1119,7 @@ $('#resetCancel').addEventListener('click', () => $('#resetConfirm').close());
 $('#resetGo').addEventListener('click', () => {
   $('#resetConfirm').close();
   logSince = (st?.t ?? Date.now()) + 1000;
-  if (st?.planner) { st.planner.log = []; renderLog(); }
+  if (st?.planner) { st.planner.log = []; renderLog(); renderRadio(); }
   if (st?.search?.mode === 'rehearsal') send({ type: 'target', remove: true });
   send({ type: 'reset_coverage' });
   send({ type: 'phase', phase: IDLE_PHASE, restart: true });
@@ -1085,6 +1130,13 @@ $('#resetGo').addEventListener('click', () => {
 // search stays a separate press, exactly as it is for a hand-placed candidate.
 $('#simBtn').addEventListener('click', () => send({ type: 'simulate' }));
 $('#candBtn').addEventListener('click', addCandidate);
+// TEMPORARY (demo shortcut): hide a test candidate exactly on the printed
+// marker, so a phone pointed at the marker has somebody to find there.
+$('#candMarkerBtn').addEventListener('click', () => {
+  const m = st?.marker;
+  if (!m) return;
+  send({ type: 'target', responders: respondersPref, x: m.x, y: m.y });
+});
 $('#candClear').addEventListener('click', () => send({ type: 'target', remove: true }));
 $('#respMinus').addEventListener('click', () => setResponders(-1));
 $('#respPlus').addEventListener('click', () => setResponders(+1));
@@ -1809,6 +1861,7 @@ function clearReferencePreview() {
   $('#referencePreview').hidden = true;
   $('#personChoices').replaceChildren();
   $('#personName').value = '';
+  $('#personNote').value = '';
   $('#referenceFile').value = '';
 }
 
@@ -1818,8 +1871,11 @@ function renderPeople(people = []) {
   if (key === listMemo.people) return;
   listMemo.people = key;
   $('#peopleRoster').innerHTML = people.map((person) =>
-    `<div class="person-row"><span class="who">${escapeHtml(person.label)}</span><span class="spacer"></span>`
+    `<div class="person-row"><span class="who">${escapeHtml(person.label)}</span>`
+    + (person.note ? `<span class="note">${escapeHtml(person.note)}</span>` : '')
+    + `<span class="spacer"></span>`
     + `<button type="button" data-person="${escapeHtml(person.id)}">Remove</button></div>`).join('');
+  pushLookingFor(people);
   $('#peopleCount').textContent = people.length ? `${people.length} being searched for` : '';
 }
 
@@ -1976,7 +2032,8 @@ function uploadReferencePhoto(file) {
         // the searchers' phones, which is why it is worth asking for.
         const named = $('#personName').value.trim();
         const params = new URLSearchParams({box: person.box.join(','),
-                                            label: named || `Person ${roster.length + 1}`});
+                                            label: named || `Person ${roster.length + 1}`,
+                                            note: $('#personNote').value.trim()});
         if (roster.length) params.set('add', '1');
         await searchApi(`/api/search/reference?${params}`, {method: 'PUT', headers: {'Content-Type': 'image/jpeg'}, body: blob});
         if (st?.search) st.search.sightings = [];
