@@ -78,6 +78,44 @@ class VisualTests(unittest.TestCase):
         self.assertEqual(len(reachable(graph(archive), 'k0')), 3)
         self.assertEqual(selector.status()['waitingForOverlap'], 0)
 
+    def test_disconnected_sweep_replaces_stalled_initial_seed(self):
+        selector = VisualSelector()
+        roots = [frame(i) | {'jpeg': view(texture(2), i*40)} for i in range(4)]
+        archive, _, _ = selector.choose({'a': roots}, [], set(), bootstrap_min=6)
+        for i in range(6):
+            candidate = frame(i+4) | {'jpeg': view(texture(30), i*40)}
+            archive, added, _ = selector.choose({'a': [candidate]}, archive, set(), bootstrap_min=6)
+            if i < 5:
+                self.assertEqual(len(archive), 4)
+        self.assertEqual({c['id'] for c in archive}, {f'k{i}' for i in range(4,10)})
+        self.assertEqual(reachable(graph(archive), archive[0]['id']), {c['id'] for c in archive})
+        self.assertEqual(len(added), 6)
+        self.assertEqual({c['id'] for c in selector.staged}, {f'k{i}' for i in range(4)})
+        self.assertEqual(selector.status()['bootstrap'], {'views':6, 'deferredViews':4})
+        self.assertGreater(selector.status()['overlapChecks']['Verified overlap'], 0)
+
+    def test_bootstrap_never_replaces_protected_or_established_seed(self):
+        for enabled, protected, root_count in [(None, set(), 1), (6, {'k0'}, 1), (6, set(), 6)]:
+            selector = VisualSelector()
+            roots = [frame(i) | {'jpeg':view(texture(2),i*40)} for i in range(root_count)]
+            archive, _, _ = selector.choose({'a':roots}, [], set())
+            sweep = [frame(i+10) | {'jpeg':view(texture(30),i*40)} for i in range(7)]
+            archive, added, _ = selector.choose({'a':sweep},archive,protected,bootstrap_min=enabled)
+            self.assertEqual(len(archive),root_count)
+            self.assertEqual(added,[])
+            self.assertIsNone(selector.bootstrap)
+
+    def test_bootstrap_requires_distinct_connected_views(self):
+        for repeated in (True, False):
+            selector = VisualSelector()
+            archive, _, _ = selector.choose({'a':[frame(0)|{'jpeg':jpeg(texture(2))}]},[],set())
+            candidates = [frame(i+1)|{'jpeg':view(texture(30 if repeated else 30+i), i if repeated else 0)}
+                          for i in range(8)]
+            archive, added, _ = selector.choose({'a':candidates},archive,set(),bootstrap_min=6)
+            self.assertEqual(len(archive),1)
+            self.assertEqual(added,[])
+            self.assertIsNone(selector.bootstrap)
+
     def test_window_keeps_multiple_distinct_angles(self):
         selector = VisualSelector()
         frames = [frame(i) | {'jpeg': view(texture(), shift)}
@@ -190,6 +228,22 @@ class MappingCaptureTests(unittest.IsolatedAsyncioTestCase):
     def send_scan(self, image=None):
         self.hub.on_frame(self.phone, pack({'type': 'frame', 'scanKeyframe': True, 'heading': 20}, image or self.image))
         self.phone.scan_frame['at'] -= 1200
+
+    async def test_bootstrap_replaces_pending_ids_and_triggers_first_build(self):
+        for i in range(4):
+            self.send_scan(view(texture(2), i*40))
+            self.mapper.sample_times.clear()
+            await self.mapper.sample()
+        original = set(self.mapper.pending)
+        self.assertEqual(len(original), 4)
+        for i in range(6):
+            self.send_scan(view(texture(30), i*40))
+            self.mapper.sample_times.clear()
+            await self.mapper.sample()
+        self.assertEqual(len(self.mapper.keyframes), 6)
+        self.assertEqual(self.mapper.pending, {c['id'] for c in self.mapper.keyframes})
+        self.assertFalse(original & self.mapper.pending)
+        self.assertTrue(self.mapper.ready_to_rebuild(now_ms()))
 
     async def test_preview_does_not_replace_scan_capture_pose(self):
         self.send_scan()

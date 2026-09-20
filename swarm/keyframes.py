@@ -27,6 +27,8 @@ class VisualSelector:
         self.matcher = cv2.BFMatcher(cv2.NORM_L2)
         self.staged = []
         self.counts = Counter()
+        self.match_counts = Counter()
+        self.bootstrap = None
         self.events = deque(maxlen=100)
 
     def record(self, frame, outcome):
@@ -36,7 +38,8 @@ class VisualSelector:
 
     def status(self):
         return {"counts": dict(self.counts), "waitingForOverlap": len(self.staged),
-                "recent": list(self.events)}
+                "recent": list(self.events), "overlapChecks": dict(self.match_counts),
+                "bootstrap": self.bootstrap}
 
     def describe(self, jpeg):
         # Match only resized grayscale copies; never send these copies to VGGT.
@@ -65,12 +68,15 @@ class VisualSelector:
                 'sharp': sharp, 'hash': hashlib.sha256(jpeg).hexdigest()}, None
 
     def compare(self, a, b):
+        def result(reason, strength=0., duplicate=False):
+            self.match_counts[reason] += 1
+            return strength, duplicate
         if a['hash'] == b['hash']:
-            return 1., True
+            return result('Identical image', 1., True)
         pairs = self.matcher.knnMatch(a['desc'], b['desc'], k=2)
         matches = [p for pair in pairs if len(pair) == 2 for p, q in [pair] if p.distance < .75 * q.distance]
         if len(matches) < 20:
-            return 0., False
+            return result('Too few descriptor matches')
         p = a['points'][[m.queryIdx for m in matches]]
         q = b['points'][[m.trainIdx for m in matches]]
         _, mask = cv2.findHomography(p, q, cv2.RANSAC, 3., maxIters=600, confidence=.99)
@@ -84,18 +90,18 @@ class VisualSelector:
                 if e.sum() >= 24 and e.mean() >= .6 and e.sum() > good.sum():
                     good = e
         if good.sum() < 16 or good.mean() < .4:
-            return 0., False
+            return result('Geometry verification failed')
         p, q = p[good] / a['size'], q[good] / b['size']
         # A moving hand or one repeated logo should not establish room overlap.
         for pts in (p, q):
             cells = np.clip((pts * 4).astype(int), 0, 3)
             if len(np.unique(cells, axis=0)) < 3 or np.prod(np.ptp(pts, axis=0)) < .08:
-                return 0., False
+                return result('Matches cover too little image area')
         strength = float(good.sum() / min(len(a['points']), len(b['points'])))
         duplicate = strength > .3 and np.percentile(np.linalg.norm(p - q, axis=1), 90) < .025
-        return strength, bool(duplicate)
+        return result('Duplicate view' if duplicate else 'Verified overlap', strength, bool(duplicate))
 
-    def choose(self, groups, archive, protected):
+    def choose(self, groups, archive, protected, bootstrap_min=None):
         """Return accepted frames and updated archive; never mutate input records."""
         archive = [dict(k) for k in archive]
         for index, k in enumerate(archive):
@@ -185,6 +191,63 @@ class VisualSelector:
                 progress = True
             pool = remaining
             if not progress:
+                break
+        # Before the first reconstruction only, a disconnected but coherent sweep
+        # can replace an undersized seed. Never mix disconnected coordinate groups.
+        if bootstrap_min and not protected and len(archive) < bootstrap_min:
+            remaining_ids = {c['id'] for c in pool}
+            edges = {i: waiting_edges[i] & remaining_ids for i in remaining_ids}
+            components = []
+            while remaining_ids:
+                component = reachable(edges, min(remaining_ids))
+                remaining_ids -= component
+                if len(component) >= bootstrap_min:
+                    components.append(component)
+            components.sort(key=lambda ids: (-len(ids), min(ids)))
+            for component in components:
+                candidates = [c for c in pool if c['id'] in component]
+                seed = []
+                for c in candidates:
+                    links, duplicate = {}, False
+                    for other in seed:
+                        cached = c.setdefault('_matches', {})
+                        if other['id'] not in cached:
+                            cached[other['id']] = self.compare(c['_visual'], other['_visual'])
+                        strength, same = cached[other['id']]
+                        duplicate |= same
+                        if strength:
+                            links[other['id']] = strength
+                    if not duplicate:
+                        seed.append(c | {'links': links, 'quality': round(c['_visual']['sharp'], 2)})
+                    if len(seed) >= MAX_BATCH:
+                        break
+                # Removing near-duplicates can disconnect a chain: recheck it.
+                seed_edges = graph(seed)
+                seed_ids = set(seed_edges)
+                connected = []
+                while seed_ids:
+                    ids = reachable(seed_edges, min(seed_ids))
+                    seed_ids -= ids
+                    if len(ids) >= bootstrap_min:
+                        connected.append(ids)
+                if not connected:
+                    continue
+                chosen = max(connected, key=lambda ids: (len(ids), min(ids)))
+                old = archive
+                archive = [c | {'links': {i:v for i,v in c['links'].items() if i in chosen}}
+                           for c in seed if c['id'] in chosen]
+                accepted = list(archive)
+                pool = [c for c in pool if c['id'] not in chosen] + old
+                # Retain the original seed for a future bridge, within normal bounds.
+                old_edges = graph(old)
+                for c in old:
+                    c.setdefault('_stagedAt', now)
+                    by_id[c['id']] = c
+                    waiting_edges[c['id']] = old_edges[c['id']]
+                    self.record(c, 'Deferred initial seed')
+                self.bootstrap = {'views': len(archive), 'deferredViews': len(old)}
+                for c in archive:
+                    hints[c['pid']] = 'Starting map from a connected sweep'
                 break
         # Evict whole stale components before cutting into a connected sweep.
         remaining_ids = {c['id'] for c in pool}

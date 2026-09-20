@@ -36,3 +36,18 @@ No pose-only or unconditional image admission is used. This preserves connecting
 views through longer sweeps without admitting unrelated rooms or unbounded queues.
 Expired images are not recoverable from the accepted-frame archive; testing this
 change on a previously stalled area requires capturing that sweep again.
+
+## Recovering a stalled first scan
+
+Before a map exists, a seed with fewer than six accepted views can be replaced
+by a waiting group of at least six distinct, visually connected views. The group
+must pass the same sharpness, feature matching, geometry and spatial coverage
+checks. Near-duplicates do not count toward the six views. Original seed views
+stay in the bounded waiting buffer for a later bridge; disconnected groups are
+never combined for reconstruction. This fallback is disabled while inference is
+running or once a map/anchors exist.
+
+`scan.selection.overlapChecks` counts uncached image-pair checks by failure
+reason (descriptor matches, geometry, spatial coverage) and successful overlap.
+These are pair counts, not rejected-frame counts. `scan.selection.bootstrap`
+reports the replacement group's size and how many old views were deferred.

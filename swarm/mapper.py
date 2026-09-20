@@ -253,7 +253,8 @@ class Mapper:
         start = time.monotonic()
         # CPU image decoding/matching must not interrupt phone/WebSocket traffic.
         archive, added, hints = await asyncio.to_thread(
-            self.selector.choose, groups, list(self.keyframes), set(self.previous_batch))
+            self.selector.choose, groups, list(self.keyframes), set(self.previous_batch),
+            MIN_FRAMES if not (self.last or self.sections or self.placed or self.running) else None)
         if gen != self.generation:
             return
         self.selection_ms = round((time.monotonic() - start) * 1000, 1)
