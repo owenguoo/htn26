@@ -68,12 +68,36 @@ class Hazards:
         if revision != self.revision:
             self.revision = revision
             self.sequences.clear()
+        for item in self.observations.values():
+            # A staged hazard never goes stale: every consumer works staleness out from
+            # `t`, and nothing is coming to re-observe this one. Rolling it forward here
+            # is one line in the one place, rather than an `if simulated` in each of the
+            # console's drawing code, the phones' world message and whatever comes next.
+            if item['phoneId'] == 'sim':
+                item['t'] = now
         self.observations = {k: v for k, v in self.observations.items() if v['hits'] >= 2 or now - v['t'] <= 15000}
         return [dict(v) for v in self.observations.values() if v['hits'] >= 2]
 
     def reset(self) -> None:
         self.observations.clear()
         self.sequences.clear()
+
+    def simulate(self, spots: list[tuple[float, float]], now: float) -> list[dict]:
+        """Mock chairs for a drill, at positions someone else chose.
+
+        `hits` starts at 2 because `snapshot` only publishes an object that has been
+        seen twice — the second sighting that would normally confirm a real chair is
+        never coming for this one. `approximate` stays true for the same reason it is
+        true of a real observation: this is a flat-floor guess, not a survey.
+        """
+        out = []
+        for x, y in spots:
+            self.ids += 1
+            item = dict(id=f'object-{self.ids}', label='chair', x=round(x, 2), y=round(y, 2),
+                        t=now, hits=2, approximate=True, phoneId='sim')
+            self.observations[item['id']] = item
+            out.append(item)
+        return out
 
     def accept(self, result: HazardResult, search: SearchState, room: dict, now: float) -> bool:
         self.snapshot(now, search.revision)

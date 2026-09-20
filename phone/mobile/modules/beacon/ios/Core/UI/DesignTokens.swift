@@ -107,6 +107,18 @@ enum MapInk {
     static let ping = hex(0x17, 0x37, 0x26)              // '#173726', = `--fg`
     static let marker = hex(0x6b, 0x4f, 0xbb)           // `MARKER_COLOR`
 
+    /// `drawHazards()` in `web/console.js`, and the `.hazard-key` triangle in
+    /// the console's legend: a pale amber sign with a darker edge and a darker
+    /// bang again. Not `.orange`, which is what the phone used to reach for and
+    /// which is a different amber from the one on the console's map.
+    static let hazardFill = hex(0xfe, 0xf3, 0xc7)       // '#fef3c7'
+    static let hazardStroke = hex(0xb4, 0x53, 0x09)     // '#b45309'
+    static let hazardBang = hex(0x92, 0x40, 0x0e)       // '#92400e'
+    /// `drawDetectedPeople()`: a person glyph in the field's own blue, greyed
+    /// once the detection has gone stale.
+    static let detectedPerson = hex(0x25, 0x63, 0xeb)   // '#2563eb'
+    static let staleInk = hex(0x78, 0x71, 0x6c)         // '#78716c'
+
     static let markerBorder = Color.white
     static let markerShadow = hex(0x17, 0x37, 0x26).opacity(0.16)
     /// `.map-key`: `box-shadow: 0 1px 4px rgba(23,55,38,.18)`. A touch stronger

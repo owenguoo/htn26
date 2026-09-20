@@ -36,7 +36,7 @@
     .wrap { max-width: 1440px; margin: 0 auto; padding: 0 24px 40px; }
     header { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,0.94); backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
-    .bar { max-width: 1440px; margin: 0 auto; padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 12px; }
+    .bar { max-width: 1440px; margin: 0 auto; padding: 0 24px; height: 64px; display: flex; align-items: center; gap: 10px; }
     .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
     .logo img { display: block; width: 44px; height: 44px; object-fit: contain; }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -76,12 +76,39 @@
     #searchMessage { margin-top: 10px; color: var(--fg-2); font-size: 13px; }
     .analysis { padding: 12px 16px; border-top: 1px solid var(--line); }
     #analyzedFrame { max-width: 100%; max-height: 240px; display: block; margin-top: 10px; }
-    /* start / stop */
-    .phases { display: flex; align-items: center; gap: 12px; padding: 8px 0 20px; }
-    #startBtn { height: 40px; padding: 0 22px; font-size: 14px; font-weight: 500; }
-    .start-hint { color: var(--fg-2); font-size: 13px; }
-    .start-hint.ready { color: var(--accent); }
-    .timer { font: 500 20px var(--mono); letter-spacing: -0.02em; }
+    /* start / stop — the search controls live in the top bar, so the clock and
+       the buttons read as one strip instead of a second row of chrome under
+       the header. The button's own disabled state says whether the swarm is
+       ready; the marker-scanned tile says how far off it is. */
+    #startBtn { height: 34px; padding: 0 16px; font-weight: 500; }
+    .bar-clock { display: inline-flex; align-items: center; height: 34px; padding: 0 12px;
+      border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-1); }
+    .timer { font: 500 17px var(--mono); letter-spacing: -0.02em; }
+    .bar-sep { flex: none; width: 1px; height: 26px; background: var(--line); margin: 0 2px; }
+    .bar .btn svg { flex: none; }
+    .bar .btn { height: 34px; }
+    .bar .btn.icon-only { width: 34px; }
+
+    /* Live strip: one line under the bar narrating the search as it happens —
+       who was found, where, by which phone, how the responders are doing, and
+       who is still out there. Hidden until there is something to say; red the
+       moment somebody is found, so the find is visible from across the room. */
+    .live { border-top: 1px solid var(--line); background: var(--bg-1); }
+    .live-inner { max-width: 1440px; margin: 0 auto; padding: 7px 24px; min-height: 38px;
+      display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--fg-2); }
+    .live-lead { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-weight: 500; color: var(--fg); }
+    .live-lead b { font-weight: 600; }
+    .live-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+      animation: breathe 1s ease-in-out infinite; }
+    .live-aside { white-space: nowrap; }
+    .live.warn { background: #fffbeb; border-top-color: #f0d38a; }
+    .live.warn .live-inner { color: #a16207; }
+    .live.warn .live-lead { color: #92400e; }
+    .live.warn .live-dot { background: #d97706; }
+    .live.found { background: var(--red); border-top-color: var(--red); }
+    .live.found .live-inner { color: rgba(255,255,255,.85); }
+    .live.found .live-lead { color: #fff; }
+    .live.found .live-dot { background: #fff; }
 
     /* mission control */
     .mission { margin-bottom: 16px; }
@@ -192,10 +219,17 @@
       border: var(--map-marker-stroke) solid #fff;
       border-radius: 50%; background: var(--accent); box-shadow: 0 1px 4px rgba(23,55,38,.18); }
     .map-key.sighting, .map-key.rescued { background: #fff; box-shadow: none; }
-    .hazard-key { flex: 0 0 auto; width: 24px; height: 24px; }
+    /* Same box as `.map-key`, so the triangle is one of five keys of a size
+       rather than the one that shouts. Its viewBox is -12…12 while the
+       triangle only spans 22 of those 24 units, which already leaves the
+       glyph a hair smaller than the discs — as a triangle should be, since
+       it is read by its shape and not by its area. */
+    .hazard-key { flex: 0 0 auto; width: var(--map-marker-size); height: var(--map-marker-size); }
     .map-key.sighting { color: #d97706; border-color: #d97706; }
     .map-key.rescued { color: var(--red); border-color: var(--red); }
     .map-key.marker { border-radius: 5px; background: #6b4fbb; }
+    /* Grid view only: the cells a camera has actually had a good look at. */
+    .map-key.looked { border-radius: 3px; background: rgba(24,131,75,.34); border-color: rgba(24,131,75,.5); box-shadow: none; }
     /* The probability field is a scale, not a category, so its key is a ramp
        with both ends named rather than one swatch. White sits under it because
        the cleared end of the ramp is transparent over the map's white floor. */
@@ -241,7 +275,7 @@
     .found-row .who { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--fg-1); white-space: nowrap; }
     .divider { height: 1px; background: var(--line); margin: 16px -16px; }
 
-    .overview { padding: 24px 0 4px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .overview { padding: 20px 0 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
     .overview h1 { margin: 0; font-size: 24px; letter-spacing: -.03em; }
     .overview p { margin: 6px 0 0; color: var(--fg-2); }
     /* Settings: flat sections, no boxes inside boxes. A section is a heading, a
@@ -265,6 +299,17 @@
     .row-control { display: flex; align-items: center; gap: 8px; }
     .settings input[type="number"] { width: 76px; }
     @media (max-width: 560px) { .settings-body { padding: 4px 16px 18px; } }
+    /* Reset throws away the find, the coverage and every phone's marker lock,
+       and there is no undo, so it asks first. Same shell as the settings sheet,
+       sized to the question. */
+    dialog.confirm { width: min(420px, calc(100% - 32px)); padding: 20px; border: 0; border-radius: 16px;
+      background: var(--surface); color: var(--fg); box-shadow: 0 24px 80px rgba(23,55,38,.2); }
+    dialog.confirm::backdrop { background: rgba(15,35,24,.4); backdrop-filter: blur(4px); }
+    dialog.confirm h2 { margin: 0; font-size: 16px; }
+    dialog.confirm p { margin: 8px 0 0; font-size: 13px; color: var(--fg-2); }
+    .confirm-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    .btn.solid-danger { background: var(--red); border-color: var(--red); color: #fff; }
+    .btn.solid-danger:hover { background: #9c272d; border-color: #9c272d; }
     .map-column > .card > .card-h { height: auto; min-height: 48px; flex-wrap: wrap; padding: 12px 16px; }
     .map-legend { font-size: 12px; }
     #recs:not(:empty) { margin-bottom: 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
@@ -413,7 +458,12 @@
       .metrics { grid-template-columns: repeat(3, 1fr); }
       .metric:nth-child(4) { border-left: 0; }
       .metric:nth-child(n+4) { border-top: 1px solid var(--line); }
-      .phases { flex-wrap: wrap; }
+    }
+    @media (max-width: 1000px) {
+      .live-aside { display: none; }
+      .bar .slash, .bar .crumb { display: none; }
+      .bar .btn .lbl { display: none; }
+      .bar .btn:has(.lbl) { width: 34px; padding: 0; justify-content: center; }
     }
     .joinWrap { position: relative; }
     .joinPop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; display: none; width: 260px; padding: 14px;
@@ -433,11 +483,26 @@
         Beacon
       </div>
       <span class="slash">/</span>
-      <span class="muted">Console</span>
+      <span class="muted crumb">Console</span>
       <span class="spacer"></span>
-      <div class="joinWrap"><button class="btn" id="joinBtn">Join QR</button>
+      <div class="bar-clock" id="barClock" title="Time in the current phase"><span class="timer" id="timer">00:00</span></div>
+      <button class="btn primary" id="startBtn" type="button" disabled>Start search</button>
+      <span class="bar-sep" aria-hidden="true"></span>
+      <div class="joinWrap"><button class="btn" id="joinBtn" title="Show the QR phones scan to join">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M2 2.75A.75.75 0 0 1 2.75 2h3.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-.75.75h-3.5A.75.75 0 0 1 2 6.25v-3.5Zm1.5.75v2h2v-2h-2Zm5.5-.75A.75.75 0 0 1 9.75 2h3.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-.75.75h-3.5A.75.75 0 0 1 9 6.25v-3.5Zm1.5.75v2h2v-2h-2ZM2 9.75A.75.75 0 0 1 2.75 9h3.5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-.75.75h-3.5a.75.75 0 0 1-.75-.75v-3.5Zm1.5.75v2h2v-2h-2ZM9 9.75A.75.75 0 0 1 9.75 9h1.5a.75.75 0 0 1 0 1.5h-.75v.75a.75.75 0 0 1-1.5 0v-1.5Zm4 0a.75.75 0 0 1 1.5 0v3.5a.75.75 0 0 1-.75.75h-3.5a.75.75 0 0 1 0-1.5H13V9.75Z" clip-rule="evenodd"/></svg><span class="lbl">Join QR</span></button>
         <div class="joinPop" id="joinPop"><img id="joinQr" alt="Scan to join"><div class="mono" id="joinUrl"></div>
           <div class="hint">Phones scan this to join</div></div></div>
+      <button class="btn" id="settingsOpen" aria-haspopup="dialog" aria-controls="settings" title="Settings">
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M7.84 1.804A1 1 0 0 1 8.82 1h2.36a1 1 0 0 1 .98.804l.331 1.652a6.993 6.993 0 0 1 1.929 1.115l1.598-.54a1 1 0 0 1 1.186.447l1.18 2.044a1 1 0 0 1-.205 1.251l-1.267 1.113a7.047 7.047 0 0 1 0 2.228l1.267 1.113a1 1 0 0 1 .206 1.25l-1.18 2.045a1 1 0 0 1-1.187.447l-1.598-.54a6.993 6.993 0 0 1-1.929 1.115l-.33 1.652a1 1 0 0 1-.98.804H8.82a1 1 0 0 1-.98-.804l-.331-1.652a6.993 6.993 0 0 1-1.929-1.115l-1.598.54a1 1 0 0 1-1.186-.447l-1.18-2.044a1 1 0 0 1 .205-1.251l1.267-1.114a7.05 7.05 0 0 1 0-2.227L1.821 7.773a1 1 0 0 1-.206-1.25l1.18-2.045a1 1 0 0 1 1.187-.447l1.598.54A6.993 6.993 0 0 1 7.51 3.456l.33-1.652ZM10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" clip-rule="evenodd"/></svg><span class="lbl">Settings</span></button>
+      <button class="btn icon-only" id="resetSession" type="button" aria-label="Reset session" title="Clear find and coverage, and send phones back to marker scanning">
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h1.653a.75.75 0 0 0 0-1.5H3.75a.75.75 0 0 0-.75.75v3.5a.75.75 0 0 0 1.5 0v-1.68l.32.32a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.387Zm-9.9-5.24a5.5 5.5 0 0 1 9.201-2.466l.312.311h-1.653a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 .75-.75v-3.5a.75.75 0 0 0-1.5 0v1.68l-.32-.32A7 7 0 0 0 3.99 5.616a.75.75 0 1 0 1.449.387Z" clip-rule="evenodd"/></svg></button>
+    </div>
+    <div class="live" id="liveStrip" hidden>
+      <div class="live-inner">
+        <span class="live-lead"><span class="live-dot" aria-hidden="true"></span><span id="liveLead" role="status"></span></span>
+        <span class="spacer"></span>
+        <span class="live-aside" id="liveAside"></span>
+      </div>
     </div>
   </header>
 
@@ -468,19 +533,22 @@
               <div class="stepper"><button id="respMinus" aria-label="Fewer">&minus;</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
             <div class="row"><div><div class="label">Test candidates</div><div class="hint">Drop mock people on the map to rehearse finding more than one</div></div>
               <div class="row-control"><button class="btn sm" id="candClear" hidden>Clear</button><button class="btn sm primary" id="candBtn">Place candidate</button></div></div>
+            <div class="row"><div><div class="label">Simulation</div><div class="hint">A whole drill at once: one to three people to find, one to three hazards in their way, scattered at random. Replaces whatever is staged</div></div>
+              <div class="row-control"><button class="btn sm" id="simBtn">Run simulation</button></div></div>
           </div>
         </section>
       </div>
     </dialog>
 
-    <section class="phases">
-      <button class="btn primary" id="startBtn" type="button" disabled>Start search</button>
-      <span class="start-hint" id="startHint">Waiting for phones to join</span>
-      <span class="spacer"></span>
-      <button class="btn sm" id="settingsOpen" aria-haspopup="dialog" aria-controls="settings">Settings</button>
-      <button class="btn sm" id="resetSession" type="button" title="Clear find and coverage, and send phones back to marker scanning">Reset</button>
-      <span class="timer" id="timer">00:00</span>
-    </section>
+    <dialog class="confirm" id="resetConfirm" aria-labelledby="resetConfirmTitle">
+      <h2 id="resetConfirmTitle">Reset the session?</h2>
+      <p>This clears the find and the coverage map, and sends every phone back to marker
+         scanning. The search has to be started again from scratch. It cannot be undone.</p>
+      <div class="confirm-acts">
+        <button class="btn" id="resetCancel" type="button" autofocus>Cancel</button>
+        <button class="btn solid-danger" id="resetGo" type="button">Reset session</button>
+      </div>
+    </dialog>
 
     <div id="recs"></div>
     <section class="grid">
@@ -491,13 +559,14 @@
             <button class="btn sm" id="markerBtn" type="button" title="Put the printed marker where it is in the room">Place marker</button>
             <div class="map-modes" id="mapModes" role="group" aria-label="Map view">
               <button type="button" data-mode="heatmap" aria-pressed="true">Heatmap</button>
+              <button type="button" data-mode="grid" aria-pressed="false">Grid</button>
               <button type="button" data-mode="3d" aria-pressed="false">3D map</button>
             </div>
 </div>
           <div id="mapWrap"><canvas id="map" aria-label="Live search map"></canvas>
             <div class="map-scale" aria-hidden="true"><i></i><span></span></div>
             <div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
-          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span><span><svg class="hazard-key" viewBox="-12 -12 24 24" aria-hidden="true"><path d="M0 -11L11 9H-11Z" fill="#fef3c7" stroke="#b45309" stroke-width="2"/><path d="M-1 -3h2v6h-2zM-1 5h2v2h-2z" fill="#92400e"/></svg>Hazard</span><span id="heatLegend">Cleared<i class="heat-scale"></i>Likely here</span></div>
+          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span><span><svg class="hazard-key" viewBox="-12 -12 24 24" aria-hidden="true"><path d="M0 -11L11 9H-11Z" fill="#fef3c7" stroke="#b45309" stroke-width="2"/><path d="M-1 -3h2v6h-2zM-1 5h2v2h-2z" fill="#92400e"/></svg>Hazard</span><span id="heatLegend">Cleared<i class="heat-scale"></i>Likely here</span><span id="gridKey" hidden><i class="map-key looked"></i>Camera has looked here</span></div>
           <p id="mapStatus" role="status"></p>
           <div class="scan-controls">
             <button type="button" id="scanToggle" aria-pressed="false">Start scan</button>

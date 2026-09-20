@@ -13,6 +13,7 @@ import itertools
 import json
 import math
 import os
+import random
 import re
 import socket
 import struct
@@ -34,7 +35,7 @@ from .control import Settings, Auth, install_routes, load_env
 from .coverage import Coverage
 from .planner import Planner
 from .sightings import FOUND_CONF, PERSON_HEIGHT_M, POSSIBLE_CONF, MockDetector, Sightings
-from .target import Target
+from .target import Target, scatter
 from .mapper import Mapper
 from .hazards import Hazards, HazardResult, ObjectDetection, floor_position
 from .detection import normalize_box
@@ -634,6 +635,34 @@ class Hub:
     def new_search(self) -> None:
         self.sightings.reset()
 
+    # A drill is a handful of people, not a crowd: past three the room stops being a
+    # search and starts being a queue, and with three responders sent per find there
+    # is nobody left to send to the third one. Both counts are capped here.
+    SIM_MAX = 3
+
+    def simulate(self, rng: random.Random | None = None) -> tuple[int, int]:
+        """Lay out a rehearsal: a random few people to find, and a random few chairs
+        in the way. Replaces whatever was staged before, so pressing it twice gives a
+        fresh drill rather than a fuller one.
+
+        Only the *scene* is set. Starting the search stays the operator's press, the
+        same as it is for a hand-placed candidate.
+        """
+        rng = rng or random.Random()
+        self.target.remove()
+        self.hazards.reset()
+        people = scatter(ROOM, rng.randint(1, self.SIM_MAX), rng)
+        for x, y in people:
+            self.target.place(x, y)
+        # Tighter spacing than the people: chairs cluster in real rooms, and they only
+        # have to be distinguishable on the map.
+        chairs = scatter(ROOM, rng.randint(1, self.SIM_MAX), rng, taken=people, spacing=1.5)
+        self.hazards.simulate(chairs, now_ms())
+        self.new_search()
+        self.planner.note(f"Simulation: {len(people)} to find, {len(chairs)} hazard"
+                          f"{'' if len(chairs) == 1 else 's'} placed")
+        return len(people), len(chairs)
+
     async def enter_real_search(self) -> None:
         self.search.mode = "real"
         self.target.remove()
@@ -1128,6 +1157,14 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                         hub.new_search()
                     if "responders" in msg:
                         hub.target.set_responders_wanted(int(msg["responders"]))
+            elif msg.get("type") == "simulate":
+                # Same guard as a hand-placed candidate: mock people may not be
+                # scattered through a search for a real one.
+                if hub.search.mode != "rehearsal":
+                    await sub.send_json({"error": "simulations require explicit rehearsal mode"})
+                    continue
+                victims, hazards = hub.simulate()
+                await sub.send_json({"simulated": {"victimCount": victims, "hazardCount": hazards}})
             elif msg.get("type") == "marker":
                 hub.set_marker(msg)
             elif msg.get("type") == "phase":

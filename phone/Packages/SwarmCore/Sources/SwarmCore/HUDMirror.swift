@@ -47,6 +47,54 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
         public var r: Double
         public var label: String
         public var color: String
+        /// Outline only. A filled diamond is what a *find* looks like, so a
+        /// teammate gets a hollow one — a searcher must never be mistaken for
+        /// the person being searched for, at a glance, from across a field.
+        /// Additive: a renderer that has never heard of it fills as before.
+        public var hollow = false
+    }
+
+    /// The one thing this phone is being sent to, named and measured, kept in a
+    /// fixed corner so the operator always knows where to look for it.
+    ///
+    /// The banner already says what to do *right now* ("Turn right 40°") and
+    /// rewrites itself every tick; it is an instruction, not a standing answer
+    /// to "who am I walking to and how far is it". Pre-formatted, like `banner`
+    /// and `lookingFor`, so the two renderers cannot round the same metre two
+    /// different ways.
+    public struct Objective: Sendable, Equatable, Encodable {
+        public var title: String
+        public var detail: String
+        /// "alert", "ok" or "warn" — the console's three pill colours, taken
+        /// straight from the banner so the card and the banner never disagree.
+        public var tone: String
+    }
+
+    /// A standing wash of colour over the whole screen saying what situation
+    /// this operator is in. Not an event — a state, held for as long as it is
+    /// true.
+    ///
+    /// The flash announces; this remains. Somebody being found and you being
+    /// one of the people on them lasts minutes, and the screen should go on
+    /// saying so without being told again. Translucent by contract: the
+    /// renderers paint it at the bezel and leave the middle clear, because the
+    /// operator is walking through a crowded room while it is up.
+    public struct Ambient: Sendable, Equatable, Encodable {
+        /// "find" — on the way to somebody, pulsing.
+        /// "with" — standing with them, steady.
+        /// "hazard" — about to walk into something.
+        public var kind: String
+        public var color: String
+        /// 0…1, how hard to paint the bezel.
+        public var intensity: Double
+    }
+
+    /// Something in the way. Amber, because the colour language of this HUD is
+    /// three words long: red is a person to reach, green is you are with them,
+    /// amber is something between you and them.
+    public struct Warning: Sendable, Equatable, Encodable {
+        public var text: String
+        public var color: String
     }
 
     public struct SoundEdge: Sendable, Equatable, Encodable {
@@ -65,6 +113,13 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
     public var screen: [Double]?
     public var dets: [HubDetectionBox]?
     public var soundEdge: SoundEdge?
+    public var objective: Objective?
+    public var warning: Warning?
+    public var ambient: Ambient?
+    /// "142 m² swept · 2nd of 5 · room 46%". One pre-formatted line: the hub
+    /// has been sending every phone its own swept area and rank since the
+    /// beginning and nothing has ever shown it to the person doing the walking.
+    public var stats: String?
 }
 
 /// The words on the lobby / calibrate / end cards. Here rather than in the
@@ -118,20 +173,27 @@ public enum PhaseCardText {
         }
     }
 
-    /// Shown in the calibrate card's place for a couple of seconds once this
-    /// phone locks on, before the card gets out of the way.
-    ///
-    /// `covers(_:alignment:)` drops the prompt the instant alignment arrives,
-    /// which is correct — there is nothing left to do — but it meant the
-    /// operator's reward for finally getting the marker to lock was a
-    /// full-screen card silently disappearing. They could not tell whether it
-    /// had worked or whether the app had moved on for some other reason. The
-    /// prompt asked for something; this is the card answering.
-    public static let confirmedTitle = "Calibrated"
-    public static let confirmedDetail = "You're located. The operator starts the search."
+    // No confirmed ("Calibrated") state here on purpose. A lock is already
+    // announced by the full-screen green `FlashCue` (`OverlayEngine`'s
+    // `lockFlashText`), and holding the card open to say the same word again
+    // meant the operator read "Calibrated" twice — once over the whole screen,
+    // once on a card — for one event. The card's job ends when the prompt is
+    // answered, so it gets out of the way and lets the flash do the confirming.
 }
 
 public enum HUDMirror {
+    // The colour language, in three words. Everything on this HUD that means
+    // something to an operator mid-search resolves to one of them, and nothing
+    // else is allowed to wear them:
+    //
+    //   red   `alertColor`    — a person to reach. Go.
+    //   green `onTargetColor` — you are on them, or with them. Stay.
+    //   amber `hazardColor`   — something between you and where you are going.
+    //
+    // Everything else on screen (the stage chip, pings, the alignment marker,
+    // teammates) is navigation furniture and wears its own map colour, so the
+    // three that mean *act now* stay scarce enough to still mean it.
+
     // The web phone's palette (`web/phone.js`), so a native phone and a browser
     // phone look the same on the console and to each other.
     static let stageColor = "#4cc9f0"
@@ -140,6 +202,9 @@ public enum HUDMirror {
     static let directedColor = "#4cc9f0"
     static let turnColor = "#ffb703"
     static let pingColor = "#ffd166"
+    /// The console's `warn` pill. A hazard and a turn-you-have-not-made-yet are
+    /// the same kind of thing — caution, not emergency — so they share it.
+    static let hazardColor = "#ffb703"
     public static let soundColor = "#ff3b30"
     /// `MARKER_COLOR` in `web/console.js`, which is what the map — both the
     /// console's and the phone's — fills the alignment marker with. Before the
@@ -150,10 +215,146 @@ public enum HUDMirror {
     /// the colour the map already gives it.
     static let markerColor = "#6b4fbb"
 
+    /// `PALETTE` in `swarm/hub.py`, indexed the way `Phone.color` indexes it, so
+    /// a teammate's chip on the tape is the colour the console already paints
+    /// that phone on its map and its feed wall. One person, one colour, three
+    /// surfaces.
+    static let peerPalette = ["#4cc9f0", "#f72585", "#b8f35a", "#ffb703", "#9b5de5", "#00f5d4",
+                              "#fb5607", "#3a86ff", "#ff006e", "#8ac926", "#ffd166", "#06d6a0"]
+    /// The chip for teammates who are off the tape entirely — a count, not a
+    /// person, so it does not wear anybody's colour.
+    static let teamMutedColor = "#9aa3b2"
+
+    // How a crowd of teammates is thinned. A 120° tape fits about a dozen chips;
+    // five phones all reporting at once is enough to make it unreadable.
+    /// Chips closer together than this become one.
+    static let teamMergeDegrees = 8.0
+    /// Teammates further off-axis than this get counted, not drawn.
+    static let teamTapeHalfSpan = 55.0
+    /// Where the two "and N more that way" chips sit.
+    static let teamEdgeDegrees = 58.0
+    /// At most this many teammate chips, nearest to where the operator is
+    /// already looking.
+    static let teamTapeLimit = 4
+    /// No diamond on somebody standing next to you.
+    static let teamNearMetres = 2.0
+    static let teamARLimit = 3
+
     /// The chip colour for a ping cue: the alignment marker keeps its map
     /// colour, everything else is a ping.
     static func cueColor(_ cue: PingCue) -> String {
         cue.label == "MARKER" ? markerColor : pingColor
+    }
+
+    static func peerColor(index: Int) -> String {
+        peerPalette[((index % peerPalette.count) + peerPalette.count) % peerPalette.count]
+    }
+
+    /// Teammate chips for the compass tape, thinned so five phones stay legible.
+    ///
+    /// Chips within `teamMergeDegrees` of each other become one (`#2#4 9m`); the
+    /// tape keeps the `teamTapeLimit` nearest to where the operator is already
+    /// looking; and anyone outside `teamTapeHalfSpan` is *counted* into a single
+    /// chip on that edge rather than clamped to the rail.
+    ///
+    /// Not clamping is the deliberate part. Clamping is right for a find — one
+    /// thing, and you have to turn to it — and wrong for people, where three
+    /// teammates behind you stack on the same pixel and say nothing. "Where is
+    /// everyone" is the mini-map's question, not the tape's.
+    static func teamMarkers(_ teammates: [TeammateCue]) -> [HubHUDMirror.Compass.Marker] {
+        let placed = teammates.compactMap { mate -> (off: Double, metres: Double, index: Int)? in
+            guard let bearing = mate.bearingRadians else { return nil }
+            return (Double(bearing) * 180 / .pi, Double(mate.distance ?? 0), mate.index)
+        }
+        var groups: [[(off: Double, metres: Double, index: Int)]] = []
+        for mate in placed.filter({ abs($0.off) <= teamTapeHalfSpan }).sorted(by: { $0.off < $1.off }) {
+            if let anchor = groups.last?.first, mate.off - anchor.off <= teamMergeDegrees {
+                groups[groups.count - 1].append(mate)
+            } else {
+                groups.append([mate])
+            }
+        }
+        var chips = groups.map { group -> HubHUDMirror.Compass.Marker in
+            let off = group.reduce(0.0) { $0 + $1.off } / Double(group.count)
+            let nearest = group.map { $0.metres }.min() ?? 0
+            let who = group.map { "#\($0.index)" }.joined()
+            // One teammate wears their own colour; a merged chip is more than
+            // one person, so it cannot claim any single one of them.
+            let color = group.count == 1 ? peerColor(index: group[0].index) : teamMutedColor
+            return .init(off: off, label: String(format: "%@ %.0fm", who, nearest),
+                         color: color, big: false)
+        }
+        if chips.count > teamTapeLimit {
+            chips = Array(chips.sorted { abs($0.off) < abs($1.off) }.prefix(teamTapeLimit))
+        }
+        for behind in [-1.0, 1.0] {
+            let count = placed.filter {
+                behind < 0 ? $0.off < -teamTapeHalfSpan : $0.off > teamTapeHalfSpan
+            }.count
+            guard count > 0 else { continue }
+            chips.append(.init(off: behind * teamEdgeDegrees,
+                               label: behind < 0 ? "◀ \(count)" : "\(count) ▶",
+                               color: teamMutedColor, big: false))
+        }
+        return chips
+    }
+
+    /// What the corner card calls the thing you are being sent to.
+    ///
+    /// The hub packs it into the guide's `sector` field, and what it means
+    /// depends on the kind: a find team's is the person (`swarm/target.py` sends
+    /// the victim's label upper-cased, or "CANDIDATE" when there is only one),
+    /// a planner sweep's is a grid square, an operator's `look` is whatever they
+    /// typed. Labels are used as the hub wrote them — the banner does the same,
+    /// and shouting an operator's free text back at them helps nobody.
+    static func objectiveTitle(kind: String, label: String?) -> String {
+        let name = (label ?? "").trimmingCharacters(in: .whitespaces)
+        switch kind {
+        case "respond":
+            guard !name.isEmpty, name != "CANDIDATE" else { return "Person found" }
+            return name.capitalized
+        case "go": return name.isEmpty ? "Walk over" : "Walk to \(name)"
+        case "look": return name.isEmpty ? "Look over there" : "Look at \(name)"
+        default: return name.isEmpty ? "Sweeping" : "Sweeping \(name)"
+        }
+    }
+
+    /// The contribution line, worded and rounded here because neither renderer
+    /// gets to phrase it — an ordinal written twice in two languages is an
+    /// ordinal that will eventually disagree with itself.
+    static func statsLine(squareMetres: Double?, rank: Int?, of: Int?, searched: Double?) -> String? {
+        var parts: [String] = []
+        if let squareMetres, squareMetres >= 1 {
+            parts.append(String(format: "%.0f m² swept", squareMetres))
+        }
+        // Rank means nothing on your own, and reads as a taunt rather than a
+        // nudge when there is nobody to be ahead of.
+        if let rank, let of, of > 1 {
+            parts.append("\(ordinal(rank)) of \(of)")
+        }
+        if let searched {
+            parts.append(String(format: "room %.0f%%", searched * 100))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// 1st, 2nd, 3rd, 4th — and 11th, 12th, 13th, which are the ones a naive
+    /// last-digit rule gets wrong.
+    static func ordinal(_ n: Int) -> String {
+        switch (n % 100, n % 10) {
+        case (11...13, _): "\(n)th"
+        case (_, 1): "\(n)st"
+        case (_, 2): "\(n)nd"
+        case (_, 3): "\(n)rd"
+        default: "\(n)th"
+        }
+    }
+
+    static func objectiveDetail(offsetDegrees: Double, distance: Double?, onTarget: Bool) -> String {
+        let turn = onTarget ? "straight ahead"
+            : String(format: "%.0f° %@", abs(offsetDegrees), offsetDegrees < 0 ? "left" : "right")
+        guard let distance else { return turn }
+        return String(format: "%.0f m · %@", distance, turn)
     }
 
     /// - Parameters:
@@ -191,6 +392,22 @@ public enum HUDMirror {
         if let soundOffset {
             markers.append(.init(off: soundOffset, label: "SOUND", color: soundColor, big: true))
         }
+        // Being walked to somebody, or having just heard them, is a
+        // one-instruction moment: the team stands down off the tape and out of
+        // the view so nothing competes with it.
+        let showTeam = !responding && soundOffset == nil
+        if showTeam {
+            markers += teamMarkers(overlay.teammates)
+        }
+        // A hazard keeps its chip even while responding. Everything else stands
+        // down for a find; the thing you are about to trip over on the way to
+        // that find is the one exception.
+        let hazard = overlay.nearestHazard
+        if let hazard, let bearing = hazard.bearingRadians {
+            markers.append(.init(off: Double(bearing) * 180 / .pi,
+                                 label: String(format: "⚠ %.0fm", Double(hazard.distance ?? 0)),
+                                 color: hazardColor, big: false))
+        }
         let compass = overlay.roomPose?.heading.map {
             HubHUDMirror.Compass(center: $0, abs: false, markers: markers)
         }
@@ -226,16 +443,36 @@ public enum HUDMirror {
 
         let floating = overlay.pings.map { ($0, $0.label, cueColor($0)) }
             + (overlay.candidate.map { [($0, "FIND", alertColor)] } ?? [])
-        let ar: [HubHUDMirror.ARMarker] = floating.compactMap { cue, label, color in
-            guard let point = cue.imagePoint,
+        func onScreen(_ point: CGPoint?) -> (x: Double, y: Double)? {
+            guard let point,
                   let fraction = uprightFraction(ofCapturePoint: point, captureWidth: captureWidth,
                                                  captureHeight: captureHeight),
                   (0...1).contains(fraction.x), (0...1).contains(fraction.y) else { return nil }
+            return fraction
+        }
+        // Same sizing as phone.js: nearer is bigger, clamped, over a ~844 pt screen.
+        func radius(_ metres: Double) -> Double { max(9, min(22, 60 / max(metres, 1))) / 844 }
+
+        var ar: [HubHUDMirror.ARMarker] = floating.compactMap { cue, label, color in
+            guard let fraction = onScreen(cue.imagePoint) else { return nil }
             let distance = Double(cue.distance ?? 3)
-            // Same sizing as phone.js: nearer is bigger, clamped, over a ~844 pt screen.
-            let radius = max(9, min(22, 60 / max(distance, 1))) / 844
-            return .init(x: fraction.x, y: fraction.y, r: radius,
+            return .init(x: fraction.x, y: fraction.y, r: radius(distance),
                          label: String(format: "%@ · %.1f m", label, distance), color: color)
+        }
+        // The nearest few teammates who are actually in frame. Somebody standing
+        // beside you needs no marker — you can see them — and a field full of
+        // outlines is the clutter this is meant to cut through.
+        if showTeam {
+            let inFrame = overlay.teammates
+                .filter { Double($0.distance ?? 0) > teamNearMetres }
+                .sorted { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }
+            for mate in inFrame.prefix(teamARLimit) {
+                guard let fraction = onScreen(mate.imagePoint) else { continue }
+                let distance = Double(mate.distance ?? 0)
+                ar.append(.init(x: fraction.x, y: fraction.y, r: radius(distance),
+                                label: String(format: "#%d · %.0f m", mate.index, distance),
+                                color: peerColor(index: mate.index), hollow: true))
+            }
         }
 
         // Side bleed: loud sound wins when present; otherwise the found /
@@ -254,8 +491,61 @@ public enum HUDMirror {
             if offset > 20 { return "right" }
             return nil
         }
-        let edge = soundSide.map { HubHUDMirror.SoundEdge(side: $0, color: soundColor) }
+        // Close enough to walk into: the bezel is the hazard's, ahead of both the
+        // sound and the find. Running to somebody is the moment an operator is
+        // least likely to be watching their feet, which is exactly why the
+        // obstacle outranks the person for those last two metres.
+        let imminent = (hazard?.distance ?? .infinity) <= HazardCue.imminentMetres
+        let hazardEdge: HubHUDMirror.SoundEdge? = {
+            guard imminent, let side = hazard?.side else { return nil }
+            return .init(side: side, color: hazardColor)
+        }()
+        let edge = hazardEdge
+            ?? soundSide.map { HubHUDMirror.SoundEdge(side: $0, color: soundColor) }
             ?? guideSide.map { HubHUDMirror.SoundEdge(side: $0, color: alertColor) }
+
+        let warning = hazard.flatMap { hazard -> HubHUDMirror.Warning? in
+            guard let side = hazard.side, let metres = hazard.distance else { return nil }
+            let where_ = side == "ahead" ? "ahead" : "to your \(side)"
+            return .init(text: String(format: "Hazard %.0f m %@", Double(metres), where_),
+                         color: hazardColor)
+        }
+
+        // The standing answer to "who am I walking to, and how far". It exists
+        // only while there is somewhere to be sent — no arrow, no card.
+        let objective = overlay.arrow.flatMap { arrow -> HubHUDMirror.Objective? in
+            guard let cue = overlay.banner else { return nil }
+            let off = Double(arrow.bearingRadians) * 180 / .pi
+            return .init(title: objectiveTitle(kind: cue.kind, label: arrow.label),
+                         detail: objectiveDetail(offsetDegrees: off,
+                                                 distance: arrow.distance.map(Double.init),
+                                                 onTarget: cue.onTarget),
+                         tone: cue.tone)
+        }
+
+        // What the whole screen is saying, for as long as it is true. A hazard
+        // you are about to hit takes it, the same way it takes the bezel — for
+        // those two metres the obstacle is the emergency.
+        let ambient: HubHUDMirror.Ambient? = {
+            if imminent, hazard != nil {
+                return .init(kind: "hazard", color: hazardColor, intensity: 0.7)
+            }
+            switch overlay.find {
+            case .heading: return .init(kind: "find", color: alertColor, intensity: 0.85)
+            case .with: return .init(kind: "with", color: alertColor, intensity: 0.45)
+            case nil: return nil
+            }
+        }()
+
+        // The least important thing on the screen, so the first to go: a
+        // scoreboard has no business sharing a glance with a find, a shout or
+        // the operator's voice.
+        let quiet = overlay.toast == nil && banner?.tone != "alert" && edge == nil
+            && warning == nil && ambient == nil
+        let stats = searching && quiet
+            ? statsLine(squareMetres: overlay.world?.stats?.m2, rank: overlay.world?.stats?.rank,
+                        of: overlay.world?.stats?.of, searched: overlay.world?.searched)
+            : nil
 
         return HubHUDMirror(compass: compass, banner: banner, lookingFor: lookingFor,
                             toast: overlay.toast.map { "📣 " + $0.text }, card: card, ar: ar,
@@ -263,7 +553,8 @@ public enum HUDMirror {
                                                  screenAspect: screenAspect),
                             dets: overlay.hazards == nil ? overlay.detections?.boxes
                                 : (overlay.detections?.boxes ?? []) + (overlay.hazards?.boxes ?? []),
-                            soundEdge: edge)
+                            soundEdge: edge, objective: objective, warning: warning,
+                            ambient: ambient, stats: stats)
     }
     /// A pixel in the landscape capture → 0…1 in the upright frame the hub has.
     /// The encoder rotates 90° clockwise: (x, y) in W×H lands at (H − y, x) in H×W.

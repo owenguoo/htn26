@@ -182,11 +182,6 @@ struct PingMarkersView: View {
 struct PhaseCardView: View {
     let phase: String
     let lookingFor: String?
-    /// The calibrate prompt has just been answered: this phone is located.
-    /// Same card, a green checkmark where the scope was, held for a moment by
-    /// `OperatorView` so that locking on reads as an answer rather than as the
-    /// screen going away on its own.
-    var confirmed = false
     /// This phone had a lock and lost it, so the prompt says "Recalibrate".
     var again = false
 
@@ -200,7 +195,7 @@ struct PhaseCardView: View {
         VStack(spacing: Space.m) {
             Image(systemName: symbol)
                 .font(.system(size: symbolSize))
-                .foregroundStyle(confirmed ? Color.ssOK : Color.ssAccent)
+                .foregroundStyle(Color.ssAccent)
                 // The glyph is the whole message at a glance, so it gets the
                 // one bit of motion on this card.
                 .contentTransition(.symbolEffect(.replace))
@@ -220,7 +215,6 @@ struct PhaseCardView: View {
     }
 
     private var symbol: String {
-        if confirmed { return "checkmark.circle.fill" }
         switch phase {
         case "lobby": return "person.3.fill"
         case "calibrate": return "scope"
@@ -229,12 +223,8 @@ struct PhaseCardView: View {
     }
 
     // The words live in SwarmCore so the console's mirror of this card matches.
-    private var title: String {
-        confirmed ? PhaseCardText.confirmedTitle : PhaseCardText.title(for: phase, again: again)
-    }
-    private var detail: String {
-        confirmed ? PhaseCardText.confirmedDetail : PhaseCardText.detail(for: phase, again: again)
-    }
+    private var title: String { PhaseCardText.title(for: phase, again: again) }
+    private var detail: String { PhaseCardText.detail(for: phase, again: again) }
 }
 
 /// Where to point the camera while calibrating.

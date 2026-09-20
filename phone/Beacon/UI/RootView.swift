@@ -139,9 +139,10 @@ struct RootView: View {
                                 // Said outright, because a *disabled* prominent
                                 // button greys its own label — which is what
                                 // turned "Joining…" into small grey text on
-                                // blue. This button is no longer disabled while
-                                // it works (`join()` guards instead), and the
-                                // label is as white as "Join" was.
+                                // blue. This button is neither disabled nor
+                                // re-tinted while it works (`join()` guards
+                                // instead), and the label is as white as
+                                // "Join" was.
                                 .foregroundStyle(.white)
                             Spacer()
                         }
@@ -151,9 +152,13 @@ struct RootView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    // Grey while it works, so the button reads as busy rather
-                    // than as something worth pressing again.
-                    .tint(isJoining ? Color(.systemGray) : Color.accentColor)
+                    // One tint, joining or not. Greying it while the hub call
+                    // was in flight was meant to read as "busy", but grey is
+                    // this app's colour for *unavailable*, and the one moment
+                    // an operator is watching this screen to see whether
+                    // anything is happening is the moment it went flat. The
+                    // spinner and "Joining…" already say it is working.
+                    .tint(Color.accentColor)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                     // Only for an address that cannot be joined. Disabling it

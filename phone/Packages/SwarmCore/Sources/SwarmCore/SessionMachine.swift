@@ -139,6 +139,9 @@ public struct SessionDiagnostics: Sendable, Equatable {
     /// Times the origin was re-established because sightings kept agreeing with
     /// each other and not with it — ARKit relocalized with a jump.
     public var relocks: Int = 0
+    /// Times the origin was thrown away because ARKit's tracking broke and came
+    /// back, so the map the origin was measured in no longer existed.
+    public var originsDroppedForTrackingBreak: Int = 0
     public var thermalState: ThermalState = .nominal
     public var isBlockedOnClockSync: Bool = true
     /// Metres of device motion accumulated while tracking was unusable. A
@@ -260,6 +263,10 @@ public actor SessionMachine {
     private var degradedSince: Double?
     private var thermalState: ThermalState = .nominal
     private var motionWhileLost: Float = 0
+    /// ARKit's tracking broke, so its world map may no longer be the one the
+    /// origin was measured in. Set while the break lasts, acted on the moment
+    /// tracking comes back — see `resolveSuspectOrigin`.
+    private var originIsSuspect = false
 
     private var nextPoseDue: Double = -.infinity
     private var nextFrameDue: Double = -.infinity
@@ -349,6 +356,7 @@ public actor SessionMachine {
         guard state != .idle, state != .permissions else { return }
         pendingSightings.removeAll()
         calibration.invalidateOrigin()
+        originIsSuspect = false
         recentFrames.removeAll(keepingCapacity: true)
         transition(to: .recalibrating)
     }
@@ -446,6 +454,11 @@ public actor SessionMachine {
             // full, for as long as the interruption lasts.
             advance(to: now)
             quality = .notAvailable
+            // A real interruption delivers no frames at all, so the pose path
+            // never sees `notAvailable` and cannot notice the break for itself.
+            // Say it here: if ARKit comes back tracking without ever sending
+            // `interruptionEnded`, the origin still does not survive.
+            originIsSuspect = true
             // Nothing is lost if nothing was ever found: an interruption during
             // calibration leaves us still waiting for a first marker, and moving
             // to `.lost` would claim a venue-frame pose that does not exist.
@@ -455,6 +468,10 @@ public actor SessionMachine {
             // including anything sighted just before the interruption.
             pendingSightings.removeAll()
             calibration.invalidateOrigin()
+            // Already handled, and handled harder: the next marker sets a new
+            // origin, and `resolveSuspectOrigin` must not then throw *that* one
+            // away the first time a normal pose arrives.
+            originIsSuspect = false
             transition(to: .recalibrating)
         case .failed(let reason):
             continuation?.yield(.failed(reason))
@@ -470,8 +487,47 @@ public actor SessionMachine {
         lastIntrinsics = sample.intrinsics ?? lastIntrinsics
 
         updateConfidence(for: sample.quality)
+        noteTrackingBreak(sample.quality)
+        // Before `updateStateForQuality`, which would otherwise take a `.lost`
+        // session straight back to `.tracking` on the strength of a pose whose
+        // frame has moved. `.recalibrating` ignores tracking quality, so the
+        // call below is a no-op once this has fired.
+        resolveSuspectOrigin()
         updateStateForQuality(sample.quality)
         emitIfDue()
+    }
+
+    /// ARKit reporting `.notAvailable`, or relocalizing, means it is no longer
+    /// certain where it is in its own map — and when it recovers it recovers by
+    /// re-matching that map, which moves every pose in one step. The origin was
+    /// measured against the old map, so it does not survive the break.
+    ///
+    /// Not `.initializing` (there is no origin to lose yet) and not
+    /// `excessiveMotion`/`insufficientFeatures`: those degrade a map ARKit is
+    /// still holding on to, and poses stay continuous across them.
+    private func noteTrackingBreak(_ quality: TrackingQuality) {
+        switch quality {
+        case .notAvailable, .limited(.relocalizing):
+            originIsSuspect = true
+        case .normal, .limited:
+            break
+        }
+    }
+
+    /// Tracking is back after a break. Throw the origin away and ask for a
+    /// marker, rather than projecting through a mapping that now points
+    /// somewhere else: the symptom was a phone that said "tracking lost", went
+    /// quiet, and then drew itself and the marker several metres from where they
+    /// are — confidently, with nothing on screen admitting calibration was off.
+    private func resolveSuspectOrigin() {
+        guard originIsSuspect, quality == .normal else { return }
+        originIsSuspect = false
+        guard calibration.hasOrigin else { return }
+        pendingSightings.removeAll()
+        calibration.invalidateOrigin()
+        recentFrames.removeAll(keepingCapacity: true)
+        diagnostics.originsDroppedForTrackingBreak += 1
+        transition(to: .recalibrating)
     }
 
     private func flushPendingSightings() async {
@@ -501,8 +557,11 @@ public actor SessionMachine {
             framesSuppressed = configuration.framesSuppressedAfterOriginChange
             diagnostics.corrections += 1
             // A marker sighting is a hard re-lock: whatever ARKit thinks of its
-            // own tracking, we now know where we are.
+            // own tracking, we now know where we are. That includes clearing a
+            // suspected origin — this one was measured against the map ARKit is
+            // holding *now*, so a later recovery must not throw it away.
             confidence = configuration.confidenceAfterCorrection
+            originIsSuspect = false
             motionWhileLost = 0
             continuation?.yield(.correctionApplied(markerID: correction.markerID,
                                                    positionError: correction.measuredPositionError,
@@ -618,6 +677,10 @@ public actor SessionMachine {
         guard let lastPoseTime else { return }
         guard now - lastPoseTime > configuration.stalenessLimit else { return }
         if state == .tracking || state == .degraded {
+            // ARKit stopping mid-session is the same kind of event as ARKit
+            // saying it cannot track: whatever it hands back afterwards is in a
+            // map it re-established without us. The origin goes with it.
+            originIsSuspect = true
             transition(to: .lost)
         }
     }

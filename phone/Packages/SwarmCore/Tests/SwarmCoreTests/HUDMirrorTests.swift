@@ -228,4 +228,240 @@ struct HUDMirrorTests {
         #expect(frame.hud.toast == "📣 hi")
         #expect(frame.hud == mirror(state))
     }
+
+    // MARK: - The team, the objective, the hazard and the scoreboard
+
+    /// The helper places this phone at room (0, 5) facing heading 90, so a peer
+    /// at (5, 5) is dead ahead and one at (0, 0) is 90° to the left.
+    private func world(_ json: String) throws -> HubWorld {
+        try JSONDecoder().decode(HubWorld.self, from: Data(json.utf8))
+    }
+
+    private func teamLabels(_ hud: HubHUDMirror) -> [String] {
+        (hud.compass?.markers ?? []).filter { $0.label.hasPrefix("#") || $0.label.contains("▶")
+            || $0.label.contains("◀") }.map(\.label)
+    }
+
+    @Test func teammatesBecomeChipsAndYouAreNotOneOfThem() throws {
+        let peers = try world("""
+        {"me": "a", "phones": [{"id": "a", "i": 1, "x": 0, "y": 5},
+                               {"id": "b", "i": 4, "x": 5, "y": 5}]}
+        """)
+        let hud = mirror(overlay { $0.apply(peers, now: 0) })
+        let chip = try #require((hud.compass?.markers ?? []).first { $0.label.hasPrefix("#") })
+        #expect(chip.label == "#4 5m")
+        #expect(isClose(chip.off, 0, within: 1e-3), "dead ahead of a phone facing heading 90")
+        #expect(chip.color == HUDMirror.peerColor(index: 4), "the colour the console paints #4")
+        #expect(!chip.big, "a teammate is context, never the instruction")
+        #expect(teamLabels(hud).count == 1, "this phone does not get a chip pointing at itself")
+    }
+
+    @Test func aTeammateGetsAHollowDiamondSoTheyAreNeverAFind() throws {
+        let peers = try world("""
+        {"me": "a", "phones": [{"id": "b", "i": 2, "x": 5, "y": 5}]}
+        """)
+        let hud = mirror(overlay { $0.apply(peers, now: 0) })
+        let diamond = try #require(hud.ar.first)
+        #expect(diamond.hollow)
+        #expect(diamond.label == "#2 · 5 m")
+    }
+
+    @Test func aTeammateStandingNextToYouNeedsNoDiamond() throws {
+        let peers = try world("""
+        {"me": "a", "phones": [{"id": "b", "i": 2, "x": 1, "y": 5}]}
+        """)
+        let hud = mirror(overlay { $0.apply(peers, now: 0) })
+        #expect(hud.ar.isEmpty, "you can see somebody a metre away without help")
+        #expect(teamLabels(hud).count == 1, "they still get a chip: the tape is cheap")
+    }
+
+    /// Two peers within `teamMergeDegrees` are one chip, and a crowd is capped.
+    @Test func aCrowdedTapeMergesAndThenCaps() throws {
+        // Six peers fanned across the front of a phone facing heading 90, plus
+        // one squarely behind it.
+        let peers = try world("""
+        {"me": "a", "phones": [{"id": "b", "i": 2, "x": 5, "y": 5},
+                               {"id": "c", "i": 3, "x": 5, "y": 5.2},
+                               {"id": "d", "i": 4, "x": 5, "y": 3},
+                               {"id": "e", "i": 5, "x": 5, "y": 7},
+                               {"id": "f", "i": 6, "x": 4, "y": 2},
+                               {"id": "g", "i": 7, "x": 4, "y": 8},
+                               {"id": "h", "i": 8, "x": -6, "y": 5}]}
+        """)
+        let labels = teamLabels(mirror(overlay { $0.apply(peers, now: 0) }))
+        #expect(labels.contains { $0.hasPrefix("#2#3") }, "two peers 2° apart are one chip")
+        #expect(labels.contains { $0.contains("◀") || $0.contains("▶") },
+                "the one behind is counted on an edge, never clamped onto the rail")
+        #expect(labels.filter { $0.hasPrefix("#") }.count <= HUDMirror.teamTapeLimit)
+    }
+
+    @Test func beingWalkedToSomebodyStandsTheTeamDown() throws {
+        let peers = try world("""
+        {"me": "a", "phones": [{"id": "b", "i": 2, "x": 5, "y": 5}]}
+        """)
+        let hud = mirror(overlay { model in
+            model.apply(peers, now: 0)
+            model.apply(.guideTurn(sector: "PERSON 2", delta: 30, onTarget: false, text: nil,
+                                   kind: "respond", distance: 12), heading: 90, now: 0)
+        })
+        #expect(teamLabels(hud).isEmpty)
+        #expect(hud.ar.allSatisfy { !$0.hollow })
+    }
+
+    @Test func theObjectiveNamesWhoYouAreWalkingTo() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "PERSON 2", delta: 40, onTarget: false, text: nil,
+                                   kind: "respond", distance: 24), heading: 90, now: 0)
+        })
+        #expect(hud.objective == .init(title: "Person 2", detail: "24 m · 40° right", tone: "alert"))
+    }
+
+    @Test func theObjectiveIsASweepWhenNobodyHasBeenFound() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "B3", delta: -12, onTarget: false, text: nil,
+                                   kind: "search", distance: nil), heading: 90, now: 0)
+        })
+        #expect(hud.objective == .init(title: "Sweeping B3", detail: "12° left", tone: "warn"))
+    }
+
+    @Test func thereIsNoObjectiveWithNowhereToBeSent() {
+        #expect(mirror(overlay { _ in }).objective == nil)
+    }
+
+    @Test func aHazardIsAmberOnTheTapeAndSaysWhichWayToStep() throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 2, "y": 5, "stale": false}]}
+        """)
+        let hud = mirror(overlay { $0.apply(hazards, now: 0) })
+        let chip = try #require((hud.compass?.markers ?? []).first { $0.label.hasPrefix("⚠") })
+        #expect(chip.label == "⚠ 2m")
+        #expect(chip.color == HUDMirror.hazardColor)
+        #expect(hud.warning == .init(text: "Hazard 2 m ahead", color: HUDMirror.hazardColor))
+        #expect(hud.soundEdge?.color == HUDMirror.hazardColor,
+                "two metres away, the thing you are about to walk into owns the bezel")
+    }
+
+    @Test func aHazardYouAreAboutToHitOutranksTheFindYouAreRunningTo() throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 1.5, "y": 5, "stale": false}]}
+        """)
+        let hud = mirror(overlay { model in
+            model.apply(hazards, now: 0)
+            model.apply(.guideTurn(sector: "PERSON 1", delta: 50, onTarget: false, text: nil,
+                                   kind: "respond", distance: 9), heading: 90, now: 0)
+        })
+        #expect(hud.soundEdge?.color == HUDMirror.hazardColor)
+        #expect(hud.objective?.tone == "alert", "the find is still the mission, still red")
+    }
+
+    @Test func aStaleHazardIsNotSteeredAround() throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 2, "y": 5, "stale": true}]}
+        """)
+        #expect(mirror(overlay { $0.apply(hazards, now: 0) }).warning == nil)
+    }
+
+    @Test func theStatsLineIsWordedOnce() throws {
+        let numbers = try world("""
+        {"phase": "search", "searched": 0.46, "stats": {"m2": 142.4, "rank": 2, "of": 5}}
+        """)
+        #expect(mirror(overlay { $0.apply(numbers, now: 0) }).stats == "142 m² swept · 2nd of 5 · room 46%")
+    }
+
+    @Test func rankIsLeftOutWhenThereIsNobodyToBeAheadOf() throws {
+        let alone = try world("""
+        {"phase": "search", "searched": 0.1, "stats": {"m2": 20, "rank": 1, "of": 1}}
+        """)
+        #expect(mirror(overlay { $0.apply(alone, now: 0) }).stats == "20 m² swept · room 10%")
+    }
+
+    @Test(arguments: [(1, "1st"), (2, "2nd"), (3, "3rd"), (4, "4th"),
+                      (11, "11th"), (12, "12th"), (13, "13th"), (21, "21st")])
+    func ordinalsSurviveTheTeens(_ n: Int, _ expected: String) {
+        #expect(HUDMirror.ordinal(n) == expected)
+    }
+
+    @Test func theScoreboardStandsDownForAnythingLouder() throws {
+        let numbers = try world("""
+        {"phase": "search", "searched": 0.46, "stats": {"m2": 142.4, "rank": 2, "of": 5}}
+        """)
+        let shouted = mirror(overlay { model in
+            model.apply(numbers, now: 0)
+            model.apply(.message(text: "everyone to the back", ttlMs: 8000), heading: 90, now: 0)
+        })
+        #expect(shouted.stats == nil)
+    }
+
+    // MARK: - The wash that stays on
+
+    /// A `respond` guide is the start of a find, and the screen says so until
+    /// something ends it — not until a timer runs out.
+    @Test func beingSentToSomebodyWashesTheScreenRedAndKeepsItThere() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "PERSON 1", delta: 20, onTarget: false, text: nil,
+                                   kind: "respond", distance: 14), heading: 90, now: 0)
+        })
+        #expect(hud.ambient == .init(kind: "find", color: HUDMirror.alertColor, intensity: 0.85))
+    }
+
+    /// The hub clears a find team's guide when that phone reaches the person.
+    /// The wash does not go with it — it settles.
+    @Test func arrivingHoldsTheRedAndStopsThePulse() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "PERSON 1", delta: 20, onTarget: false, text: nil,
+                                   kind: "respond", distance: 14), heading: 90, now: 0)
+            model.apply(.guideClear, heading: 90, now: 1)
+        })
+        #expect(hud.ambient == .init(kind: "with", color: HUDMirror.alertColor, intensity: 0.45),
+                "still red — the emergency did not end when they got there")
+        #expect(hud.objective == nil, "the guide is gone, so there is nothing left to steer to")
+    }
+
+    @Test func clearingAGuideYouWereNeverOnDoesNotInventAFind() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "B3", delta: 20, onTarget: false, text: nil,
+                                   kind: "search", distance: nil), heading: 90, now: 0)
+            model.apply(.guideClear, heading: 90, now: 1)
+        })
+        #expect(hud.ambient == nil)
+    }
+
+    @Test func beingTakenOffAFindEndsTheWash() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "PERSON 1", delta: 20, onTarget: false, text: nil,
+                                   kind: "respond", distance: 14), heading: 90, now: 0)
+            model.apply(.guideTurn(sector: "C2", delta: -10, onTarget: false, text: nil,
+                                   kind: "search", distance: nil), heading: 90, now: 1)
+        })
+        #expect(hud.ambient == nil)
+    }
+
+    @Test func theSearchEndingEndsTheWash() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "PERSON 1", delta: 20, onTarget: false, text: nil,
+                                   kind: "respond", distance: 14), heading: 90, now: 0)
+            model.apply(phase: "end")
+        })
+        #expect(hud.ambient == nil)
+    }
+
+    @Test func aHazardYouAreAboutToHitTakesTheWholeScreenOffTheFind() throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 1.5, "y": 5, "stale": false}]}
+        """)
+        let hud = mirror(overlay { model in
+            model.apply(hazards, now: 0)
+            model.apply(.guideTurn(sector: "PERSON 1", delta: 20, onTarget: false, text: nil,
+                                   kind: "respond", distance: 14), heading: 90, now: 0)
+        })
+        #expect(hud.ambient?.kind == "hazard")
+        #expect(hud.ambient?.color == HUDMirror.hazardColor)
+    }
+
+    @Test func thereIsNoScoreboardBeforeTheSearchStarts() throws {
+        let numbers = try world("""
+        {"phase": "lobby", "searched": 0.46, "stats": {"m2": 142.4, "rank": 2, "of": 5}}
+        """)
+        #expect(mirror(overlay { $0.apply(numbers, now: 0) }).stats == nil)
+    }
 }

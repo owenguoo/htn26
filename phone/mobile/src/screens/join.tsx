@@ -98,7 +98,10 @@ export default function Join() {
   const [hub, setHub] = useState(stored.lastHubURL || stored.venueHubURL);
   const [name, setName] = useState(stored.name);
   const [error, setError] = useState<string | null>(null);
-  const [joining, setJoining] = useState(false);
+  // A ref, not state: re-entry has to be blocked, but re-rendering the button
+  // into a disabled (grey) capsule mid-join reads as a dead control on the one
+  // screen where the operator is waiting for something to happen.
+  const joining = useRef(false);
   const autoJoined = useRef(false);
   const hubField = useSeededField(stored.lastHubURL || stored.venueHubURL);
   const nameField = useSeededField(stored.name);
@@ -106,7 +109,8 @@ export default function Join() {
   const valid = Beacon.resolveHubURL(hub) !== null;
 
   const join = useCallback(async (target: string, as: string) => {
-    setJoining(true);
+    if (joining.current) return;
+    joining.current = true;
     setError(null);
     try {
       await Beacon.join(target, as);
@@ -114,7 +118,7 @@ export default function Join() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setJoining(false);
+      joining.current = false;
     }
   }, []);
 
@@ -228,14 +232,16 @@ export default function Join() {
             // section's own plate it reads as a button drawn inside a button.
             // Clearing the row's background and insets sits it directly on the
             // grouped background, where Apple puts a primary action.
-            // Keep the label fixed while joining — swapping in a ProgressView
-            // grew the capsule on press.
+            // Keep the label and the tint fixed while joining — swapping in a
+            // ProgressView grew the capsule on press, and disabling the button
+            // greyed it out for the whole hub call. A ref guards re-entry
+            // instead, so the capsule only greys out for an unusable hub URL.
             modifiers={[
               buttonStyle('borderedProminent'),
               controlSize('large'),
               listRowBackground('clear'),
               listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }),
-              disabled(!valid || joining),
+              disabled(!valid),
             ]}
           />
         </Section>

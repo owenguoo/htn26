@@ -122,13 +122,9 @@ function renderStart() {
   const btn = $('#startBtn');
   btn.textContent = on ? 'End search' : 'Start search';
   btn.classList.toggle('primary', !on);
+  btn.classList.toggle('danger', on);
   btn.disabled = !on && !ready;
-  const hint = $('#startHint');
-  hint.textContent = on ? `${live} phone${live === 1 ? '' : 's'} searching`
-    : !live ? 'Waiting for phones to join'
-    : ready ? `All ${live} phone${live === 1 ? '' : 's'} scanned the marker`
-    : `${scanned} of ${live} phones have scanned the marker`;
-  hint.classList.toggle('ready', !on && ready);
+  btn.title = on || ready || !live ? '' : `${scanned} of ${live} phones have scanned the marker`;
 }
 
 $('#markerBtn').addEventListener('click', () => {
@@ -208,10 +204,11 @@ function renderControls() {
   } else if (!t) {
     s.textContent = 'No candidate placed';
   } else if (victims.length) {
-    const reached = victims.filter(teamFull).length;
+    // Responder progress is per person and is already on each row below; a
+    // second team count here only competes with it.
     const missing = t.stillMissing || 0;
-    s.textContent = `${plural(victims.length, 'person', 'people')} found · ${reached}/${victims.length} reached`
-      + (missing ? ` · still looking for ${missing}` : '');
+    s.textContent = `${plural(victims.length, 'person', 'people')} found`
+      + (missing ? ` · still looking for ${plural(missing, 'more', 'more')}` : '');
   } else {
     const top = (st.sightings || []).reduce((a, b) => (b.confidence > (a?.confidence ?? 0) ? b : a), null);
     // Say whose position this is. A bare "Hidden at (-5.1, 4.7)" reads as though the hub
@@ -228,6 +225,7 @@ function renderControls() {
          : one ? 'not found yet' : 'none found yet');
   }
   renderFoundList(victims);
+  renderLive(victims, t);
   renderPeople(st.search?.people);
   $('#respN').textContent = t ? t.respondersWanted : respondersPref;
   $('#lookingFor').textContent = st.lookingFor ? `Looking for: ${st.lookingFor}` : '';
@@ -245,6 +243,9 @@ function renderControls() {
   $('#candBtn').textContent = hidden.length ? 'Add another' : 'Place candidate';
   $('#candBtn').classList.toggle('primary', !hidden.length);
   $('#candClear').hidden = !t || st.search?.mode === 'real';
+  // Mock people may not be scattered through a search for a real one — the hub
+  // refuses it, so the control says so rather than letting it be pressed.
+  $('#simBtn').disabled = st.search?.mode === 'real';
 }
 
 // A sighting's `confidence` is several phones' scores combined under an
@@ -293,6 +294,70 @@ function teamFull(v) {
   return wanted > 0 && teamArrived(v) >= wanted;
 }
 
+// The live strip under the top bar. The Search status card still holds the full
+// picture; this is the one line an operator standing back from the screen has to
+// read — and when somebody is found it goes red, because that is the moment the
+// whole room needs to notice. Everything in it is a field the hub already sends:
+// the finder's phone number, the planner's sector, responders dispatched and
+// responders who have arrived. Nothing here is a derived score.
+function whereVictim(v) {
+  const sector = sectorAt(v.x, v.y);
+  return sector ? `in ${sector}` : `${Math.max(0, v.y).toFixed(1)} m from the stage`;
+}
+
+// Who is left: by name when the reference photos named them, by count in a
+// rehearsal where the hidden candidates have no names.
+function stillLooking(victims, t) {
+  const people = st.search?.people || [];
+  if (people.length) {
+    const found = new Set(victims.map((v) => v.label));
+    const left = people.filter((p) => !found.has(p.label)).map((p) => p.label);
+    if (!left.length) return victims.length ? 'Everyone found' : '';
+    return `Still looking for ${left.slice(0, 2).join(' and ')}${left.length > 2 ? ` +${left.length - 2}` : ''}`;
+  }
+  const missing = t?.stillMissing || 0;
+  if (missing) return `Still looking for ${plural(missing, 'person', 'people')}`;
+  return victims.length ? 'Everyone found' : '';
+}
+
+function renderLive(victims, t) {
+  const strip = $('#liveStrip');
+  const lead = $('#liveLead');
+  const aside = $('#liveAside');
+  let state = '';
+  let text = '';
+  let side = '';
+  if (victims.length) {
+    // Newest find leads; `foundMs` counts up from the moment it happened.
+    const v = victims.reduce((a, b) => (b.foundMs < a.foundMs ? b : a));
+    const finder = phones.get(v.foundBy);
+    const sent = Object.keys(v.responders || {}).length;
+    state = 'found';
+    text = `${v.label} found ${whereVictim(v)} by #${finder?.index ?? '?'}`
+      + ` · ${plural(sent, 'responder', 'responders')} sent, ${teamArrived(v)} have reached`;
+    side = victims.length > 1 ? `${victims.length} found · ${stillLooking(victims, t)}` : stillLooking(victims, t);
+  } else {
+    const top = (st.sightings || []).reduce((a, b) => (b.confidence > (a?.confidence ?? 0) ? b : a), null);
+    if (top && top.confidence >= 0.4) {
+      const sector = sectorAt(top.x, top.y);
+      state = 'warn';
+      text = `Possible sighting${sector ? ` in ${sector}` : ''} · ${sightingEvidence(top)}`;
+      side = stillLooking(victims, t);
+    } else if (running()) {
+      const { live } = readiness();
+      text = `Searching · ${plural(live, 'phone', 'phones')} · `
+        + `${Math.round((st.coverage?.searched || 0) * 100)}% of the room covered`;
+      const likely = st.likely?.[0];
+      side = likely ? `Most likely ${likely.sector}` : stillLooking(victims, t);
+    }
+  }
+  strip.hidden = !text;
+  strip.classList.toggle('found', state === 'found');
+  strip.classList.toggle('warn', state === 'warn');
+  if (lead.textContent !== text) lead.textContent = text;
+  if (aside.textContent !== side) aside.textContent = side;
+}
+
 // Both lists are rebuilt from innerHTML, and state arrives ten times a second, so they only
 // redraw when something in them actually changed.
 const listMemo = {found: null, people: null};
@@ -304,8 +369,9 @@ function renderFoundList(victims) {
   listMemo.found = key;
   $('#foundList').innerHTML = victims.map((v) => {
     const finder = phones.get(v.foundBy);
-    const detail = `found by #${finder?.index ?? '?'} · ${(v.foundMs / 1000).toFixed(1)}s ago · `
-      + `${teamArrived(v)}/${v.respondersWanted ?? 0} with them`;
+    // How long ago it happened is in the Activity log to the tenth of a second;
+    // what this row is for is who found them and whether help has arrived.
+    const detail = `found by #${finder?.index ?? '?'} · ${teamArrived(v)}/${v.respondersWanted ?? 0} with them`;
     return `<div class="found-row"><span class="who">${teamFull(v) ? '✓' : '→'} Person ${v.id}</span>`
       + `<span>${escapeHtml(detail)}</span></div>`;
   }).join('');
@@ -556,6 +622,18 @@ function drawHud() {
     ctx.lineWidth = 1;
     ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1);
   }
+  // The standing wash first, under everything: what situation the person
+  // holding this phone is in. Colour at the bezel, clear in the middle — they
+  // are walking while it is up.
+  if (hud.ambient) {
+    const cx = sx + sw / 2, cy = sy + sh / 2, peak = (hud.ambient.intensity ?? 0.7) * 0.62;
+    const wash = ctx.createRadialGradient(cx, cy, Math.min(sw, sh) * 0.2, cx, cy, Math.max(sw, sh) * 0.8);
+    wash.addColorStop(0, hexAlpha(hud.ambient.color, 0));
+    wash.addColorStop(0.55, hexAlpha(hud.ambient.color, peak * 0.4));
+    wash.addColorStop(1, hexAlpha(hud.ambient.color, peak));
+    ctx.fillStyle = wash;
+    ctx.fillRect(sx, sy, sw, sh);
+  }
   const k = sw / 390; // scale phone-sized HUD elements to the drawn screen (≈ iPhone width in CSS px)
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -574,13 +652,24 @@ function drawHud() {
     ctx.strokeStyle = 'rgba(0,0,0,0.6)';
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
-    ctx.fill(); ctx.stroke();
+    if (m.hollow) {
+      // A teammate, not a find: outline only, so a searcher is never read as
+      // the person being searched for. Dark pass first, for contrast over a
+      // bright frame.
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 4; ctx.stroke();
+      ctx.strokeStyle = m.color; ctx.lineWidth = 2; ctx.stroke();
+    } else {
+      ctx.fill(); ctx.stroke();
+    }
     pill(ctx, x, y - r - 13 * k, m.label, 'rgba(0,0,0,0.7)', '#fff', 12 * k);
   }
 
   // screen-space HUD, stacked from the top of the phone's screen
   let top = sy + 8 * k;
   if (hud.compass) { drawTape(ctx, sx + 8 * k, top, sw - 16 * k, 40 * k, hud.compass, k); top += 48 * k; }
+  // Under the tape and above the banner: something in the way outranks the
+  // search instruction, because one of them is about to be underfoot.
+  if (hud.warning) { pill(ctx, sx + sw / 2, top + 12 * k, hud.warning.text, hud.warning.color, '#1a1200', 13 * k, true); top += 30 * k; }
   if (hud.banner) {
     const [bg, fg] = TONES[hud.banner.tone] || TONES.warn;
     pill(ctx, sx + sw / 2, top + 16 * k, hud.banner.text, bg, fg, 15 * k, true);
@@ -588,6 +677,30 @@ function drawHud() {
   }
   if (hud.lookingFor) { pill(ctx, sx + sw / 2, top + 12 * k, hud.lookingFor, 'rgba(12,17,32,0.85)', '#eef2ff', 12 * k); top += 30 * k; }
   if (hud.toast) { pill(ctx, sx + sw / 2, top + 14 * k, hud.toast, 'rgba(255,255,255,0.95)', '#05070f', 13 * k, true); top += 36 * k; }
+  // Last in the stack and smallest: the phone shows the operator their own
+  // swept area and rank. The phone decides when it is quiet enough to show.
+  if (hud.stats) { pill(ctx, sx + sw / 2, top + 11 * k, hud.stats, 'rgba(12,17,32,0.72)', '#dfe5f2', 11 * k); top += 26 * k; }
+  // Bottom-right, opposite where the phone puts its mini-map: who this operator
+  // is being sent to, standing still while the banner above rewrites itself.
+  if (hud.objective) {
+    const [tint] = TONES[hud.objective.tone] || TONES.warn;
+    ctx.font = `700 ${13 * k}px Geist, system-ui`;
+    const titleWidth = ctx.measureText(hud.objective.title).width;
+    ctx.font = `${11 * k}px Geist, system-ui`;
+    const width = Math.max(titleWidth, ctx.measureText(hud.objective.detail).width) + 24 * k;
+    const height = 46 * k, x = sx + sw - width - 10 * k, y = sy + sh - height - 10 * k;
+    ctx.fillStyle = 'rgba(12,17,32,0.82)';
+    ctx.beginPath(); ctx.roundRect(x, y, width, height, 10 * k); ctx.fill();
+    ctx.strokeStyle = tint; ctx.lineWidth = 1; ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#fff';
+    ctx.font = `700 ${13 * k}px Geist, system-ui`;
+    ctx.fillText(hud.objective.title, x + 12 * k, y + 16 * k);
+    ctx.fillStyle = '#a9b2c4';
+    ctx.font = `${11 * k}px Geist, system-ui`;
+    ctx.fillText(hud.objective.detail, x + 12 * k, y + 32 * k);
+    ctx.textAlign = 'center';
+  }
   if (hud.card) {
     const cy = sy + sh * 0.42;
     ctx.fillStyle = 'rgba(0,0,0,0.8)';
@@ -599,6 +712,14 @@ function drawHud() {
     ctx.font = `${12 * k}px Geist, system-ui`;
     ctx.fillText(hud.card.text, sx + sw / 2, cy + 14 * k);
   }
+}
+
+/// `#rrggbb` plus an alpha, for a canvas gradient stop.
+function hexAlpha(hex, alpha) {
+  const value = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!value) return `rgba(255,93,115,${alpha})`;
+  const n = parseInt(value[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }
 
 function pill(ctx, x, y, text, bg, fg, size, bold = false) {
@@ -862,12 +983,20 @@ $('#autoSw').addEventListener('click', () => send({ type: 'autonomy', enabled: !
 // ---------------------------------------------------------------- controls
 let respondersPref = 3;
 $('#plannerSw').addEventListener('click', () => send({ type: 'planner', enabled: !st?.planner?.enabled }));
-$('#resetSession').addEventListener('click', () => {
+// Reset is one click from the top bar and there is no undo, so it asks first.
+$('#resetSession').addEventListener('click', () => $('#resetConfirm').showModal());
+$('#resetCancel').addEventListener('click', () => $('#resetConfirm').close());
+$('#resetGo').addEventListener('click', () => {
+  $('#resetConfirm').close();
   if (st?.search?.mode === 'rehearsal') send({ type: 'target', remove: true });
   send({ type: 'reset_coverage' });
   send({ type: 'phase', phase: IDLE_PHASE, restart: true });
   $('#searchMessage').textContent = '';
 });
+// One press stages a whole drill; the hub picks the counts and the positions, because
+// it is the thing that knows the room and what is already on the floor. Starting the
+// search stays a separate press, exactly as it is for a hand-placed candidate.
+$('#simBtn').addEventListener('click', () => send({ type: 'simulate' }));
 $('#candBtn').addEventListener('click', addCandidate);
 $('#candClear').addEventListener('click', () => send({ type: 'target', remove: true }));
 $('#respMinus').addEventListener('click', () => setResponders(-1));
@@ -946,7 +1075,7 @@ let scene3d = null;
 let scene3dLoading = null;
 
 async function setMapMode(mode) {
-  if (mode !== 'heatmap' && mode !== '3d') return;
+  if (mode !== 'heatmap' && mode !== 'grid' && mode !== '3d') return;
   mapMode = mode;
   for (const button of document.querySelectorAll('#mapModes button')) {
     button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
@@ -956,7 +1085,17 @@ async function setMapMode(mode) {
   $('#mapWrap').classList.toggle('mode-3d', is3d);
   $('#scene3d').hidden = !is3d;
   $('#mapStatus').textContent = '';
-  if (!is3d) { scene3d?.hide(); resizeMap(); return; }
+  $('#gridKey').hidden = mode !== 'grid';
+  if (!is3d) {
+    scene3d?.hide();
+    gridKey = '';
+    if (mode === 'grid' && st?.coverage) {
+      $('#mapStatus').textContent = `Every ${st.coverage.cell} m cell the search keeps, shaded by how likely the person is to be in it`
+        + `${st.planner?.sectorSize ? ` · heavier lines are the ${st.planner.sectorSize} m sectors the swarm is sent to` : ''}`;
+    }
+    resizeMap();
+    return;
+  }
   if (!room) { $('#mapStatus').textContent = 'Waiting for room data…'; return; }
   if (!scene3d) {
     $('#mapStatus').textContent = 'Loading 3D map…';
@@ -995,8 +1134,10 @@ const canvas = $('#map');
 const ctx = canvas.getContext('2d');
 let view = null;
 const coverageLayer = document.createElement('canvas');
+const gridLayer = document.createElement('canvas');
 const heatTile = document.createElement('canvas');  // cols×rows, reused every rebuild
 let coverageKey = '';
+let gridKey = '';
 const mapLabelRects = [];
 /// How much of the camera's real range the map's view wedge draws.
 const CONE_DRAW_SCALE = 0.6;
@@ -1028,6 +1169,7 @@ function resizeMap() {
   view = makeView(room, w, h, 28);
   setScaleBar(view.scale);
   coverageKey = '';
+  gridKey = '';
 }
 new ResizeObserver(resizeMap).observe($('#mapWrap'));
 
@@ -1063,6 +1205,83 @@ function drawCoverage(cov) {
   ctx.drawImage(coverageLayer, 0, 0);
 }
 
+// Grid view: exactly what the heatmap is drawn from, with nothing smoothed
+// away — every half-metre cell as its own square, shaded by the same ramp, and
+// green wherever a camera has actually had a good look. The heatmap blurs all
+// of that into a wash on purpose; this is the view for reading the search cell
+// by cell, and for seeing which sectors the swarm has genuinely swept.
+function drawGrid(cov) {
+  if (!cov?.cols || !cov.rows) return;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const key = `${w}x${h}:${cov.heat}:${cov.cells}:${st.planner?.sectorSize}`;
+  if (key !== gridKey) {
+    gridKey = key;
+    gridLayer.width = w;
+    gridLayer.height = h;
+    const layer = gridLayer.getContext('2d');
+    layer.clearRect(0, 0, w, h);
+    const [ax, ay] = view.toPx(cov.x0, 0);
+    const [bx, by] = view.toPx(cov.x0 + cov.cols * cov.cell, cov.rows * cov.cell);
+    const cw = (bx - ax) / cov.cols, ch = (by - ay) / cov.rows;
+    // Same one-pixel-per-cell image the heatmap uses, scaled up with smoothing
+    // off and no blur: one flat alpha per cell, edge to edge.
+    const levels = heatLevels(cov);
+    if (levels) {
+      layer.imageSmoothingEnabled = false;
+      layer.drawImage(heatCanvas(cov, levels, undefined, heatTile), ax, ay, bx - ax, by - ay);
+      layer.imageSmoothingEnabled = true;
+    }
+    // `cells` is the hub's own looked/not-looked flag per cell — the thing the
+    // "area searched" percentage is counted from, drawn where it happened.
+    layer.fillStyle = 'rgba(24,131,75,.17)';
+    for (let i = 0; i < cov.cols * cov.rows; i++) {
+      if (cov.cells?.[i] !== '1') continue;
+      layer.fillRect(ax + (i % cov.cols) * cw, ay + Math.floor(i / cov.cols) * ch, cw + .5, ch + .5);
+    }
+    layer.strokeStyle = 'rgba(23,55,38,.09)';
+    layer.lineWidth = 1;
+    layer.beginPath();
+    for (let c = 0; c <= cov.cols; c++) { const x = Math.round(ax + c * cw) + .5; layer.moveTo(x, ay); layer.lineTo(x, by); }
+    for (let r = 0; r <= cov.rows; r++) { const y = Math.round(ay + r * ch) + .5; layer.moveTo(ax, y); layer.lineTo(bx, y); }
+    layer.stroke();
+    drawSectorLines(layer, ax, ay, bx, by);
+  }
+  ctx.drawImage(gridLayer, 0, 0);
+}
+
+// The planner's sectors over the cells, named the way every other part of the
+// console names a spot on the floor: "D2", the same grid the recommendations
+// and the phone guidance speak.
+function drawSectorLines(layer, ax, ay, bx, by) {
+  const size = st.planner?.sectorSize;
+  if (!size || !room) return;
+  const x0 = -room.width / 2;
+  const cols = st.planner.cols ?? 0, rows = st.planner.rows ?? 0;
+  // The sector grid can run a little past the last cell when the room does not
+  // divide evenly; it is drawn inside the floor, not over the walls.
+  layer.save();
+  layer.beginPath();
+  layer.rect(ax, ay, bx - ax, by - ay);
+  layer.clip();
+  layer.strokeStyle = 'rgba(23,55,38,.26)';
+  layer.lineWidth = 1;
+  layer.beginPath();
+  for (let c = 0; c <= cols; c++) { const x = Math.round(view.toPx(x0 + c * size, 0)[0]) + .5; layer.moveTo(x, ay); layer.lineTo(x, by); }
+  for (let r = 0; r <= rows; r++) { const y = Math.round(view.toPx(0, r * size)[1]) + .5; layer.moveTo(ax, y); layer.lineTo(bx, y); }
+  layer.stroke();
+  layer.fillStyle = 'rgba(70,102,83,.75)';
+  layer.font = '600 10px "Geist Mono", ui-monospace, monospace';
+  layer.textAlign = 'left';
+  layer.textBaseline = 'top';
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const [x, y] = view.toPx(x0 + c * size, r * size);
+      layer.fillText(`${String.fromCharCode(65 + c)}${r + 1}`, x + 4, y + 3);
+    }
+  }
+  layer.restore();
+}
+
 function draw() {
   requestAnimationFrame(draw);
   if (!view || !st || mapMode === '3d') return;
@@ -1073,7 +1292,7 @@ function draw() {
     grid: false,
     colors: { floor: 'rgba(255,255,255,.5)', wall: '#789b85', stage: '#deeee3', text: '#466653' },
   });
-  drawCoverage(st.coverage);
+  if (mapMode === 'grid') drawGrid(st.coverage); else drawCoverage(st.coverage);
 
   // planner assignments: thin dashed lines to the sector
   const x0 = -room.width / 2;
@@ -1127,6 +1346,8 @@ function draw() {
 
 // The printed alignment marker, wherever the operator put it. Drawn as a tag
 // rather than a dot so it reads as a thing on a wall, not another searcher.
+// No text label: the legend strip under the map already names the purple tag,
+// and a word floating on the floor only crowds the searchers around it.
 function drawMarker() {
   const m = markerDrag || st.marker;
   if (!m) return;
@@ -1144,7 +1365,6 @@ function drawMarker() {
   ctx.fill();
   ctx.stroke();
   ctx.restore();
-  drawMapLabel('MARKER', x, y - 19, MARKER_COLOR);
 }
 
 function drawPhone(phone) {

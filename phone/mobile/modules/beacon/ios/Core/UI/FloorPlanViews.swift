@@ -13,6 +13,68 @@ private enum MapMarker {
     static let labelGap: CGFloat = 4
 }
 
+/// `drawPersonGlyph()`: a head and shoulders in a white disc, ringed in the
+/// colour that says which kind of person this is. One function rather than one
+/// per caller, because the map and the legend have to show the same glyph or
+/// the legend is not a legend.
+private enum PersonGlyph {
+    /// Outside-to-outside size of the glyph in its own units. The disc is
+    /// `radius * 2` across, and a centred stroke puts half its width outside
+    /// that — so a box of `radius * 2` clips the ring at the four corners,
+    /// which is exactly what it looked like.
+    static let outerUnits = MapMarker.radius * 2 + MapMarker.stroke
+
+    static func draw(_ context: inout GraphicsContext, at point: CGPoint, color: Color,
+                     scale: CGFloat = 1) {
+        func at(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: point.x + x * scale, y: point.y + y * scale)
+        }
+        func box(_ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ height: CGFloat) -> CGRect {
+            CGRect(origin: at(x, y), size: CGSize(width: width * scale, height: height * scale))
+        }
+        let radius = MapMarker.radius
+        let circle = Path(ellipseIn: box(-radius, -radius, radius * 2, radius * 2))
+        context.fill(circle, with: .color(MapInk.markerBorder))
+        context.stroke(circle, with: .color(color), lineWidth: MapMarker.stroke * scale)
+        // arc(0, -3.5, 2.7) and roundRect(-4.5, .5, 9, 5.5, 3).
+        context.fill(Path(ellipseIn: box(-2.7, -6.2, 5.4, 5.4)), with: .color(color))
+        context.fill(Path(roundedRect: box(-4.5, 0.5, 9, 5.5), cornerRadius: 3 * scale),
+                     with: .color(color))
+    }
+}
+
+/// `drawHazards()`'s sign, which is also the `.hazard-key` in the console's
+/// legend: a 22-unit warning triangle with a bang in it, in amber on amber.
+private enum HazardSign {
+    /// Outside-to-outside, in the sign's own units: 22 across for the triangle
+    /// itself, a centred 2-unit stroke either side of that, and another couple
+    /// for the mitred corners, which reach past their vertices.
+    static let outerUnits: CGFloat = 27
+
+    /// The console's own geometry, in its own units, scaled about `point`.
+    /// The triangle runs from −11 to +9 in y, so its visual centre is a unit
+    /// above the point it is drawn at — `centred` puts that right for a legend
+    /// swatch, where the box is what has to look centred.
+    static func draw(_ context: inout GraphicsContext, at point: CGPoint,
+                     scale: CGFloat = 1, centred: Bool = false) {
+        let origin = centred ? CGPoint(x: point.x, y: point.y + scale) : point
+        func at(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: origin.x + x * scale, y: origin.y + y * scale)
+        }
+        var triangle = Path()
+        triangle.move(to: at(0, -11))
+        triangle.addLine(to: at(11, 9))
+        triangle.addLine(to: at(-11, 9))
+        triangle.closeSubpath()
+        context.fill(triangle, with: .color(MapInk.hazardFill))
+        context.stroke(triangle, with: .color(MapInk.hazardStroke), lineWidth: MapMarker.stroke * scale)
+        var bang = Path()
+        bang.addRect(CGRect(origin: at(-1, -3), size: CGSize(width: 2 * scale, height: 6 * scale)))
+        bang.addRect(CGRect(origin: at(-1, 5), size: CGSize(width: 2 * scale, height: 2 * scale)))
+        context.fill(bang, with: .color(MapInk.hazardBang))
+    }
+}
+
 /// Room metres ↔ view points. x is 0 on the stage centre line; y is 0 at the
 /// stage wall, which is drawn at the top — the same way up as the console.
 ///
@@ -145,12 +207,13 @@ struct FloorPlanCanvas: View {
             // `draw()`: marker, then pings, then the found person, then the
             // phone pins over all of it.
             var labels: [CGRect] = []
-            drawMarker(&context, plan: plan, labels: &labels, size: size)
+            drawMarker(&context, plan: plan)
             drawPings(&context, plan: plan)
             drawHazards(&context, plan: plan)
             drawCandidate(&context, plan: plan, labels: &labels, size: size)
             for who in people {
-                phone(&context, at: plan.point(x: who.x, y: who.y), heading: who.heading, number: who.index)
+                phone(&context, at: plan.point(x: who.x, y: who.y), heading: who.heading,
+                      number: who.index)
             }
             if showsDetail { scaleBar(&context, plan: plan, size: size) }
         }
@@ -169,7 +232,9 @@ struct FloorPlanCanvas: View {
     /// pose stands in, so the operator's own dot never blinks out.
     private var searchers: [Searcher] {
         let phones = world?.phones ?? []
-        var out = phones.map { Searcher(x: $0.x, y: $0.y, heading: $0.h, index: $0.i) }
+        var out = phones.map {
+            Searcher(x: $0.x, y: $0.y, heading: $0.h, index: $0.i)
+        }
         if let me, !phones.contains(where: { $0.id == world?.me }) {
             out.append(Searcher(x: me.x, y: me.y, heading: me.heading, index: nil))
         }
@@ -417,16 +482,8 @@ struct FloorPlanCanvas: View {
         }
     }
 
-    /// `drawPersonGlyph()`: a head and shoulders in a white disc.
     private func person(_ context: inout GraphicsContext, at point: CGPoint, color: Color) {
-        let circle = Path(ellipseIn: CGRect(x: point.x - MapMarker.radius, y: point.y - MapMarker.radius,
-                                            width: MapMarker.radius * 2, height: MapMarker.radius * 2))
-        context.fill(circle, with: .color(MapInk.markerBorder))
-        context.stroke(circle, with: .color(color), lineWidth: MapMarker.stroke)
-        context.fill(Path(ellipseIn: CGRect(x: point.x - 2.7, y: point.y - 6.2, width: 5.4, height: 5.4)),
-                     with: .color(color))
-        context.fill(Path(roundedRect: CGRect(x: point.x - 4.5, y: point.y + 0.5, width: 9, height: 5.5),
-                          cornerRadius: 3), with: .color(color))
+        PersonGlyph.draw(&context, at: point, color: color)
     }
 
     /// `drawMarker()`: the printed alignment marker, wherever the operator put
@@ -435,12 +492,12 @@ struct FloorPlanCanvas: View {
     /// The console draws it as a tag rather than a dot, "so it reads as a thing
     /// on a wall, not another searcher" — 16 points square with a 4-point
     /// radius, filled in `MARKER_COLOR`, a 2-point white border and the same
-    /// drop shadow the phone pins carry, with the MARKER label 19 points above.
+    /// drop shadow the phone pins carry — and, like the console, no text label:
+    /// the legend strip under the map already names the purple tag.
     /// The phone used to show it as an ordinary ping instead: a dark diamond
     /// with an expanding ring, which is the shape the map uses for "go here
     /// now" and reads as a completely different thing.
-    private func drawMarker(_ context: inout GraphicsContext, plan: FloorPlanGeometry,
-                            labels: inout [CGRect], size: CGSize) {
+    private func drawMarker(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
         guard let marker = world?.marker else { return }
         let p = plan.point(x: marker.x, y: marker.y)
         let tag = Path(roundedRect: CGRect(x: p.x - 8, y: p.y - 8, width: 16, height: 16),
@@ -450,9 +507,6 @@ struct FloorPlanCanvas: View {
             layer.fill(tag, with: .color(MapInk.marker))
             layer.stroke(tag, with: .color(MapInk.markerBorder), lineWidth: MapMarker.stroke)
         }
-        guard showsDetail else { return }
-        mapLabel(&context, "MARKER", at: CGPoint(x: p.x, y: p.y - 19),
-                 background: MapInk.marker, labels: &labels, size: size)
     }
 
     /// Before the search starts the hub also pushes the marker down the ping
@@ -467,31 +521,24 @@ struct FloorPlanCanvas: View {
         world?.marker == nil ? pings : pings.filter { $0.label != "MARKER" }
     }
 
+    /// `drawDetectedPeople()` and `drawHazards()`. Both used to be invented
+    /// here — a plain blue dot for a person and an orange outline triangle with
+    /// a text "!" for a hazard — so the same two things wore different shapes
+    /// and different ambers on the console and on the phone. These are the
+    /// console's own glyphs.
     private func drawHazards(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
-        for person in world?.detectedPeople ?? [] {
-            guard person.x.isFinite, person.y.isFinite else { continue }
-            let p = plan.point(x: person.x, y: person.y)
-            let radius: CGFloat = showsDetail ? 7 : 5
-            let color: Color = person.stale ? .gray : .blue
-            let dot = Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius,
-                                            width: radius * 2, height: radius * 2))
-            context.fill(dot, with: .color(color))
-            context.stroke(dot, with: .color(.white), lineWidth: 1.5)
+        for detected in world?.detectedPeople ?? [] {
+            guard detected.x.isFinite, detected.y.isFinite else { continue }
+            person(&context, at: plan.point(x: detected.x, y: detected.y),
+                   color: detected.stale ? MapInk.staleInk : MapInk.detectedPerson)
         }
         for hazard in world?.hazards ?? [] {
             guard hazard.x.isFinite, hazard.y.isFinite else { continue }
             let p = plan.point(x: hazard.x, y: hazard.y)
-            let radius: CGFloat = showsDetail ? 9 : 6
-            let color: Color = hazard.stale ? .gray : .orange
-            var triangle = Path()
-            triangle.move(to: CGPoint(x: p.x, y: p.y - radius))
-            triangle.addLine(to: CGPoint(x: p.x + radius, y: p.y + radius))
-            triangle.addLine(to: CGPoint(x: p.x - radius, y: p.y + radius))
-            triangle.closeSubpath()
-            context.fill(triangle, with: .color(color.opacity(0.18)))
-            context.stroke(triangle, with: .color(color), lineWidth: 1.5)
-            context.draw(Text("!").font(.system(size: radius * 1.4, weight: .bold))
-                .foregroundStyle(color), at: CGPoint(x: p.x, y: p.y + radius * 0.25))
+            var layer = context
+            // `ctx.globalAlpha = stale ? .5 : 1`.
+            layer.opacity = hazard.stale ? 0.5 : 1
+            HazardSign.draw(&layer, at: p, scale: showsDetail ? 1 : 0.7)
         }
     }
 
@@ -799,17 +846,28 @@ struct RoomMapView: View {
 
                 // `.map-legend`: a full-width strip under the map, not a card
                 // floating over the floor.
-                // Four keys and the ramp, the same five the console's legend
-                // carries. `.map-legend` is a wrapping flex; an HStack cannot
-                // wrap, so the second line is explicit and the gap is a notch
-                // tighter than the console's 18px.
+                // Five keys and the ramp, the same six the console's legend
+                // carries, in the same order and wearing the same glyphs.
+                // `.map-legend` is a wrapping flex; an HStack cannot wrap, so
+                // the rows are explicit and the gap is a notch tighter than the
+                // console's 18px.
                 VStack(alignment: .leading, spacing: Space.s) {
+                    // Three people, then the two things that are not people.
+                    // Five across does not fit a phone at a legible size, and
+                    // the flex on the console wraps in the same place.
                     HStack(spacing: Space.m) {
                         MapLegendKey(label: "Searcher", fill: MapInk.searcher, ring: MapInk.markerBorder)
-                        MapLegendKey(label: "Possible", fill: MapInk.markerBorder, ring: MapInk.sighting)
-                        MapLegendKey(label: "Found", fill: MapInk.markerBorder, ring: MapInk.found)
+                        MapLegendKey(label: "Possible", fill: MapInk.markerBorder, ring: MapInk.sighting,
+                                     glyph: .person)
+                        MapLegendKey(label: "Found", fill: MapInk.markerBorder, ring: MapInk.found,
+                                     glyph: .person)
+                        Spacer(minLength: 0)
+                    }
+                    HStack(spacing: Space.m) {
                         MapLegendKey(label: "Marker", fill: MapInk.marker, ring: MapInk.markerBorder,
-                                     rounded: true)
+                                     glyph: .rounded)
+                        MapLegendKey(label: "Hazard", fill: MapInk.hazardFill,
+                                     ring: MapInk.hazardStroke, glyph: .hazard)
                         Spacer(minLength: 0)
                     }
                     // The field is a scale, not a category, so its key names
@@ -864,32 +922,65 @@ private struct HeatScaleBar: View {
 }
 
 /// `.map-key`: a 20-point disc with a 2-point border, filled for a searcher and
-/// hollow for a person.
+/// hollow for a person. Every key is the same box, so the strip reads as five
+/// things of one kind rather than one of them shouting — which is why the
+/// hazard triangle is drawn into the same square as the discs instead of being
+/// given a bigger one.
 private struct MapLegendKey: View {
+    /// Which of the map's own shapes this key is showing.
+    enum Glyph {
+        /// A plain disc: a searcher.
+        case disc
+        /// `.map-key.sighting::before/::after` — the head and shoulders the map
+        /// draws inside a hollow disc for somebody who has been seen.
+        case person
+        /// `.map-key.marker { border-radius: 5px }`: the alignment marker is the
+        /// one thing on the map that is not a person, so it is the one key that
+        /// is not a disc — the same distinction the map itself draws.
+        case rounded
+        /// `.hazard-key`: the warning triangle, the console's own path.
+        case hazard
+    }
+
     let label: String
     let fill: Color
     let ring: Color
-    /// `.map-key.marker { border-radius: 5px }`: the alignment marker is the
-    /// one thing on the map that is not a person, so it is the one key that is
-    /// not a disc — the same distinction the map itself draws.
-    var rounded = false
+    var glyph: Glyph = .disc
 
     /// `.map-key` carries `box-shadow: 0 1px 4px rgba(23,55,38,.18)`; the
     /// hollow person keys turn it off with `box-shadow: none`. So: the filled
     /// keys lift off the strip, the outlined ones sit flat on it.
-    private var filled: Bool { fill != MapInk.markerBorder }
+    private var filled: Bool { fill != MapInk.markerBorder && glyph != .hazard }
+
+    private static let side: CGFloat = 16
 
     var body: some View {
         HStack(spacing: 7) {
             Group {
-                if rounded {
+                switch glyph {
+                case .disc:
+                    Circle().fill(fill).overlay(Circle().strokeBorder(ring, lineWidth: 2))
+                case .rounded:
                     let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
                     shape.fill(fill).overlay(shape.strokeBorder(ring, lineWidth: 2))
-                } else {
-                    Circle().fill(fill).overlay(Circle().strokeBorder(ring, lineWidth: 2))
+                case .person:
+                    // Drawn, not composed out of shapes: the same call the map
+                    // makes, so the key cannot drift away from the pin. Scaled
+                    // by the glyph's *outer* size — a `Canvas` clips to its
+                    // bounds, so anything sized by the path alone loses its
+                    // stroke where the path runs closest to the edge.
+                    Canvas { context, size in
+                        PersonGlyph.draw(&context, at: CGPoint(x: size.width / 2, y: size.height / 2),
+                                         color: ring, scale: size.width / PersonGlyph.outerUnits)
+                    }
+                case .hazard:
+                    Canvas { context, size in
+                        HazardSign.draw(&context, at: CGPoint(x: size.width / 2, y: size.height / 2),
+                                        scale: size.width / HazardSign.outerUnits, centred: true)
+                    }
                 }
             }
-            .frame(width: 16, height: 16)
+            .frame(width: Self.side, height: Self.side)
             .shadow(color: filled ? MapInk.legendKeyShadow : .clear, radius: 2, x: 0, y: 1)
             Text(label)
         }

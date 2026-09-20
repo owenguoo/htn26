@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import random
 from collections.abc import Callable
 
 from .protocol import now_ms
@@ -68,6 +69,28 @@ class Victim:
                 "foundMs": round(now - self.found_at), "attended": self.attended,
                 "respondersWanted": self.wanted,
                 "responders": {pid: r["arrived"] for pid, r in self.responders.items()}}
+
+
+def scatter(room: dict, count: int, rng: random.Random, taken: list[tuple[float, float]] | None = None,
+            margin: float = .6, spacing: float = 2.0) -> list[tuple[float, float]]:
+    """`count` spots on the floor, none of them on top of each other or of `taken`.
+
+    Used to lay out a drill: the people to find and the chairs in the way. Rejection
+    sampling with a bail-out, because a small room and a large count can make the
+    spacing impossible and a rehearsal that hangs is worse than one that crowds.
+    """
+    placed = list(taken or [])
+    out: list[tuple[float, float]] = []
+    x0, x1 = -room['width'] / 2 + margin, room['width'] / 2 - margin
+    y0, y1 = margin, room['depth'] - margin
+    for _ in range(max(0, count)):
+        for attempt in range(60):
+            spot = (round(rng.uniform(x0, x1), 2), round(rng.uniform(y0, y1), 2))
+            if attempt == 59 or all(math.dist(spot, other) >= spacing for other in placed):
+                placed.append(spot)
+                out.append(spot)
+                break
+    return out
 
 
 class Target:

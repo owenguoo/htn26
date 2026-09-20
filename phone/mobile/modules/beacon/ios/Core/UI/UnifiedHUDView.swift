@@ -146,12 +146,13 @@ struct HUDSoundEdgeView: View {
 struct HUDStackView: View {
     let hud: HubHUDMirror
 
-    /// Same increments the drawing uses (60/40/30/36 × k), at the phone's k ≈ 1.
+    /// Same increments the drawing uses (60/40/30/36/26 × k), at the phone's k ≈ 1.
     /// Tape is taller than the console's 40 so the marker chip and degree
     /// labels are not stacked on top of each other.
     private var contentHeight: CGFloat {
-        let rows: [(Bool, CGFloat)] = [(hud.compass != nil, 60), (hud.banner != nil, 40),
-                                       (hud.lookingFor != nil, 30), (hud.toast != nil, 36)]
+        let rows: [(Bool, CGFloat)] = [(hud.compass != nil, 60), (hud.warning != nil, 30),
+                                       (hud.banner != nil, 40), (hud.lookingFor != nil, 30),
+                                       (hud.toast != nil, 36), (hud.stats != nil, 26)]
         return max(1, rows.reduce(0) { $0 + ($1.0 ? $1.1 : 0) })
     }
 
@@ -163,6 +164,17 @@ struct HUDStackView: View {
                 if let compass = hud.compass {
                     drawTape(&context, x0: 0, y0: top, width: size.width, height: 52 * k, compass: compass, k: k)
                     top += 60 * k
+                }
+                // Directly under the tape, above the banner: what is about to be
+                // underfoot outranks what the operator is being asked to do
+                // about the search.
+                if let warning = hud.warning {
+                    HUDStyle.pill(&context, at: CGPoint(x: size.width / 2, y: top + 12 * k),
+                                  text: warning.text,
+                                  background: Color(hex: warning.color) ?? .orange,
+                                  foreground: HUDStyle.chipInk(on: warning.color),
+                                  size: 13 * k, bold: true, maxWidth: size.width - 30 * k)
+                    top += 30 * k
                 }
                 if let banner = hud.banner {
                     let (background, foreground) = HUDStyle.tone(banner.tone)
@@ -181,6 +193,15 @@ struct HUDStackView: View {
                     HUDStyle.pill(&context, at: CGPoint(x: size.width / 2, y: top + 14 * k), text: toast,
                                   background: HUDStyle.toastBackground, foreground: HUDStyle.deepInk,
                                   size: 13 * k, bold: true, maxWidth: size.width - 30 * k)
+                    top += 36 * k
+                }
+                // Last, smallest, and gone the moment anything louder appears —
+                // the mirror decides that, not this renderer.
+                if let stats = hud.stats {
+                    HUDStyle.pill(&context, at: CGPoint(x: size.width / 2, y: top + 11 * k), text: stats,
+                                  background: HUDStyle.tapeBackground.opacity(0.8),
+                                  foreground: HUDStyle.lookingForInk,
+                                  size: 11 * k, maxWidth: size.width - 30 * k)
                 }
             }
         }
@@ -320,8 +341,16 @@ struct HUDFrameLayerView: View {
                     diamond.addLine(to: CGPoint(x: at.x, y: at.y + r))
                     diamond.addLine(to: CGPoint(x: at.x - r, y: at.y))
                     diamond.closeSubpath()
-                    context.fill(diamond, with: .color(color))
-                    context.stroke(diamond, with: .color(.black.opacity(0.6)), lineWidth: 2)
+                    if marker.hollow {
+                        // A teammate. Outline only, so a searcher can never be
+                        // read as the person being searched for — the filled
+                        // diamond below is what a find looks like.
+                        context.stroke(diamond, with: .color(.black.opacity(0.5)), lineWidth: 4)
+                        context.stroke(diamond, with: .color(color), lineWidth: 2)
+                    } else {
+                        context.fill(diamond, with: .color(color))
+                        context.stroke(diamond, with: .color(.black.opacity(0.6)), lineWidth: 2)
+                    }
                     HUDStyle.pill(&context, at: CGPoint(x: at.x, y: at.y - r - 13 * k), text: marker.label,
                                   background: .black.opacity(0.7), foreground: .white, size: 12 * k)
                 }

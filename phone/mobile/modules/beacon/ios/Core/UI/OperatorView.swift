@@ -21,9 +21,6 @@ public struct OperatorView: View {
     /// the status pill stand down: a thumbnail of the map beside the map is the
     /// same picture twice, and the pill repeats what the card already says.
     @State private var isShowingMap = false
-    /// Held true by the `.task` below for `confirmHold` after this phone locks
-    /// on, so the calibrate card can answer before it goes.
-    @State private var showingConfirmed = false
 
     /// Where the operator has parked the mini-map, as a displacement from its
     /// resting corner. `rest` is what a finished drag committed; `miniMapOffset`
@@ -52,30 +49,12 @@ public struct OperatorView: View {
 
     private var overlay: OverlayState { model.frame.overlay }
 
-    /// How long "Calibrated ✓" stays up after the marker locks.
-    ///
-    /// `PhaseCardText.covers(_:alignment:)` drops the prompt the moment this
-    /// phone is located, which left the operator watching a full-screen card
-    /// vanish with no indication of whether that was the lock succeeding or
-    /// something else happening. Long enough to read, short enough that nobody
-    /// is standing there waiting for their camera back.
-    private static let confirmHold: Duration = .seconds(2.2)
-
-    /// This phone knows where it is.
-    private var isLocated: Bool { overlay.alignment != .none }
-
-    /// The calibrate prompt, answered. Held past the point where `covers`
-    /// would have taken the card away.
-    private var calibrationConfirmed: Bool {
-        showingConfirmed && isLocated && overlay.phase == "calibrate"
-    }
-
     /// A phase card is over the whole camera. It carries its own gear and its
     /// own words, so the status pill and the mini-map stand down underneath it
     /// rather than repeating them around the edges.
     private var phaseCardIsUp: Bool {
         guard !isShowingMap, let phase = overlay.phase else { return false }
-        return PhaseCardText.covers(phase, alignment: overlay.alignment) || calibrationConfirmed
+        return PhaseCardText.covers(phase, alignment: overlay.alignment)
     }
 
     /// This phone has no lock and the operator is expected to do something
@@ -137,6 +116,9 @@ public struct OperatorView: View {
                               showAR: !model.isDrive)
 
             // Always mounted so appear/disappear can ease rather than pop.
+            // Underneath the edge band and the chrome: the wash is the mood of
+            // the screen, not a thing on top of it.
+            HUDAmbientView(ambient: model.frame.hud.ambient)
             HUDSoundEdgeView(edge: model.frame.hud.soundEdge)
 
             chrome
@@ -174,7 +156,6 @@ public struct OperatorView: View {
                 VStack(spacing: 0) {
                     if isHuntingMarker { Spacer(minLength: 0) }
                     PhaseCardView(phase: phase, lookingFor: overlay.world?.lookingFor,
-                                  confirmed: calibrationConfirmed,
                                   again: overlay.isRecalibrating)
                 }
                 .padding(.bottom, isHuntingMarker ? Space.xxl : 0)
@@ -208,21 +189,11 @@ public struct OperatorView: View {
         .onGeometryChange(for: CGSize.self) { $0.size } action: { contentSize = $0 }
         .animation(.easeOut(duration: 0.12), value: overlay.flash)
         .animation(.easeOut(duration: 0.2), value: overlay.phase)
-        .animation(.easeOut(duration: 0.25), value: calibrationConfirmed)
-        // `.task(id:)` rather than a timer: SwiftUI cancels and restarts it on
-        // every change of the lock, so losing and regaining alignment shows the
-        // confirmation again instead of leaving a stale one behind.
-        .task(id: isLocated) {
-            guard isLocated, overlay.phase == "calibrate" else {
-                showingConfirmed = false
-                return
-            }
-            showingConfirmed = true
-            try? await Task.sleep(for: Self.confirmHold)
-            // A cancelled sleep means a newer run has taken over; it owns the
-            // flag from here.
-            if !Task.isCancelled { showingConfirmed = false }
-        }
+        // A lock is confirmed once, by the full-screen green flash
+        // (`OverlayEngine.lockFlashText`). The calibrate card used to be held
+        // open afterwards to say "Calibrated" a second time, which put the same
+        // word on screen twice for one event; now the card simply leaves when
+        // `covers` says the prompt has been answered.
         // No `.preferredColorScheme(.dark)` here. It used to pin the whole tree,
         // including the phase card and the seat picker — modal cards that have
         // no reason to ignore a light-mode operator. What actually has to stay
@@ -272,6 +243,13 @@ public struct OperatorView: View {
                     miniMap(room: room)
                 }
                 Spacer(minLength: 0)
+                // Opposite the map: the place you are, and the place you are
+                // being sent. The mirror decides whether there is anything to
+                // say here.
+                if let objective = model.frame.hud.objective, !chromeIsHidden {
+                    ObjectiveCardView(objective: objective)
+                        .transition(.opacity)
+                }
             }
         }
         .padding(.horizontal, Space.m)

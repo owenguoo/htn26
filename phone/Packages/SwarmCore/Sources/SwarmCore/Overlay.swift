@@ -451,6 +451,95 @@ public struct PingCue: Sendable, Equatable, Identifiable {
     }
 }
 
+/// Another searcher, placed relative to this phone.
+///
+/// The hub already tells every phone where all the others are (`world.phones`);
+/// until now only the mini-map read it. On a floor plan the size of a postage
+/// stamp that was enough. In a large space the operator is looking at the world,
+/// not at the corner of their screen, so the team belongs on the compass tape
+/// and in the camera view as well — both of which need a bearing and a distance
+/// this phone works out for itself.
+public struct TeammateCue: Sendable, Equatable, Identifiable {
+    /// Roughly where a person's head is. Their marker belongs on them, not on
+    /// the floor in front of their feet.
+    public static let headHeightMetres: Float = 1.5
+
+    public var id: String
+    /// The `#3` the console, the mini-map and the operators all already use.
+    public var index: Int
+    /// Room metres.
+    public var x: Double
+    public var y: Double
+    /// Filled in on every `update` when this phone knows where it is.
+    public var bearingRadians: Float?
+    public var distance: Float?
+    /// Where they land in the captured image, in pixels of
+    /// `CameraIntrinsics.imageWidth × imageHeight`; nil behind the camera.
+    public var imagePoint: CGPoint?
+
+    public init(id: String, index: Int, x: Double, y: Double) {
+        self.id = id
+        self.index = index
+        self.x = x
+        self.y = y
+    }
+}
+
+/// This phone's standing part in a find: on the way, or there.
+///
+/// Red does not stop at the door. A flash is an event — it announces something
+/// and then it is over — but "somebody has been found and you are one of the
+/// people on them" is a situation that lasts minutes, and for all of those
+/// minutes the screen should say so without being asked again. The hub already
+/// marks both edges: a `respond` guide starts it, and that guide clearing is
+/// how the hub says you have arrived.
+public enum FindInvolvement: String, Sendable, Equatable {
+    /// Walking to them. The wash pulses.
+    case heading
+    /// Standing with them. The wash holds, steady and dimmer — the same red,
+    /// because the emergency did not end when you got there, but no longer
+    /// pulsing at somebody who has already arrived.
+    case with
+}
+
+/// Something in the room to get around, placed relative to this phone.
+///
+/// The hub tracks hazards on the floor plan (`world.hazards`) and the mini-map
+/// draws them, but a map in the corner is not what stops somebody walking into
+/// a chair while they are running toward a person they have just found. That
+/// needs a bearing and a distance, and it needs to be in front of their eyes.
+public struct HazardCue: Sendable, Equatable, Identifiable {
+    /// Hazards are obstacles at roughly waist height, not marks on the carpet.
+    public static let heightMetres: Float = 0.8
+    /// Close enough to say something about.
+    public static let warnMetres: Float = 3
+    /// Close enough that it outranks everything else on the bezel: you are
+    /// about to walk into it.
+    public static let imminentMetres: Float = 2
+
+    public var id: String
+    public var x: Double
+    public var y: Double
+    public var bearingRadians: Float?
+    public var distance: Float?
+    public var imagePoint: CGPoint?
+
+    public init(id: String, x: Double, y: Double) {
+        self.id = id
+        self.x = x
+        self.y = y
+    }
+
+    /// "left", "right" or "ahead" — which way to step to miss it.
+    public var side: String? {
+        guard let bearingRadians else { return nil }
+        let degrees = Double(bearingRadians) * 180 / .pi
+        if degrees < -20 { return "left" }
+        if degrees > 20 { return "right" }
+        return "ahead"
+    }
+}
+
 public struct HapticCue: Sendable, Equatable {
     /// One of `locked`, `flash`, `ping`, `message`, `onTarget`. The client
     /// decides how each one feels — `Haptics` in the beacon iOS module — so
@@ -525,6 +614,12 @@ public struct OverlayState: Sendable, Equatable {
     public var detections: DetectionsCue?
     public var hazards: DetectionsCue?
     public var pings: [PingCue] = []
+    /// Everyone else on the search, from `world.phones`, placed on every tick.
+    public var teammates: [TeammateCue] = []
+    /// The closest hazard worth mentioning, or nil when the way is clear.
+    public var nearestHazard: HazardCue?
+    /// Whether this phone is part of a find, and how far into it.
+    public var find: FindInvolvement?
     /// The hub's found candidate (`world.candidate`), located like a ping so it
     /// can sit on the compass and float in the camera view. `id` is −1.
     public var candidate: PingCue?
@@ -618,9 +713,9 @@ public struct OverlayModel: Sendable {
     public static let lockFlashRGB: (red: Float, green: Float, blue: Float) =
         (24 / 255, 131 / 255, 75 / 255)
     /// Long enough to read at arm's length, short enough not to be in the way
-    /// of whatever the operator does next. The calibrate card's own "Calibrated"
-    /// state outlives it, so the page hands over to the card rather than
-    /// dropping straight back to the camera.
+    /// of whatever the operator does next. This is the *only* confirmation a
+    /// lock gets: the calibrate card used to hold a second "Calibrated" state
+    /// open behind it, which said the same word twice for one event.
     public static let lockFlashSeconds: Double = 1.1
     public static let lockFlashText = "Calibrated ✓"
 
@@ -663,6 +758,15 @@ public struct OverlayModel: Sendable {
 
     public mutating func apply(phase: String) {
         state.phase = phase
+        // Lobby, calibrate and end are not a search. Whatever this phone was
+        // part of, it is over, and the screen stops saying otherwise.
+        if phase != "search" && phase != "found" { state.find = nil }
+    }
+
+    /// A `respond` guide means a find team; being steered anywhere else means
+    /// the operator has been taken off it.
+    private mutating func noteInvolvement(_ kind: String) {
+        state.find = kind == "respond" ? .heading : nil
     }
 
     public mutating func apply(_ world: HubWorld, now: Double) {
@@ -687,6 +791,11 @@ public struct OverlayModel: Sendable {
     public mutating func apply(_ command: HubCommand, heading: Double?, now: Double) -> Bool {
         switch command {
         case .guideClear:
+            // The hub clears a find team's guide exactly once: when that phone
+            // gets within `ARRIVE_M` of the person. Anything else it clears was
+            // never a find in the first place, so only a phone that was on its
+            // way can be promoted to being there.
+            if state.find == .heading { state.find = .with }
             guide = nil
             state.arrow = nil
             state.banner = nil
@@ -700,9 +809,11 @@ public struct OverlayModel: Sendable {
             // it. It describes where the phone was pointing when the hub last
             // ticked, up to 200 ms ago; the live offset is recomputed every
             // frame in `updateGuide`.
+            noteInvolvement(kind)
             guide = .heading(target: RoomMath.wrap360(heading + delta), kind: kind, label: sector,
                              text: text, distance: distance, until: now + Self.turnGuideLifetime)
         case .guideHeading(let kind, let sector, let target, let distance, let untilMs):
+            noteInvolvement(kind)
             guide = .heading(target: RoomMath.wrap360(target), kind: kind, label: sector, text: nil,
                              distance: distance, until: now + untilMs / 1000)
         case .guideCompass(let kind, let sector, let compass, let untilMs):
@@ -879,6 +990,10 @@ public struct OverlayModel: Sendable {
         // reticle is what says what to do instead.
         updatePings(pose: usablePose, roomPose: roomPose, alignment: alignment,
                     intrinsics: intrinsics)
+        updateTeammates(pose: usablePose, roomPose: roomPose, alignment: alignment,
+                        intrinsics: intrinsics)
+        updateHazards(pose: usablePose, roomPose: roomPose, alignment: alignment,
+                      intrinsics: intrinsics)
     }
 
     /// Rewrites the banner from the *live* offset, every tick.
@@ -1025,35 +1140,91 @@ public struct OverlayModel: Sendable {
         }
     }
 
+    /// Where a point in the room sits relative to this camera right now: how far
+    /// to turn for it, how far away it is, and where it lands in the captured
+    /// image. Shared by every located cue so they cannot disagree.
+    ///
+    /// `heightAboveFloor` is the reason this is shared rather than ping-shaped.
+    /// A ping is a spot on the floor and takes 0; the alignment marker is taped
+    /// to a wall; a teammate is a person, and their marker belongs on them. At
+    /// 20 m the difference between a person's head and the carpet at their feet
+    /// is most of the screen.
+    private func place(x: Double, y: Double, heightAboveFloor: Float, pose: Pose?,
+                       roomPose: RoomPose?, alignment: RoomAlignment?, intrinsics: CameraIntrinsics?)
+        -> (bearingRadians: Float?, distance: Float?, imagePoint: CGPoint?) {
+        guard let pose, let roomPose, let alignment else { return (nil, nil, nil) }
+        let distance = Float(hypot(x - roomPose.x, y - roomPose.y))
+        var bearingRadians: Float?
+        if let heading = roomPose.heading {
+            let bearing = RoomMath.bearing(fromX: roomPose.x, y: roomPose.y, toX: x, y: y)
+            bearingRadians = Float(RoomMath.signedDiff(bearing, heading) * .pi / 180)
+        }
+        var imagePoint: CGPoint?
+        if let intrinsics {
+            // The floor, in the same 3D frame the pose is in. The venue origin is
+            // on the floor; a seat-tap frame's origin is wherever ARKit started,
+            // so assume a phone held at chest height.
+            let floor: Float = state.alignment == .marker ? 0 : pose.position.y - 1.4
+            let point = alignment.unproject(x: x, y: y, height: floor + heightAboveFloor)
+            imagePoint = Projection.project(venuePoint: point, camera: pose, intrinsics: intrinsics)
+        }
+        return (bearingRadians, distance, imagePoint)
+    }
+
     private func located(_ cue: PingCue, pose: Pose?, roomPose: RoomPose?, alignment: RoomAlignment?,
                          intrinsics: CameraIntrinsics?) -> PingCue {
         var ping = cue
-        ping.bearingRadians = nil
-        ping.distance = nil
-        ping.imagePoint = nil
-        guard let pose, let roomPose, let alignment else { return ping }
-        ping.distance = Float(hypot(ping.x - roomPose.x, ping.y - roomPose.y))
-        if let heading = roomPose.heading {
-            let bearing = RoomMath.bearing(fromX: roomPose.x, y: roomPose.y, toX: ping.x, y: ping.y)
-            ping.bearingRadians = Float(RoomMath.signedDiff(bearing, heading) * .pi / 180)
-        }
-        if let intrinsics {
-            // A spot on the floor, in the same 3D frame the pose is in. The
-            // venue origin is on the floor; a seat-tap frame's origin is wherever
-            // ARKit started, so assume a phone held at chest height.
-            let floor: Float = state.alignment == .marker ? 0 : pose.position.y - 1.4
-            // …except the alignment marker, which is not a spot on the floor.
-            // The hub pushes it down the ping channel as a bare `x, y` (`hub.py`
-            // `marker_cue`) because that is all the console's map needs, and
-            // drawing it at height 0 put the diamond on the carpet under a
-            // marker taped to a wall or stood on a table — metres from the thing
-            // the operator is being asked to look at. `venue.json` measured it,
-            // so use that height.
-            let height = floor + (ping.label == "MARKER" ? Float(markerHeightMetres) : 0)
-            let point = alignment.unproject(x: ping.x, y: ping.y, height: height)
-            ping.imagePoint = Projection.project(venuePoint: point, camera: pose, intrinsics: intrinsics)
-        }
+        // A ping is a spot on the floor — except the alignment marker, which is
+        // not. The hub pushes it down the ping channel as a bare `x, y`
+        // (`hub.py` `marker_cue`) because that is all the console's map needs,
+        // and drawing it at height 0 put the diamond on the carpet under a
+        // marker taped to a wall or stood on a table — metres from the thing the
+        // operator is being asked to look at. `venue.json` measured it, so use
+        // that height.
+        let height = ping.label == "MARKER" ? Float(markerHeightMetres) : 0
+        (ping.bearingRadians, ping.distance, ping.imagePoint) = place(
+            x: ping.x, y: ping.y, heightAboveFloor: height, pose: pose, roomPose: roomPose,
+            alignment: alignment, intrinsics: intrinsics)
         return ping
+    }
+
+    /// The nearest hazard, if one is close enough to matter.
+    ///
+    /// Only the closest: a warning that lists three things is a warning nobody
+    /// reads while walking. Stale hazards are skipped — the hub marks a hazard
+    /// stale when nothing has seen it recently, and steering somebody around a
+    /// chair that has been moved is its own hazard.
+    private mutating func updateHazards(pose: Pose?, roomPose: RoomPose?,
+                                        alignment: RoomAlignment?, intrinsics: CameraIntrinsics?) {
+        let placed = (state.world?.hazards ?? []).compactMap { hazard -> HazardCue? in
+            guard !hazard.stale, hazard.x.isFinite, hazard.y.isFinite else { return nil }
+            var cue = HazardCue(id: hazard.id, x: hazard.x, y: hazard.y)
+            (cue.bearingRadians, cue.distance, cue.imagePoint) = place(
+                x: hazard.x, y: hazard.y, heightAboveFloor: HazardCue.heightMetres,
+                pose: pose, roomPose: roomPose, alignment: alignment, intrinsics: intrinsics)
+            guard let distance = cue.distance, distance <= HazardCue.warnMetres else { return nil }
+            return cue
+        }
+        state.nearestHazard = placed.min { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }
+    }
+
+    /// Everyone else on the search, placed the same way.
+    ///
+    /// `world.me` is this phone, and it is excluded: a chip pointing at yourself
+    /// is noise. The hub sends peer positions at 2 Hz but this runs on every
+    /// overlay tick, because a chip that only moves twice a second visibly lags
+    /// the person it labels while the operator is swinging the phone around.
+    private mutating func updateTeammates(pose: Pose?, roomPose: RoomPose?,
+                                          alignment: RoomAlignment?, intrinsics: CameraIntrinsics?) {
+        let me = state.world?.me
+        state.teammates = (state.world?.phones ?? []).compactMap { peer in
+            guard peer.id != me else { return nil }
+            var mate = TeammateCue(id: peer.id, index: peer.i, x: peer.x, y: peer.y)
+            (mate.bearingRadians, mate.distance, mate.imagePoint) = place(
+                x: peer.x, y: peer.y, heightAboveFloor: TeammateCue.headHeightMetres,
+                pose: pose, roomPose: roomPose, alignment: alignment, intrinsics: intrinsics)
+            return mate
+        }
     }
 
     /// The fourteen strings `updateGuideBanner` (`web/phone.js:763-805`) can
