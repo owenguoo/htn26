@@ -15,8 +15,10 @@ import numpy as np
 MAX_ARCHIVE = 96
 MAX_BATCH = 32
 WINDOW_MS = 2500
-MAX_STAGED = 24
+MAX_STAGED = 64
 STAGED_SECONDS = 20
+MAX_SEQUENCE_SECONDS = 90
+STAGED_NEIGHBORS = 8
 
 
 class VisualSelector:
@@ -111,7 +113,7 @@ class VisualSelector:
         now = time.monotonic()
         pool = []
         for c in self.staged:
-            if now - c['_stagedAt'] > STAGED_SECONDS:
+            if now - c['_stagedAt'] > MAX_SEQUENCE_SECONDS:
                 self.record(c, 'Expired without overlap')
             else:
                 pool.append(c)
@@ -128,6 +130,28 @@ class VisualSelector:
                 else:
                     pool.append(candidate | {'_visual': visual, '_stagedAt': now})
         pool.sort(key=lambda c: (int(c['t'] // 500), -c['_visual']['sharp']))
+        # Link nearby waiting views before expiring them. A continuing sweep keeps
+        # its connecting views alive, but isolated/stale components still expire.
+        waiting_edges = {c['id']: set() for c in pool}
+        for i, c in enumerate(pool):
+            for other in pool[max(0, i-STAGED_NEIGHBORS):i]:
+                comparisons = c.setdefault('_matches', {})
+                if other['id'] not in comparisons:
+                    comparisons[other['id']] = self.compare(c['_visual'], other['_visual'])
+                if comparisons[other['id']][0]:
+                    waiting_edges[c['id']].add(other['id'])
+                    waiting_edges[other['id']].add(c['id'])
+        by_id = {c['id']:c for c in pool}
+        keep, unseen = set(), set(by_id)
+        while unseen:
+            component = reachable(waiting_edges, min(unseen))
+            unseen -= component
+            if now - max(by_id[i]['_stagedAt'] for i in component) <= STAGED_SECONDS:
+                keep.update(component)
+        for c in pool:
+            if c['id'] not in keep:
+                self.record(c, 'Expired without overlap')
+        pool = [c for c in pool if c['id'] in keep]
         while pool:
             remaining = []
             progress = False
@@ -149,7 +173,9 @@ class VisualSelector:
                     continue
                 if archive and not edges:
                     remaining.append(c)
-                    hints[c['pid']] = 'Holding view; sweep back toward a mapped area to connect it'
+                    hints[c['pid']] = ('Holding connected sweep; include a mapped area to join it'
+                                       if waiting_edges[c['id']] else
+                                       'Holding view; sweep back toward a mapped area to connect it')
                     continue
                 c['links'] = edges
                 c['quality'] = round(c['_visual']['sharp'], 2)
@@ -160,9 +186,26 @@ class VisualSelector:
             pool = remaining
             if not progress:
                 break
-        for c in pool[:-MAX_STAGED]:
-            self.record(c, 'Overlap buffer full')
-        self.staged = pool[-MAX_STAGED:]
+        # Evict whole stale components before cutting into a connected sweep.
+        remaining_ids = {c['id'] for c in pool}
+        components = []
+        edges = {i: waiting_edges[i] & remaining_ids for i in remaining_ids}
+        while remaining_ids:
+            component = reachable(edges, min(remaining_ids))
+            remaining_ids -= component
+            components.append(component)
+        components.sort(key=lambda ids: max((by_id[i]['_stagedAt'], by_id[i]['t'], i) for i in ids), reverse=True)
+        retained = set()
+        for component in components:
+            room = MAX_STAGED-len(retained)
+            if room <= 0:
+                break
+            ordered = sorted(component, key=lambda i:(by_id[i]['_stagedAt'], by_id[i]['t']))
+            retained.update(ordered[-room:])
+        for c in pool:
+            if c['id'] not in retained:
+                self.record(c, 'Overlap buffer full')
+        self.staged = [c for c in pool if c['id'] in retained]
         archive = trim_archive(archive, protected | {k['id'] for k in accepted})
         kept = {k['id'] for k in archive}
         for c in accepted:

@@ -104,14 +104,51 @@ class VisualTests(unittest.TestCase):
         root = frame(0) | {'jpeg': jpeg(texture())}
         archive, _, _ = selector.choose({'a': [root]}, [], set())
         visual = archive[0]['_visual']
-        candidates = [frame(i) | {'jpeg': str(i).encode()} for i in range(1, 40)]
+        candidates = [frame(i) | {'jpeg': str(i).encode()} for i in range(1, 80)]
         def describe(data):
             return visual | {'hash': data.decode()}, None
         with patch.object(selector, 'describe', side_effect=describe), patch.object(selector, 'compare', return_value=(0., False)):
             archive, added, _ = selector.choose({'a': candidates}, archive, set())
-        self.assertEqual(len(selector.staged), 24)
+        self.assertEqual(len(selector.staged), 64)
         self.assertEqual(added, [])
         self.assertEqual(selector.status()['counts']['Overlap buffer full'], 15)
+
+    def test_active_waiting_sequence_survives_until_late_bridge(self):
+        selector = VisualSelector()
+        # Real overlapping textured crops; the far sequence has no direct root overlap.
+        panorama = np.concatenate([texture(i) for i in range(5)], axis=1)
+        def crop(i, x): return frame(i) | {'jpeg':jpeg(panorama[:,x:x+640])}
+        with patch('swarm.keyframes.time.monotonic',return_value=1):
+            archive, _, _ = selector.choose({'a':[crop(0,0)]},[],set())
+            archive, _, _ = selector.choose({'a':[crop(1,1000)]},archive,set())
+        with patch('swarm.keyframes.time.monotonic',return_value=16):
+            archive, added, _ = selector.choose({'a':[crop(2,1300)]},archive,set())
+        self.assertEqual(len(added),0)
+        with patch('swarm.keyframes.time.monotonic',return_value=30):
+            archive, added, _ = selector.choose({'a':[crop(3,1600)]},archive,set())
+        self.assertEqual(len(selector.staged),3)
+        with patch('swarm.keyframes.time.monotonic',return_value=40):
+            archive, added, _ = selector.choose({'a':[crop(4,350),crop(5,700)]},archive,set())
+        self.assertEqual({c['id'] for c in added},{'k1','k2','k3','k4','k5'})
+        self.assertEqual(len(reachable(graph(archive),'k0')),6)
+        self.assertFalse(selector.staged)
+
+    def test_active_sequences_have_a_hard_age_limit(self):
+        selector = VisualSelector()
+        root = frame(0) | {'jpeg':jpeg(texture())}
+        with patch('swarm.keyframes.time.monotonic', return_value=0):
+            archive, _, _ = selector.choose({'a':[root]},[],set())
+        visual = archive[0]['_visual']
+        def describe(data): return visual | {'hash':data.decode()}, None
+        def compare(a,b): return (0.,False) if b['hash']==visual['hash'] else (.2,False)
+        with patch.object(selector,'describe',side_effect=describe), patch.object(selector,'compare',side_effect=compare):
+            for i, t in enumerate([1,16,30,44,58,72,86,92],1):
+                with patch('swarm.keyframes.time.monotonic',return_value=t):
+                    archive, added, _ = selector.choose({'a':[frame(i)|{'jpeg':str(i).encode()}]},archive,set())
+                self.assertEqual(len(added),0)
+        self.assertNotIn('k1',{c['id'] for c in selector.staged})
+        self.assertIn('k2',{c['id'] for c in selector.staged})
+        self.assertEqual(len(archive),1)
 
     def test_batch_is_connected_bounded_and_balanced(self):
         frames = [frame(0)] + [frame(i, 'a' if i < 40 else 'b', {'k0': .4}) for i in range(1, 60)]

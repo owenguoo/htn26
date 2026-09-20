@@ -23,3 +23,16 @@ Reset scan clears the active map and its view archive.
 Selected images and generated geometry are saved under `web/models/live/` and restored when the hub restarts.
 They are excluded from Git.
 Scale is estimated from camera height or available phone positions, so reconstructed geometry is approximate.
+
+## Waiting sweep sequences
+
+Unmatched clear frames are also compared with up to eight neighboring waiting
+views (pair results are cached). Connected waiting sequences stay eligible while
+new matching views arrive: 20 seconds of component inactivity, with a hard
+90-second age cap per image. The buffer holds at most 64 images; older components
+are evicted first, with oversized components subject to the same bound. A sequence
+still needs a verified visual connection to the accepted map before admission.
+No pose-only or unconditional image admission is used. This preserves connecting
+views through longer sweeps without admitting unrelated rooms or unbounded queues.
+Expired images are not recoverable from the accepted-frame archive; testing this
+change on a previously stalled area requires capturing that sweep again.
