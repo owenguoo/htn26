@@ -172,11 +172,19 @@ struct PingMarkersView: View {
 }
 
 /// Lobby, calibrate and end are whole-screen states; search and found are not.
+///
+/// The calibrate card only exists while this phone is *not* located
+/// (`PhaseCardText.covers(_:alignment:)`), so it has nothing to report about
+/// alignment and nothing to offer but the one instruction. It used to carry a
+/// "Not located yet" row in orange under a heading that already said Calibrate,
+/// a "Locked to a marker ✓" row that is now unreachable because the card is
+/// gone by then, and a second calibration method.
 struct PhaseCardView: View {
     let phase: String
-    let alignment: RoomAligner.Source
     let lookingFor: String?
-    let onPickSeat: () -> Void
+    /// The card covers the whole screen, so it has to carry the way out to
+    /// Settings itself — a gear drawn behind it is a gear that does not exist.
+    var onRequestSettings: (() -> Void)?
 
     static func covers(_ phase: String) -> Bool { PhaseCardText.covers(phase) }
 
@@ -194,19 +202,21 @@ struct PhaseCardView: View {
                 .font(TypeScale.detail)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-            if phase == "calibrate" {
-                Label(alignmentText, systemImage: alignment == .none ? "circle.dashed" : "checkmark.circle.fill")
-                    .font(TypeScale.action)
-                    .foregroundStyle(alignment == .none ? .ssAttention : .ssOK)
-                if alignment != .marker {
-                    Button("No marker nearby? Tap your spot", action: onPickSeat)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                }
-            }
         }
         .padding(Space.xxl)
         .frame(maxWidth: 340)
+        .overlay(alignment: .topTrailing) {
+            if let onRequestSettings {
+                Button("Settings", systemImage: "gearshape", action: onRequestSettings)
+                    .labelStyle(.iconOnly)
+                    .font(TypeScale.inlineSymbol)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .hitTarget()
+                    .padding(Space.xs)
+                    .accessibilityLabel("Settings")
+            }
+        }
         // This card covers the whole screen while it is up, so the camera behind
         // it is not the point: a thicker material is what keeps `.secondary`
         // body text readable over whatever the lens happens to be pointed at.
@@ -225,12 +235,4 @@ struct PhaseCardView: View {
     // The words live in SwarmCore so the console's mirror of this card matches.
     private var title: String { PhaseCardText.title(for: phase) }
     private var detail: String { PhaseCardText.detail(for: phase) }
-
-    private var alignmentText: String {
-        switch alignment {
-        case .none: "Not located yet"
-        case .seat: "Located from your spot"
-        case .marker: "Locked to a marker"
-        }
-    }
 }

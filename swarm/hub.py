@@ -50,6 +50,7 @@ PALETTE = [
 STALE_MS = 3000          # no frame for this long → tile shows "stale"
 EXTERNAL_POSE_TTL = 5000  # a pose from the positioning service overrides the seat for this long
 REAP_AFTER_MS = 30000    # forget disconnected phones after this long
+SILENT_AFTER_MS = 10000  # answered no ping for this long → treat as gone, even if the socket lingers
 PHASES = ("lobby", "calibrate", "search", "found", "end")  # show flow, driven from /console
 SEARCH_PHASES = ("search", "found")  # coverage and candidate detection only run in these
 REAL_NEAR_MISS = 0.15   # similarity this far below the match threshold still hints (heatmap only)
@@ -178,11 +179,13 @@ class Hub:
         self.target = Target(ROOM, self.planner.note, lambda: self.search.mode == "rehearsal")
         self.sightings = Sightings(ROOM)        # detections placed in the room and merged
         self.mock_detector = MockDetector(ROOM)  # reports the operator's hidden candidate in rehearsals
-        # "search" by default so the hub works without an operator; the show starts at "lobby"
-        self.phase = "search"
+        # The show starts idle: phones scan the marker, and the console's Start
+        # button only unlocks once every live phone has locked on.
+        self.phase = "calibrate"
         self._phase_generation = 0
         self.phase_started = now_ms()
         self.looking_for = ""               # what searchers should look for, shown on phones
+        self.marker: dict | None = None     # where the printed alignment marker is, placed by the operator
         self.pings: list[dict] = []         # {id, x, y, label, t, phones: set | None}
         self.ping_ids = itertools.count(1)
         self.consoles: set = set()          # dashboard/console subscribers, for pushed events
@@ -245,6 +248,14 @@ class Hub:
         while True:
             await asyncio.sleep(5)
             now = now_ms()
+            # A killed app can leave a half-open socket: `receive()` never returns and the
+            # phone would stay "live" forever. Pings go out every 2s, so silence this long
+            # means it is gone, whatever the socket thinks.
+            for phone in list(self.phones.values()):
+                if phone.connected and now - phone.last_seen > SILENT_AFTER_MS and phone.ws:
+                    ws = phone.ws
+                    self.disconnect(phone, ws)
+                    asyncio.create_task(_close_quietly(ws))
             for pid in [p.id for p in self.phones.values()
                         if not p.connected and now - p.last_seen > REAP_AFTER_MS]:
                 del self.phones[pid]
@@ -565,13 +576,17 @@ class Hub:
                         pass
         await asyncio.gather(*(clear(phone) for phone in self.phones.values()))
 
-    async def set_phase(self, phase: str, *, confirmed_visual: bool = False) -> bool:
-        """Re-selecting the current phase re-applies its effects (e.g. turns the planner back on)."""
+    async def set_phase(self, phase: str, *, confirmed_visual: bool = False, restart: bool = False) -> bool:
+        """Re-selecting the current phase re-applies its effects (e.g. turns the planner back on).
+
+        `restart` (the console's Reset) treats it as a fresh transition even when the phase is
+        already current, so the clock goes back to zero and the search state is cleared.
+        """
         if phase not in PHASES:
             return False
         self._phase_generation += 1
         generation = self._phase_generation
-        changed = phase != self.phase
+        changed = phase != self.phase or restart
         if changed:
             # The audit keeps its original revision while live callbacks are invalidated.
             self.search.reset(preserve_confirmation=confirmed_visual and phase == "found")
@@ -739,6 +754,21 @@ class Hub:
         """Push an event (e.g. Mission Control progress) to every open console."""
         await asyncio.gather(*(c.send_json(event) for c in list(self.consoles)), return_exceptions=True)
 
+    def set_marker(self, msg: dict) -> None:
+        """Operator dropped (or cleared) the printed marker on the console map."""
+        if msg.get("remove"):
+            self.marker = None
+            self.planner.note("Marker cleared")
+            return
+        try:
+            x, y = float(msg["x"]), float(msg["y"])
+        except (KeyError, TypeError, ValueError):
+            return
+        half = ROOM["width"] / 2
+        self.marker = {"x": round(max(-half, min(half, x)), 2),
+                       "y": round(max(0.0, min(ROOM["depth"], y)), 2)}
+        self.planner.note(f"Marker at ({self.marker['x']:.1f}, {self.marker['y']:.1f})")
+
     def active_pings(self, now: float) -> list[dict]:
         self.pings = [pg for pg in self.pings if now - pg["t"] < PING_TTL_MS]
         return self.pings
@@ -766,8 +796,14 @@ class Hub:
                 "coverage": {k: cov[k] for k in ("cols", "rows", "cell", "x0", "cells")},
                 "searched": cov["searched"], "searchers": len(live),
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
+                "marker": self.marker,
                 "candidate": None if found is None else {"x": found[0], "y": found[1]},
             }
+            # Before the search starts, the marker rides the ping channel phones already
+            # draw on their compass, map and camera view — no client change needed.
+            marker_cue = ([{"id": 0, "x": self.marker["x"], "y": self.marker["y"],
+                            "label": "MARKER", "ageMs": 0}]
+                          if self.marker and self.phase not in SEARCH_PHASES else [])
             sends = []
             for p in live:
                 mine = [{"id": pg["id"], "x": pg["x"], "y": pg["y"], "label": pg["label"],
@@ -775,7 +811,7 @@ class Hub:
                         for pg in pings if pg["phones"] is None or p.id in pg["phones"]]
                 stats = {"m2": round(p.searched_cells * cell_m2, 1),
                          "rank": ranked.index(p) + 1, "of": len(ranked)}
-                sends.append(p.send({**base, "me": p.id, "pings": mine, "stats": stats,
+                sends.append(p.send({**base, "me": p.id, "pings": marker_cue + mine, "stats": stats,
                                      "scanHint": self.mapper.selection_hints.get(p.id) if self.mapper else None}))
             await asyncio.gather(*sends)
 
@@ -793,6 +829,7 @@ class Hub:
                 "phase": self.phase, "phaseStartedAt": self.phase_started,
                 "search": self.search_state() if hasattr(self, "search_state") else {},
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
+                "marker": self.marker,
                 "sightings": self.sightings.snapshot(), "likely": self.likely_sectors(),
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
                 "scan": self.mapper.status() if self.mapper else None,
@@ -939,6 +976,13 @@ async def ws_phone(ws: WebSocket) -> None:
             hub.disconnect(phone, ws)
 
 
+async def _close_quietly(ws: WebSocket) -> None:
+    try:
+        await ws.close()
+    except Exception:
+        pass
+
+
 async def _ping_loop(phone: Phone, ws: WebSocket) -> None:
     while phone.ws is ws:
         await phone.send({"type": "ping", "ts": now_ms()})
@@ -980,8 +1024,10 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                         hub.new_search()
                     if "responders" in msg:
                         hub.target.responders_wanted = max(0, int(msg["responders"]))
+            elif msg.get("type") == "marker":
+                hub.set_marker(msg)
             elif msg.get("type") == "phase":
-                await hub.set_phase(str(msg.get("phase")))
+                await hub.set_phase(str(msg.get("phase")), restart=bool(msg.get("restart")))
             elif msg.get("type") == "focus":
                 sub.focus = msg.get("phoneId") or None
                 await hub.update_boost()

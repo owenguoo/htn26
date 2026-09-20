@@ -76,9 +76,16 @@ enum MapInk {
     static let outside = Color(red: 0.91, green: 0.95, blue: 0.92)
     static let floor = Color.white.opacity(0.96)
     static let searched = Color(red: 0.09, green: 0.51, blue: 0.29).opacity(0.16)
+    /// `rgba(24,131,75,·)` — the exact ink `drawCoverage` in `web/console.js`
+    /// paints the probability field with. Opacity is applied per blob there and
+    /// here, so this one stays fully opaque.
+    static let heat = Color(red: 24 / 255, green: 131 / 255, blue: 75 / 255)
     static let stage = Color(red: 0.87, green: 0.93, blue: 0.89)
     static let outline = Color(red: 0.47, green: 0.61, blue: 0.52)
     static let searcher = Color(red: 0.09, green: 0.51, blue: 0.29)
+    /// Teammates. A shade lighter than `searcher` so the operator's own dot is
+    /// still the one that reads first on a map full of people.
+    static let peer = Color(red: 0.24, green: 0.62, blue: 0.42)
     static let possible = Color(red: 0.85, green: 0.47, blue: 0.02)
     static let found = Color(red: 0.72, green: 0.18, blue: 0.21)
     static let markerBorder = Color.white

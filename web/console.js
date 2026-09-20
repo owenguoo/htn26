@@ -1,11 +1,11 @@
 import { frameKey, freshSighting, scoreLabel } from '/web/inference-ui.js';
 import { makeView, drawRoom, drawCone } from '/web/room.js';
-import { REHEARSAL_SCENARIOS, rehearsalAnchor, rehearsalPosition } from '/web/rehearsal-scenarios.js';
 
 const $ = (s) => document.querySelector(s);
-const PHASES = [
-  ['lobby', 'Lobby'], ['calibrate', 'Calibrate'], ['search', 'Search'], ['found', 'Found'], ['end', 'End'],
-];
+// Before a search the show sits in "calibrate": every phone is scanning the
+// marker, and the operator cannot start until all of them have locked on.
+const IDLE_PHASE = 'calibrate';
+const RUNNING_PHASES = ['search', 'found'];
 
 let ws = null;
 let room = null;
@@ -17,6 +17,9 @@ let snapshotAt = 0;
 let drawReference = null;
 let searchBusy = false;
 let dragPos = null;          // candidate position while dragging
+let markerDrag = null;       // marker position while dragging
+let armingMarker = false;    // next map click drops the marker
+const MARKER_COLOR = '#6b4fbb';
 let lastDragSend = 0;
 
 // ---------------------------------------------------------------- socket
@@ -86,24 +89,63 @@ function onFrame(buf) {
 function render() {
   renderViewer();
   renderSearch();
-  renderPhases();
+  renderStart();
+  renderMarkerBtn();
   renderMetrics();
   renderControls();
   renderPhones();
   renderLog();
 }
 
-function renderPhases() {
-  const cur = PHASES.findIndex(([k]) => k === st.phase);
-  $('#steps').innerHTML = PHASES.map(([key, label], i) => {
-    const cls = i === cur ? `on ${key}` : i < cur ? 'done' : '';
-    return `<button class="step ${cls}" data-phase="${key}"><span class="n">${i < cur ? '✓' : i + 1}</span>${label}</button>`;
-  }).join('');
+// Connected is not the same as alive: a killed app can leave the socket open
+// until the hub's silence sweep notices, so a phone with no recent frame is not
+// counted as live anywhere on the console.
+function isLive(p) {
+  return p.connected && !p.stale;
 }
 
-$('#steps').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-phase]');
-  if (b) send({ type: 'phase', phase: b.dataset.phase });
+// A phone counts as ready once it reports the marker locked (`calibrated`).
+function readiness() {
+  const live = [...phones.values()].filter(isLive);
+  const scanned = live.filter((p) => p.calibrated);
+  return { live: live.length, scanned: scanned.length, ready: live.length > 0 && scanned.length === live.length };
+}
+
+function running() {
+  return RUNNING_PHASES.includes(st?.phase);
+}
+
+function renderStart() {
+  const { live, scanned, ready } = readiness();
+  const on = running();
+  const btn = $('#startBtn');
+  btn.textContent = on ? 'End search' : 'Start search';
+  btn.classList.toggle('primary', !on);
+  btn.disabled = !on && !ready;
+  const hint = $('#startHint');
+  hint.textContent = on ? `${live} phone${live === 1 ? '' : 's'} searching`
+    : !live ? 'Waiting for phones to join'
+    : ready ? `All ${live} phone${live === 1 ? '' : 's'} scanned the marker`
+    : `${scanned} of ${live} phones have scanned the marker`;
+  hint.classList.toggle('ready', !on && ready);
+}
+
+$('#markerBtn').addEventListener('click', () => {
+  if (st?.marker) { send({ type: 'marker', remove: true }); armingMarker = false; }
+  else armingMarker = !armingMarker;
+  renderMarkerBtn();
+});
+
+function renderMarkerBtn() {
+  const btn = $('#markerBtn');
+  const placed = !!st?.marker;
+  btn.textContent = placed ? 'Clear marker' : armingMarker ? 'Click the map…' : 'Place marker';
+  btn.classList.toggle('arming', armingMarker && !placed);
+  if (placed) armingMarker = false;
+}
+
+$('#startBtn').addEventListener('click', () => {
+  send({ type: 'phase', phase: running() ? 'end' : 'search' });
 });
 
 function fmtClock(ms) {
@@ -112,18 +154,13 @@ function fmtClock(ms) {
 }
 
 function renderMetrics() {
-  const live = [...phones.values()].filter((p) => p.connected);
+  const live = [...phones.values()].filter(isLive);
+  const { scanned, ready } = readiness();
   $('#mLive').textContent = live.length;
   $('#mPlaced').textContent = live.filter((p) => p.pose).length;
-  $('#mFps').textContent = live.reduce((s, p) => s + p.fps, 0).toFixed(1);
-  const mbps = live.reduce((s, p) => s + (p.kbps || 0), 0) / 1000;
-  $('#mFpsK').textContent = `Frames / s · ${mbps.toFixed(1)} Mbps in`;
-  const lats = live.map((p) => p.latencyMs).filter((x) => x != null).sort((a, b) => a - b);
-  $('#mLat').textContent = lats.length ? `${lats[Math.floor(lats.length / 2)]}ms` : '–';
+  $('#mScanned').textContent = `${scanned}/${live.length}`;
+  $('#mScannedBox').classList.toggle('alert', live.length > 0 && !ready && !running());
   $('#mSearched').textContent = `${Math.round((st.coverage?.searched || 0) * 100)}%`;
-  const t = st.target;
-  $('#mCand').textContent = !t ? '–' : t.foundBy ? `${(t.searchMs / 1000).toFixed(1)}s` : fmtClock(t.searchMs);
-  $('#mCandBox').classList.toggle('alert', !!t?.foundBy);
 }
 
 function renderControls() {
@@ -182,7 +219,7 @@ function phoneStatus(p) {
   const job = st.planner?.assignments?.[p.id];
   if (job) out.push([`→ ${job.sector}`, job.onTarget ? 'w' : '']);
   if (!p.connected) out.push(['Offline', '']);
-  else if (p.stale) out.push(['Stale', '']);
+  else if (p.stale) out.push(['No signal', 'r']);
   if (p.pitch != null && Math.abs(p.pitch) > 65) out.push([p.pitch < 0 ? 'Floor' : 'Ceiling', '']);
   if (p.hidden) out.push(['Hidden', '']);
   if (p.speaking) out.push(['🎙 Speaking', 'w']);
@@ -217,7 +254,7 @@ function renderPhones() {
     }
     existing.delete(p.id);
     if (body.children[i] !== card) body.insertBefore(card, body.children[i] || null);
-    card.classList.toggle('off', !p.connected);
+    card.classList.toggle('off', !isLive(p));
     card.querySelector('.thumb').classList.toggle('hidden', p.hidden);
     card.querySelector('.placeholder').textContent = p.connected ? 'Waiting for video…' : 'Camera offline';
     card.querySelector('.placeholder').hidden = thumbs.has(p.id);
@@ -231,7 +268,8 @@ function renderPhones() {
     card.querySelector('.hd').textContent = pose?.heading != null ? `${Math.round(pose.heading)}°` : '–';
     card.querySelector('.fps').textContent = p.fps.toFixed(1);
     card.querySelector('.lat').textContent = p.latencyMs != null ? `${p.latencyMs} ms` : '–';
-    card.querySelector('.st').innerHTML = [[p.connected ? 'Live' : 'Offline · last frame', p.connected ? 'w' : ''], ...phoneStatus(p).filter(([label]) => label !== 'Offline')].map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
+    const liveBadge = !p.connected ? ['Offline · last frame', ''] : p.stale ? ['No signal', 'r'] : ['Live', 'w'];
+    card.querySelector('.st').innerHTML = [liveBadge, ...phoneStatus(p).filter(([label]) => label !== 'Offline' && label !== 'No signal')].map(([s, c]) => `<span class="badge ${c}">${s}</span>`).join('');
     card.querySelector('[data-act="hide"]').textContent = p.hidden ? 'Show camera' : 'Hide camera';
   });
   for (const card of existing.values()) card.remove();
@@ -668,7 +706,7 @@ $('#resetCov').addEventListener('click', () => send({ type: 'reset_coverage' }))
 $('#resetSession').addEventListener('click', () => {
   if (st?.search?.mode === 'rehearsal') send({ type: 'target', remove: true });
   send({ type: 'reset_coverage' });
-  send({ type: 'phase', phase: 'lobby' });
+  send({ type: 'phase', phase: IDLE_PHASE, restart: true });
   $('#searchMessage').textContent = '';
 });
 $('#candBtn').addEventListener('click', toggleCandidate);
@@ -689,10 +727,14 @@ function setResponders(d) {
 
 function toggleChat(open, restoreFocus = true) {
   $('#chatPanel').hidden = !open;
+  document.body.classList.toggle('chat-docked', open);
   $('#chatOpen').setAttribute('aria-expanded', String(open));
   if (open) $('#mcInput').focus();
   else if (restoreFocus) $('#chatOpen').focus();
+  resizeMap();
 }
+
+$('#chatClose').addEventListener('click', () => toggleChat(false));
 $('#chatOpen').addEventListener('click', () => toggleChat($('#chatPanel').hidden));
 document.addEventListener('click', (event) => {
   if (!$('#chatPanel').hidden && !event.target.closest('#chatPanel, #chatOpen')) {
@@ -729,9 +771,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === '/' && !$('#settings').open) { e.preventDefault(); toggleChat(true); return; }
   if (e.key === 'Escape' && explaining) { explaining = null; recsKey = ''; if (st?.mission) renderAutonomy(st.mission); return; }
   if (e.key === 'm' || e.key === 'M') { send({ type: 'autonomy', enabled: !st?.mission?.autonomy }); return; }
-  const n = Number(e.key);
-  if (n >= 1 && n <= PHASES.length) send({ type: 'phase', phase: PHASES[n - 1][0] });
-  else if (e.key === 'p' || e.key === 'P') send({ type: 'planner', enabled: !st?.planner?.enabled });
+  if (e.key === 'p' || e.key === 'P') send({ type: 'planner', enabled: !st?.planner?.enabled });
 });
 
 // ---------------------------------------------------------------- map (monochrome)
@@ -787,6 +827,8 @@ let view = null;
 const coverageLayer = document.createElement('canvas');
 let coverageKey = '';
 const mapLabelRects = [];
+/// How much of the camera's real range the map's view wedge draws.
+const CONE_DRAW_SCALE = 0.6;
 const MAP_MARKER_RADIUS = 10;
 const MAP_MARKER_STROKE = 2;
 const MAP_LABEL_HEIGHT = 18;
@@ -879,10 +921,15 @@ function draw() {
   const list = [...phones.values()].filter((p) => p.pose);
   for (const p of list) {
     if (p.pose.heading == null || st.phase === 'lobby') continue; // lobby: locations only
-    drawCone(ctx, view, p.pose.x, p.pose.y, p.pose.heading, room.cameraFovDeg, room.coneLength,
+    // Angle is the camera's; reach is deliberately shorter than `coneLength`.
+    // Drawn at the detector's full range the wedges from four phones covered
+    // most of the floor and read as "everything is seen", which is the one
+    // thing the map exists to disprove. The hub still plans at the real range.
+    drawCone(ctx, view, p.pose.x, p.pose.y, p.pose.heading, room.cameraFovDeg, room.coneLength * CONE_DRAW_SCALE,
       p.connected ? 'rgba(24,131,75,0.12)' : 'rgba(24,131,75,0.025)');
   }
   mapLabelRects.length = 0;
+  drawMarker();
   drawSightings();
   drawCandidate();
   drawPings();
@@ -890,6 +937,28 @@ function draw() {
   for (const p of list) {
     drawPhone(p);
   }
+}
+
+// The printed alignment marker, wherever the operator put it. Drawn as a tag
+// rather than a dot so it reads as a thing on a wall, not another searcher.
+function drawMarker() {
+  const m = markerDrag || st.marker;
+  if (!m) return;
+  const [x, y] = view.toPx(m.x, m.y);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = MARKER_COLOR;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(-8, -8, 16, 16, 3);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = MARKER_COLOR;
+  ctx.fillRect(-4, -4, 4, 4);
+  ctx.fillRect(1, 1, 4, 4);
+  ctx.restore();
+  drawMapLabel('MARKER', x, y - 19, MARKER_COLOR);
 }
 
 function drawPhone(phone) {
@@ -1055,8 +1124,23 @@ function nearCandidate(e) {
   const [cx, cy] = view.toPx(st.target.x, st.target.y);
   return Math.hypot(cx - (e.clientX - r.left), cy - (e.clientY - r.top)) <= 14;
 }
+function nearMarker(e) {
+  if (!st?.marker || !view) return false;
+  const r = canvas.getBoundingClientRect();
+  const [mx, my] = view.toPx(st.marker.x, st.marker.y);
+  return Math.hypot(mx - (e.clientX - r.left), my - (e.clientY - r.top)) <= 14;
+}
+
 canvas.addEventListener('mousedown', (e) => {
   if (e.altKey && view) { send({ type: 'ping', ...roomPoint(e) }); return; } // alt-click pings too
+  if (armingMarker && view) {
+    send({ type: 'marker', ...roomPoint(e) });
+    armingMarker = false;
+    renderMarkerBtn();
+    e.preventDefault();
+    return;
+  }
+  if (nearMarker(e)) { markerDrag = roomPoint(e); e.preventDefault(); return; }
   if (nearCandidate(e)) { dragPos = roomPoint(e); e.preventDefault(); return; }
   const p = phoneAt(e);
   if (p) openViewer(p.id);
@@ -1079,15 +1163,25 @@ canvas.addEventListener('contextmenu', (e) => { // right-click: ping, like Valor
   if (view) send({ type: 'ping', ...roomPoint(e) });
 });
 canvas.addEventListener('mousemove', (e) => {
-  canvas.style.cursor = dragPos ? 'grabbing' : nearCandidate(e) ? 'grab' : phoneAt(e) ? 'pointer' : 'default';
+  canvas.style.cursor = armingMarker ? 'crosshair'
+    : dragPos || markerDrag ? 'grabbing'
+    : nearMarker(e) || nearCandidate(e) ? 'grab'
+    : phoneAt(e) ? 'pointer' : 'default';
 });
 window.addEventListener('mousemove', (e) => {
+  if (markerDrag) {
+    markerDrag = roomPoint(e);
+    const now = performance.now();
+    if (now - lastDragSend > 80) { lastDragSend = now; send({ type: 'marker', ...markerDrag }); }
+    return;
+  }
   if (!dragPos) return;
   dragPos = roomPoint(e);
   const now = performance.now();
   if (now - lastDragSend > 80) { lastDragSend = now; send({ type: 'target', ...dragPos }); }
 });
 window.addEventListener('mouseup', () => {
+  if (markerDrag) { send({ type: 'marker', ...markerDrag }); markerDrag = null; return; }
   if (!dragPos) return;
   send({ type: 'target', ...dragPos });
   dragPos = null;
@@ -1135,35 +1229,6 @@ function clearReferencePreview() {
   $('#personChoices').replaceChildren();
   $('#referenceFile').value = '';
 }
-
-const rehearsalScenario = $('#rehearsalScenario');
-for (const scenario of REHEARSAL_SCENARIOS) {
-  const option = document.createElement('option');
-  option.value = scenario.id;
-  option.textContent = `${scenario.label} · ${scenario.distance} m`;
-  rehearsalScenario.append(option);
-}
-
-$('#rehearsalMode').addEventListener('click', () => searchAction(async () => {
-  const result = await searchApi('/api/search/rehearsal', {method: 'POST'});
-  if (st) st.search = result;
-  clearReferencePreview();
-  $('#searchMessage').textContent = 'Rehearsal mode active. Place a mock candidate to rehearse.';
-}));
-
-$('#runScenario').addEventListener('click', () => searchAction(async () => {
-  const anchor = rehearsalAnchor(phones.values());
-  if (!anchor) throw new Error('Place and calibrate a connected phone before running a direction scenario.');
-  const placement = rehearsalPosition(room, anchor, rehearsalScenario.value);
-  if (!placement) throw new Error(`Phone ${anchor.index} is too close to the room edge for that scenario.`);
-
-  const result = await searchApi('/api/search/rehearsal', {method: 'POST'});
-  if (st) st.search = result;
-  clearReferencePreview();
-  send({type: 'target', x: placement.x, y: placement.y, responders: respondersPref});
-  $('#searchMessage').textContent = `${placement.scenario.label} scenario active — candidate ${placement.distance.toFixed(1)} m from Phone ${anchor.index}. Ambient people and props remain in the iOS rehearsal scene.`;
-}));
-
 
 $('#clearReference').addEventListener('click', () => searchAction(async () => {
   await searchApi('/api/search/reference', {method: 'DELETE'});

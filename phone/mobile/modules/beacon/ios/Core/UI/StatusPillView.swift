@@ -6,28 +6,23 @@ import SwarmCore
 /// This used to be `LOST  conf 1.00  fix 34s  air 1  drop 0`: six true facts and
 /// no instruction. The wording and the choice of *which* problem to show live in
 /// `OperatorStatus` in SwarmCore, where they are tested; the numbers moved to
-/// Settings. When the fix is "get located", the whole thing is the button —
-/// otherwise it is just a label, never a disabled control with a fake chevron.
+/// Settings.
+///
+/// It is a label, not a control. It used to become a button when the problem
+/// was "not located", because tapping it opened the seat picker; with that gone
+/// there is nothing on this phone the operator fixes by tapping a status line.
+/// They fix it by pointing the camera at a marker, which is what it says.
 struct OperatorStatusView: View {
     let status: OperatorStatus
-    var onTap: (() -> Void)?
 
     var body: some View {
-        Group {
-            if status.offersSeatPicker, let onTap {
-                Button(action: onTap) { content }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Opens the map so you can tap where you are standing")
-            } else {
-                content
-                    .accessibilityHint("")
-            }
-        }
-        // Without this a ZStack proposes the full row width and the card fills
-        // it, so a one-line title like "Reconnecting…" sits on the left even
-        // though the stack is meant to centre it.
-        .fixedSize(horizontal: status.hint == nil, vertical: true)
-        .accessibilityLabel([status.title, status.hint].compactMap { $0 }.joined(separator: ". "))
+        content
+            // Without this a ZStack proposes the full row width and the card
+            // fills it, so a one-line title like "Reconnecting…" sits on the
+            // left even though the stack is meant to centre it.
+            .fixedSize(horizontal: status.hint == nil, vertical: true)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel([status.title, status.hint].compactMap { $0 }.joined(separator: ". "))
     }
 
     private var content: some View {
@@ -47,12 +42,6 @@ struct OperatorStatusView: View {
                         .foregroundStyle(.hudInkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            if status.offersSeatPicker {
-                Spacer(minLength: Space.xs)
-                Image(systemName: "chevron.right")
-                    .font(TypeScale.affordance)
-                    .foregroundStyle(.hudInkTertiary)
             }
         }
         .padding(.horizontal, Space.m)
@@ -84,7 +73,7 @@ struct OperatorStatusView: View {
     private var symbol: String {
         switch status.level {
         case .ok: "checkmark.circle.fill"
-        case .attention: status.offersSeatPicker ? "scope" : "exclamationmark.circle.fill"
+        case .attention: "exclamationmark.circle.fill"
         case .problem: "exclamationmark.triangle.fill"
         }
     }

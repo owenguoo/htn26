@@ -74,6 +74,26 @@ public enum PhaseCardText {
         phase == "lobby" || phase == "calibrate" || phase == "end"
     }
 
+    /// Whether the card should actually be on screen, given what this phone has
+    /// managed to do about it.
+    ///
+    /// `covers(_:)` alone is the hub's phase and nothing else, and the hub sits
+    /// in `calibrate` until the operator advances it from the console — which
+    /// is long after any individual phone has locked. So a phone that had found
+    /// its marker went on staring at a full-screen "Calibrate · point at a
+    /// printed marker · Locked to a marker ✓" card with the camera behind it,
+    /// with no way to dismiss it and nothing left to do about it.
+    ///
+    /// The calibrate card is a prompt. Once this phone is located the prompt is
+    /// answered, so it goes, and the operator gets the camera and the compass
+    /// back while the rest of the team finishes. It comes back if alignment is
+    /// ever lost again. `lobby` and `end` are not prompts — there is genuinely
+    /// nothing to do in either — so they keep covering.
+    public static func covers(_ phase: String, alignment: RoomAligner.Source) -> Bool {
+        guard covers(phase) else { return false }
+        return phase != "calibrate" || alignment == .none
+    }
+
     public static func title(for phase: String) -> String {
         switch phase {
         case "lobby": "You're in"
@@ -84,9 +104,9 @@ public enum PhaseCardText {
 
     public static func detail(for phase: String) -> String {
         switch phase {
-        case "lobby": "Hold tight. The search starts when the operator says go."
-        case "calibrate": "Point the camera at any printed marker until it locks."
-        default: "Thanks — you can lower your phone."
+        case "lobby": "The operator starts the search."
+        case "calibrate": "Point at a printed marker until it locks."
+        default: "You can lower your phone."
         }
     }
 }
@@ -153,8 +173,10 @@ public enum HUDMirror {
         let searching = overlay.phase == "search" || overlay.phase == "found"
         let lookingFor = overlay.world?.lookingFor.flatMap { $0.isEmpty || !searching ? nil : $0 }
 
+        // The same test the phone's own renderer uses, so the console is not
+        // told about a card the operator cannot see.
         let card = overlay.phase.flatMap { phase in
-            PhaseCardText.covers(phase)
+            PhaseCardText.covers(phase, alignment: overlay.alignment)
                 ? HubHUDMirror.Card(title: PhaseCardText.title(for: phase), text: PhaseCardText.detail(for: phase))
                 : nil
         }
@@ -176,7 +198,13 @@ public enum HUDMirror {
         // Side bleed: loud sound wins when present; otherwise the found /
         // guided person paints the edge they sit on — including after find,
         // so "they're still left of you" stays glanceable while walking in.
-        let guideOffset = overlay.arrow.map { Double($0.bearingRadians) * 180 / .pi }
+        // Only a *find* paints the bezel. The planner hands every phone a sector
+        // the moment it reports a heading — on a fresh run that sector comes
+        // from a flat probability field, so it is effectively arbitrary — and
+        // the arrow for it used to light the whole left or right edge in alert
+        // red before the operator had taken a step. The sector still gets its
+        // chip on the compass tape, which is where a routine sweep belongs.
+        let guideOffset = (responding ? overlay.arrow.map { Double($0.bearingRadians) * 180 / .pi } : nil)
             ?? overlay.candidate.flatMap { cue in cue.bearingRadians.map { Double($0) * 180 / .pi } }
         let guideSide: String? = guideOffset.flatMap { offset in
             if offset < -20 { return "left" }

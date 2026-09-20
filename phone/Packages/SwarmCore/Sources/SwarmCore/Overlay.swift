@@ -100,24 +100,45 @@ public struct OperatorStatus: Sendable, Equatable {
     public var title: String
     /// What to do about it. nil when there is nothing to do.
     public var hint: String?
-    /// Tapping the status should open the seat picker: the fix is to get located.
-    public var offersSeatPicker: Bool
 
-    public init(level: Level, title: String, hint: String? = nil, offersSeatPicker: Bool = false) {
+    public init(level: Level, title: String, hint: String? = nil) {
         self.level = level
         self.title = title
         self.hint = hint
-        self.offersSeatPicker = offersSeatPicker
     }
 
-    static let locateHint = "Point at a marker, or tap here to set your spot"
+    /// **There is one way to get located: look at a printed marker.**
+    ///
+    /// There used to be two — scan a marker, or open a floor plan, tap where
+    /// you think you are standing, and confirm you are facing the stage. Two
+    /// methods meant every prompt had to gesture at both ("Point at a marker,
+    /// or tap here") and explain neither. The tap path was also much the weaker
+    /// of the two: a guess at a position plus a guess at a heading, where a
+    /// marker gives both exactly.
+    ///
+    /// `RoomAligner.setSeat` / `calibrateFacingStage` stay in SwarmCore — the
+    /// wire protocol has them, `swarm-replay` uses them, and the drive-mode
+    /// end-to-end test drives them through the JS API. What is gone is the
+    /// operator-facing way in.
+    static let locateHint = "Point the camera at a printed marker"
+
+    /// How long a marker fix has to go unrefreshed before the operator is told
+    /// their position may be drifting.
+    ///
+    /// This was 30 s, which is roughly how long it takes to sweep one corner of
+    /// a room — so the warning was up more often than it was down, for a phone
+    /// that was tracking perfectly well. A warning an operator learns to ignore
+    /// is worse than no warning, because the one time it matters they will
+    /// ignore that too. Two minutes is long enough that seeing it means the
+    /// operator really has not looked at a marker for a while.
+    static let driftHintSeconds: Double = 120
 
     /// Most important first: a phone that cannot reach the hub has no use for
     /// being told its tracking is shaky.
     public init(_ pill: StatusPill) {
         switch pill.connection {
         case .offline, .connecting:
-            self.init(level: .problem, title: "Connecting to the hub…", hint: "Check you're on the venue Wi-Fi")
+            self.init(level: .problem, title: "Connecting…", hint: "Check the venue Wi-Fi")
             return
         case .reconnecting:
             self.init(level: .problem, title: "Reconnecting…")
@@ -129,26 +150,25 @@ public struct OperatorStatus: Sendable, Equatable {
         case .idle, .permissions:
             self.init(level: .attention, title: "Starting the camera…")
         case .recalibrating:
-            self.init(level: .attention, title: "Needs recalibrating", hint: Self.locateHint,
-                      offersSeatPicker: true)
+            self.init(level: .attention, title: "Needs recalibrating", hint: Self.locateHint)
         case .lost:
             self.init(level: .problem, title: "Tracking lost",
-                      hint: pill.alignment == .marker ? "Move slowly and point at a marker"
-                                                      : "Move slowly, somewhere with more to look at",
-                      offersSeatPicker: false)
+                      hint: pill.alignment == .marker ? "Move slowly, find a marker"
+                                                      : "Move slowly, look around")
         case .calibrating where pill.alignment == .none:
-            self.init(level: .attention, title: "Not located yet", hint: Self.locateHint, offersSeatPicker: true)
+            self.init(level: .attention, title: "Not located yet", hint: Self.locateHint)
         case .degraded:
-            self.init(level: .attention, title: "Tracking is shaky", hint: "Slow down and keep the camera up")
+            self.init(level: .attention, title: "Tracking is shaky", hint: "Slow down, camera up")
         case .calibrating, .tracking:
             if pill.isStale {
-                self.init(level: .problem, title: "Camera has stopped updating")
+                self.init(level: .problem, title: "Camera stopped", hint: "Reopen the app if it stays")
             } else if pill.alignment == .none {
-                self.init(level: .attention, title: "Not located yet", hint: Self.locateHint, offersSeatPicker: true)
+                self.init(level: .attention, title: "Not located yet", hint: Self.locateHint)
             } else if pill.thermalState >= .serious {
-                self.init(level: .attention, title: "Phone is hot", hint: "Sending fewer frames until it cools")
-            } else if pill.alignment == .marker, (pill.secondsSinceCorrection ?? 0) > 30 {
-                self.init(level: .attention, title: "Position may be drifting", hint: "Glance at any marker to re-lock")
+                self.init(level: .attention, title: "Phone is hot", hint: "Sending fewer frames")
+            } else if pill.alignment == .marker,
+                      (pill.secondsSinceCorrection ?? 0) > Self.driftHintSeconds {
+                self.init(level: .attention, title: "Position may be drifting", hint: "Glance at a marker")
             } else {
                 self.init(level: .ok, title: pill.alignment == .seat ? "Tracking from your spot" : "Tracking")
             }

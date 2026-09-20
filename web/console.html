@@ -53,6 +53,7 @@
     .btn.primary:hover { background: var(--accent-hover); }
     .btn.danger { color: var(--red); }
     .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
+    .btn.icon-only { padding: 0; width: 28px; justify-content: center; }
     .btn:disabled { opacity: .4; cursor: default; }
     kbd { font: 11px var(--mono); color: var(--fg-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
 
@@ -66,28 +67,17 @@
     .upload-zone:disabled { opacity: .5; cursor: wait; }
     .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
     .search-panel input, .search-panel select, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
-    .scenario-tools { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .scenario-tools label { color: var(--fg-2); font-size: 13px; }
-    #rehearsalScenario { min-width: 174px; height: 32px; padding: 0 30px 0 10px; }
     #referencePreview { max-width: 100%; max-height: 280px; margin-top: 12px; }
     #personChoices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     #searchMessage:empty { display: none; }
     #searchMessage { margin-top: 10px; color: var(--fg-2); font-size: 13px; }
     .analysis { padding: 12px 16px; border-top: 1px solid var(--line); }
     #analyzedFrame { max-width: 100%; max-height: 240px; display: block; margin-top: 10px; }
-    /* phase stepper */
-    .phases { display: flex; align-items: center; gap: 16px; padding: 24px 0 20px; }
-    .steps { display: flex; border: 1px solid var(--line); border-radius: var(--r); padding: 4px; gap: 4px; background: var(--bg-1); }
-    .step { height: 36px; padding: 0 14px; border-radius: 7px; display: flex; align-items: center; gap: 10px;
-      color: var(--fg-3); font-weight: 500; transition: background .15s, color .15s; }
-    .step:hover { color: var(--fg); background: var(--bg-2); }
-    .step .n { font: 11px var(--mono); width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line-2);
-      display: grid; place-items: center; }
-    .step.done { color: var(--fg-2); }
-    .step.done .n { background: var(--bg-3); border-color: var(--bg-3); }
-    .step.on { background: var(--accent); color: var(--bg); }
-    .step.on .n { border-color: rgba(255,255,255,0.6); }
-    .step.on.found { background: var(--accent-hover); color: var(--bg); }
+    /* start / stop */
+    .phases { display: flex; align-items: center; gap: 12px; padding: 8px 0 20px; }
+    #startBtn { height: 40px; padding: 0 22px; font-size: 14px; font-weight: 500; }
+    .start-hint { color: var(--fg-2); font-size: 13px; }
+    .start-hint.ready { color: var(--accent); }
     .timer { font: 500 20px var(--mono); letter-spacing: -0.02em; }
 
     /* mission control */
@@ -149,7 +139,7 @@
     .rec .state.auto { color: var(--accent); }
 
     /* metrics */
-    .metrics { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--line); border-radius: var(--r);
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: var(--r);
       background: var(--bg-1); margin-bottom: 16px; }
     .metric { padding: 14px 18px; border-left: 1px solid var(--line); }
     .metric:first-child { border-left: 0; }
@@ -198,6 +188,8 @@
     .map-key.sighting, .map-key.rescued { background: #fff; box-shadow: none; }
     .map-key.sighting { color: #d97706; border-color: #d97706; }
     .map-key.rescued { color: var(--red); border-color: var(--red); }
+    .map-key.marker { border-radius: 4px; background: #fff; border-color: #6b4fbb; box-shadow: none; }
+    #markerBtn.arming { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     .map-key.sighting::before, .map-key.rescued::before { content: ""; position: absolute; left: 50%; top: 4px;
       width: 5px; height: 5px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
     .map-key.sighting::after, .map-key.rescued::after { content: ""; position: absolute; left: 50%; bottom: 3px;
@@ -224,7 +216,7 @@
     .status.found { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-hover); }
     .divider { height: 1px; background: var(--line); margin: 16px -16px; }
 
-    .overview { padding: 24px 0 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .overview { padding: 24px 0 4px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
     .overview h1 { margin: 0; font-size: 24px; letter-spacing: -.03em; }
     .overview p { margin: 6px 0 0; color: var(--fg-2); }
     dialog.settings { width: min(760px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 0;
@@ -240,9 +232,6 @@
     .settings-group, .settings-body > .card { margin-bottom: 20px; }
     .settings-group p { margin: 0 0 12px; }
     .settings-group .divider { margin-left: 0; margin-right: 0; }
-    .session-heading { font-size: 14px; font-weight: 600; margin: 4px 0 0; }
-    .phases { padding-top: 12px; }
-    .steps { flex-wrap: wrap; }
     .map-column > .card > .card-h { height: auto; min-height: 48px; flex-wrap: wrap; padding: 12px 16px; }
     .map-legend { font-size: 12px; }
     #recs:not(:empty) { margin-bottom: 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
@@ -257,10 +246,18 @@
     .chat-state { position: absolute; right: 1px; top: 1px; width: 12px; height: 12px; border: 2px solid #fff;
       border-radius: 50%; background: #8c9d92; }
     .chat-launcher.active .chat-state { background: #57d879; }
-    .chat-panel { position: fixed; right: 24px; bottom: 92px; z-index: 12; width: min(360px, calc(100vw - 32px));
-      height: min(340px, calc(100dvh - 120px)); display: flex; flex-direction: column; overflow: hidden; margin: 0; background: var(--surface);
-      box-shadow: 0 12px 48px rgba(23,55,38,.18); }
+    /* Mission Control docks to the right edge; the page gets out of its way
+       rather than having the panel float over the map. */
+    .chat-panel { position: fixed; top: 0; right: 0; bottom: 0; z-index: 12; width: min(380px, 100vw);
+      display: flex; flex-direction: column; overflow: hidden; margin: 0; background: var(--surface);
+      border: 0; border-left: 1px solid var(--line); border-radius: 0;
+      box-shadow: -12px 0 48px rgba(23,55,38,.10); }
     .chat-panel .card-h { flex-shrink: 0; background: var(--surface); }
+    body.chat-docked { padding-right: min(380px, 100vw); }
+    body.chat-docked .chat-launcher { display: none; }
+    .chat-close { flex: none; width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center;
+      color: var(--fg-2); font-size: 18px; line-height: 1; }
+    .chat-close:hover { background: var(--bg-2); color: var(--fg); }
     .chat-intro { margin: 0; padding: 16px; color: var(--fg-2); font-size: 13px; line-height: 1.6; }
     .chat-panel #mcFeed { flex: 1; min-height: 0; overflow-y: auto; border-top: 0; }
     .chat-panel #mcForm { margin: auto 12px 12px; height: auto; min-height: 46px; padding: 5px 6px 5px 16px; flex-wrap: nowrap; gap: 8px; flex-shrink: 0; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-1); }
@@ -275,7 +272,8 @@
     .system-details .metric:nth-child(even) { border-left: 1px solid var(--line); }
     .system-details .metric:nth-child(-n+2) { border-top: 0; }
     .system-details .metric .v { font-size: 20px; }
-    @media (max-width: 640px) { .chat-panel { right: 16px; } .chat-launcher { right: 16px; } }
+    @media (max-width: 900px) { body.chat-docked { padding-right: 0; } }
+    @media (max-width: 640px) { .chat-launcher { right: 16px; } }
     /* camera carousel */
     .map-column { min-width: 0; }
     .camera-track { display: flex; align-items: flex-start; gap: 16px; overflow-x: auto; padding: 16px;
@@ -401,7 +399,7 @@
   </header>
 
   <main class="wrap">
-    <div class="overview"><div><h1>Search overview</h1></div><button class="btn" id="settingsOpen" aria-haspopup="dialog" aria-controls="settings">Settings</button></div>
+    <div class="overview"><h1>Search overview</h1></div>
     <dialog class="settings" id="settings" aria-labelledby="settingsTitle">
       <div class="settings-header"><h2 id="settingsTitle">Settings</h2><button class="btn sm" id="settingsClose" autofocus>Close</button></div>
       <div class="settings-body">
@@ -423,12 +421,12 @@
       </div>
     </dialog>
 
-    <h2 class="session-heading">Session controls</h2>
     <section class="phases">
-      <div class="steps" id="steps"></div>
+      <button class="btn primary" id="startBtn" type="button" disabled>Start search</button>
+      <span class="start-hint" id="startHint">Waiting for phones to join</span>
       <span class="spacer"></span>
-      <span class="faint" style="font-size:12px"><kbd>1</kbd>–<kbd>5</kbd> phase &nbsp; <kbd>P</kbd> planner &nbsp; <kbd>M</kbd> autonomy</span>
-      <button class="btn sm" id="resetSession" type="button" title="Clear find, coverage, and return to Lobby">Reset</button>
+      <button class="btn sm" id="settingsOpen" aria-haspopup="dialog" aria-controls="settings">Settings</button>
+      <button class="btn sm" id="resetSession" type="button" title="Clear find and coverage, and send phones back to marker scanning">Reset</button>
       <span class="timer" id="timer">00:00</span>
     </section>
 
@@ -438,13 +436,14 @@
         <div class="card">
           <div class="card-h"><h2>Search map</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
             <span class="mono" style="font-size:12px" id="likely"></span>
+            <button class="btn sm" id="markerBtn" type="button" title="Put the printed marker where it is in the room">Place marker</button>
             <div class="map-modes" id="mapModes" role="group" aria-label="Map view">
               <button type="button" data-mode="heatmap" aria-pressed="true">Heatmap</button>
               <button type="button" data-mode="3d" aria-pressed="false">3D map</button>
             </div>
 </div>
           <div id="mapWrap"><canvas id="map" aria-label="Live search map"></canvas>
-            <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span></div>
+            <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span></div>
             <div class="map-scale" aria-hidden="true"><i></i><span>5 m</span></div>
             <div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
           <p id="mapStatus" role="status"></p>
@@ -457,8 +456,8 @@
         </div>
         <section class="card camera-section" aria-label="Camera feeds">
           <div class="card-h"><h2>Camera feeds</h2><span class="faint mono" id="phoneCount">0</span><span class="spacer"></span>
-            <div class="camera-nav"><button class="btn sm" id="cameraPrev" aria-label="Previous cameras" aria-controls="phones">←</button>
-              <button class="btn sm" id="cameraNext" aria-label="Next cameras" aria-controls="phones">→</button></div>
+            <div class="camera-nav"><button class="btn sm icon-only" id="cameraPrev" aria-label="Previous cameras" aria-controls="phones"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M17 10a.75.75 0 0 1-.75.75H5.612l4.158 3.96a.75.75 0 1 1-1.04 1.08l-5.5-5.25a.75.75 0 0 1 0-1.08l5.5-5.25a.75.75 0 1 1 1.04 1.08L5.612 9.25H16.25A.75.75 0 0 1 17 10Z" clip-rule="evenodd"/></svg></button>
+              <button class="btn sm icon-only" id="cameraNext" aria-label="Next cameras" aria-controls="phones"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clip-rule="evenodd"/></svg></button></div>
           </div>
           <div class="camera-track" id="phones" role="region" aria-label="Camera carousel" tabindex="0"></div>
           <div class="empty" id="phonesEmpty">No cameras connected. Use Join QR to connect a phone.</div>
@@ -472,8 +471,6 @@
               <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" aria-label="Upload photo" hidden>
               <button class="upload-zone" type="button" id="uploadPhoto"><strong>Drop a photo here</strong><span>or click to choose</span></button>
               <button class="btn" id="clearReference" type="button" hidden>Clear</button>
-              <button class="btn" id="rehearsalMode" type="button">Use rehearsal mode</button>
-              <span class="scenario-tools"><label for="rehearsalScenario">Scenario</label><select id="rehearsalScenario" aria-label="Rehearsal scenario"></select><button class="btn primary" id="runScenario" type="button">Run scenario</button></span>
 </div>
               <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
             </fieldset>
@@ -489,12 +486,10 @@
         </div>
         <section class="card system-details" aria-label="System details"><div class="card-h"><h2>System details</h2></div>
     <div class="metrics">
-      <div class="metric"><div class="k">Phones live</div><div class="v" id="mLive">0</div></div>
-      <div class="metric"><div class="k">Placed</div><div class="v" id="mPlaced">0</div></div>
-      <div class="metric"><div class="k" id="mFpsK">Frames / s</div><div class="v" id="mFps">0</div></div>
-      <div class="metric"><div class="k">Latency p50</div><div class="v" id="mLat">–</div></div>
+      <div class="metric" title="Connected phones sending video right now"><div class="k">Phones streaming</div><div class="v" id="mLive">0</div></div>
+      <div class="metric" title="Phones with a known spot in the room, so they can be drawn on the map"><div class="k">Phones on map</div><div class="v" id="mPlaced">0</div></div>
+      <div class="metric" id="mScannedBox" title="Phones that have locked onto a printed marker"><div class="k">Marker scanned</div><div class="v" id="mScanned">0/0</div></div>
       <div class="metric"><div class="k">Area searched</div><div class="v" id="mSearched">0%</div></div>
-      <div class="metric" id="mCandBox"><div class="k">Candidate</div><div class="v" id="mCand">–</div></div>
     </div>
 
     </section>
@@ -508,16 +503,16 @@
   </main>
 
     <aside class="card mission chat-panel" id="chatPanel" aria-labelledby="chatTitle" hidden>
-      <div class="card-h"><h2 id="chatTitle">Mission Control</h2><span class="spacer"></span><button type="button" class="autoSw" id="autoSw" title="Autonomy (M)"><span class="switch"></span>Autonomy</button></div>
+      <div class="card-h"><h2 id="chatTitle">Mission Control</h2><span class="spacer"></span><button type="button" class="autoSw" id="autoSw" title="Autonomy (M)"><span class="switch"></span>Autonomy</button><button type="button" class="chat-close" id="chatClose" aria-label="Close Mission Control" title="Close (Esc)"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg></button></div>
       <p class="chat-intro">Direct cameras and guide the search.</p>
       <div id="mcFeed"></div>
       <form id="mcForm" autocomplete="off">
         <input id="mcInput" aria-label="Message Mission Control" placeholder="Ask Mission Control…" spellcheck="false">
-        <button class="chat-send" type="submit" aria-label="Send message" title="Send message"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+        <button class="chat-send" type="submit" aria-label="Send message" title="Send message"><svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 17a.75.75 0 0 1-.75-.75V5.612L5.29 9.77a.75.75 0 0 1-1.08-1.04l5.25-5.5a.75.75 0 0 1 1.08 0l5.25 5.5a.75.75 0 1 1-1.08 1.04l-3.96-4.158V16.25A.75.75 0 0 1 10 17Z" clip-rule="evenodd"/></svg></button>
       </form>
     </aside>
     <button class="chat-launcher" id="chatOpen" aria-label="Open Mission Control, autonomy paused" aria-controls="chatPanel" aria-expanded="false" title="Mission Control">
-      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a9 9 0 0 1 18 0Z"/><path d="M7 10h10M7 14h6"/></svg>
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 0 1 .865-.501 48.172 48.172 0 0 0 3.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0 0 12 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018Z"/></svg>
       <span class="chat-state" aria-hidden="true"></span>
     </button>
 

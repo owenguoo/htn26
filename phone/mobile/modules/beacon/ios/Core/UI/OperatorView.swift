@@ -17,7 +17,10 @@ public struct OperatorView: View {
     var showMiniMap: Bool
     var onRequestSettings: (() -> Void)?
 
-    @State private var isPickingSeat = false
+    /// The full map, opened from the mini-map. While it is up the mini-map and
+    /// the status pill stand down: a thumbnail of the map beside the map is the
+    /// same picture twice, and the pill repeats what the card already says.
+    @State private var isShowingMap = false
 
     public init(model: OperatorViewModel, showDebug: Bool = false, showMiniMap: Bool = true,
                 onRequestSettings: (() -> Void)? = nil) {
@@ -28,6 +31,16 @@ public struct OperatorView: View {
     }
 
     private var overlay: OverlayState { model.frame.overlay }
+    /// A phase card is over the whole camera. It carries its own gear and its
+    /// own words, so the status pill and the mini-map stand down underneath it
+    /// rather than repeating them around the edges.
+    private var phaseCardIsUp: Bool {
+        !isShowingMap && (overlay.phase.map { PhaseCardText.covers($0, alignment: overlay.alignment) } ?? false)
+    }
+
+    /// Something is over the camera, so the chrome around the edges is noise
+    /// rather than context.
+    private var chromeIsHidden: Bool { isShowingMap || phaseCardIsUp }
     private var captureSize: CGSize {
         CGSize(width: model.frame.captureWidth, height: model.frame.captureHeight)
     }
@@ -81,29 +94,25 @@ public struct OperatorView: View {
             // Over the chrome so a thumb on the puck is not competing with the
             // chrome's layout, and because the one control the operator has to
             // find should not be underneath anything.
-            if model.isDrive, !isPickingSeat {
+            if model.isDrive, !isShowingMap {
                 DriveStickView(model: model)
             }
 
             // The glance-speed form of the elevation half of the banner. Only
             // ever present when the operator is already on target horizontally,
             // so it never appears beside a turn instruction.
-            if let elevation = overlay.elevation, !isPickingSeat {
+            if let elevation = overlay.elevation, !isShowingMap {
                 ElevationCueView(cue: elevation)
             }
 
-            if let phase = overlay.phase, PhaseCardView.covers(phase), !isPickingSeat {
-                PhaseCardView(phase: phase, alignment: overlay.alignment,
-                              lookingFor: overlay.world?.lookingFor,
-                              onPickSeat: { isPickingSeat = true })
+            if phaseCardIsUp, let phase = overlay.phase {
+                PhaseCardView(phase: phase, lookingFor: overlay.world?.lookingFor,
+                              onRequestSettings: onRequestSettings)
             }
 
-            if isPickingSeat, let room = overlay.room {
-                SeatPickerView(room: room, world: overlay.world, current: overlay.roomPose,
-                               onSeat: { model.setSeat(x: $0.x, y: $0.y) },
-                               onConfirm: { await model.calibrateFacingStage() },
-                               onResetOrigin: overlay.alignment == .marker ? { model.resetOrigin() } : nil,
-                               onClose: { isPickingSeat = false })
+            if isShowingMap, let room = overlay.room {
+                RoomMapView(room: room, world: overlay.world, me: overlay.roomPose,
+                            pings: overlay.pings, onClose: { isShowingMap = false })
             }
 
             // Last, and over everything: a flash the audience can see from the
@@ -144,9 +153,8 @@ public struct OperatorView: View {
                         SettingsButton(action: onRequestSettings)
                     }
                 }
-                if overlay.status.level != .ok {
-                    OperatorStatusView(status: overlay.status,
-                                       onTap: overlay.status.offersSeatPicker ? { isPickingSeat = true } : nil)
+                if overlay.status.level != .ok, !chromeIsHidden {
+                    OperatorStatusView(status: overlay.status)
                         // Keep long hint cards from covering the settings control.
                         .padding(.horizontal, 52)
                         .frame(maxWidth: .infinity, alignment: .top)
@@ -154,15 +162,16 @@ public struct OperatorView: View {
             }
             Spacer()
             HStack(alignment: .bottom) {
-                if showMiniMap, let room = overlay.room {
+                if showMiniMap, !chromeIsHidden, let room = overlay.room {
                     MiniMapView(room: room, world: overlay.world, me: overlay.roomPose,
                                 colorHex: overlay.colorHex, pings: overlay.pings)
                         // A fixed window that follows the operator, not the room's
                         // own aspect: the dot stays centred however far they walk.
-                        .frame(width: 132, height: 150)
-                        .onTapGesture { isPickingSeat = true }
+                        .frame(width: 132, height: 164)
+                        .onTapGesture { isShowingMap = true }
                         .accessibilityAddTraits(.isButton)
                         .accessibilityLabel("Where everyone is")
+                        .accessibilityHint("Opens the full map")
                 }
                 Spacer(minLength: 0)
             }

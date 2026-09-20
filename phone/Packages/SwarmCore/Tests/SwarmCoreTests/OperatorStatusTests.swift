@@ -25,13 +25,16 @@ struct OperatorStatusTests {
         #expect(status.level == .attention)
         #expect(status.title == "Needs recalibrating")
         #expect(status.hint?.contains("marker") == true)
-        #expect(status.offersSeatPicker, "tapping the status must be the way out")
     }
 
-    @Test func notLocatedYetOffersTheSeatPicker() {
+    /// There is one way to get located, and every prompt that mentions it has
+    /// to name that one way. A hint that also offered "or tap here" described a
+    /// seat-picker card that no longer exists.
+    @Test func gettingLocatedAlwaysMeansTheMarker() {
         let status = OperatorStatus(pill(.calibrating, alignment: .none, correction: nil))
         #expect(status.title == "Not located yet")
-        #expect(status.offersSeatPicker)
+        #expect(status.hint == "Point the camera at a printed marker")
+        #expect(status.hint?.contains("tap") == false, "there is no tap-your-spot card any more")
     }
 
     @Test func lostIsAProblemWithAnInstruction() {
@@ -47,17 +50,17 @@ struct OperatorStatusTests {
             let status = OperatorStatus(pill(state, connection: .reconnecting, stale: true, thermal: .critical))
             #expect(status.title == "Reconnecting…", "\(state) hid the dropped connection")
             #expect(status.level == .problem)
-            #expect(!status.offersSeatPicker, "a Wi-Fi problem is not a seat-map problem")
         }
         let connecting = OperatorStatus(pill(connection: .connecting))
-        #expect(connecting.title == "Connecting to the hub…")
-        #expect(connecting.hint == "Check you're on the venue Wi-Fi")
-        #expect(!connecting.offersSeatPicker)
+        #expect(connecting.title == "Connecting…")
+        #expect(connecting.hint == "Check the venue Wi-Fi")
     }
 
     @Test func secondaryConditionsOnlySurfaceWhenNothingWorseIsWrong() {
         #expect(OperatorStatus(pill(thermal: .serious)).title == "Phone is hot")
-        #expect(OperatorStatus(pill(correction: 45)).title == "Position may be drifting")
+        #expect(OperatorStatus(pill(correction: 200)).title == "Position may be drifting")
+        #expect(OperatorStatus(pill(correction: 45)).level == .ok,
+                "a marker fix 45 s old is an ordinary sweep, not a warning")
         #expect(OperatorStatus(pill(alignment: .seat, correction: nil)).level == .ok,
                 "a seat-located phone has no marker fix to go stale")
         #expect(OperatorStatus(pill(.degraded)).title == "Tracking is shaky")

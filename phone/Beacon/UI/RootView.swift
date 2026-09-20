@@ -100,7 +100,6 @@ struct RootView: View {
                     .listRowBackground(Color.clear)
                     .disabled(isJoining || HubURL.derive(hub) == nil)
                 } footer: {
-                    Text("The address on the dashboard's QR code. Phone ID \(PhoneIdentity.phoneId.prefix(8)).")
                 }
             }
             .navigationTitle("Beacon")
