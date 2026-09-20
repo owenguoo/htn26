@@ -5,6 +5,10 @@ Each fake phone sits at a random seat and sweeps its heading back and forth. It 
 toward the sector the planner assigns it, and walks to a found candidate when it's
 dispatched as a responder. It streams generated JPEG frames, answers clock-sync pings,
 and turns its frames the flash color when the dashboard flashes it.
+
+`--still N` holds the first N of them in their seats: they take sectors and turn to
+look, but never walk. A rehearsal wants some of both, because a team whose responders
+always arrive never exercises what the hub does while one is still short.
 """
 from __future__ import annotations
 
@@ -59,7 +63,8 @@ def load_replay(paths: list[Path]) -> list[bytes]:
 
 
 async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: ssl.SSLContext | None,
-                     replay: list[bytes] | None = None, image_seconds: float = 3) -> None:
+                     replay: list[bytes] | None = None, image_seconds: float = 3,
+                     still: bool = False) -> None:
     pid = f"sim-{i:02d}"
     seat = {"x": round(rng.uniform(-8.5, 8.5), 2), "y": round(rng.uniform(3.5, 14), 2)}
     base = -math.degrees(math.atan2(seat["x"], seat["y"])) * 0.6  # roughly toward the stage
@@ -70,6 +75,11 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
     # otherwise sweep back and forth on our own.
     aim = {"heading": base % 360, "target": None, "until": 0.0}
     walk = {"distance": 0.0}  # responding to a found candidate: meters left to walk
+
+    def order_walk(distance: float) -> None:
+        """Take a walking order. A `still` phone accepts it and turns the right way, but
+        stays in its seat: someone hemmed in, or simply not moving."""
+        walk["distance"] = 0.0 if still else distance
 
     def heading() -> float:
         return aim["heading"]
@@ -88,7 +98,8 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
     while True:
         try:
             async with websockets.connect(url, ssl=ssl_ctx, max_size=None) as ws:
-                await ws.send(json.dumps({"type": "hello", "phoneId": pid, "name": f"Sim {i}",
+                await ws.send(json.dumps({"type": "hello", "phoneId": pid,
+                                          "name": f"Sim {i} (still)" if still else f"Sim {i}",
                                           "seat": seat, "sim": True, "ua": "swarm-sim"}))
                 welcome = json.loads(await ws.recv())
                 index = welcome.get("index", i)
@@ -102,18 +113,18 @@ async def fake_phone(i: int, url: str, fps: float, rng: random.Random, ssl_ctx: 
                         elif msg.get("type") == "command" and msg.get("cmd") == "guide":
                             if msg.get("clear"):
                                 aim["target"] = None
-                                walk["distance"] = 0.0
+                                order_walk(0.0)
                             elif msg.get("kind") in ("look", "go"):
                                 if msg.get("heading") is not None:  # sims have no compass: room headings only
                                     aim["target"] = msg["heading"] % 360
                                     aim["until"] = time.time() + 3
                                     # "go": walk there (the hub clears the order on arrival)
-                                    walk["distance"] = (msg.get("distance") or 0.0) + 1.0 if msg.get("kind") == "go" else 0.0
+                                    order_walk((msg.get("distance") or 0.0) + 1.0 if msg.get("kind") == "go" else 0.0)
                             else:
                                 aim["target"] = (aim["heading"] + msg["delta"]) % 360
                                 aim["until"] = time.time() + 3
                                 responding = msg.get("kind") == "respond"
-                                walk["distance"] = (msg.get("distance") or 0.0) if responding else 0.0
+                                order_walk((msg.get("distance") or 0.0) if responding else 0.0)
                         elif msg.get("type") == "command" and msg.get("cmd") == "flash":
                             flash["color"] = msg.get("color") or welcome.get("color")
                             flash["until"] = time.time() + msg.get("ttlMs", 1500) / 1000
@@ -166,8 +177,10 @@ async def run(args: argparse.Namespace) -> None:
         ssl_ctx.verify_mode = ssl.CERT_NONE  # self-signed dev cert
     replay = load_replay(args.image)
     rng = random.Random(args.seed)
-    print(f"Starting {args.n} fake phones → {args.url} at {args.fps} fps (Ctrl-C to stop)")
-    await asyncio.gather(*(fake_phone(i + 1, args.url, args.fps, random.Random(rng.random()), ssl_ctx, replay, args.image_seconds)
+    held = f", {args.still} of them held in their seats" if args.still else ""
+    print(f"Starting {args.n} fake phones → {args.url} at {args.fps} fps{held} (Ctrl-C to stop)")
+    await asyncio.gather(*(fake_phone(i + 1, args.url, args.fps, random.Random(rng.random()), ssl_ctx, replay,
+                                      args.image_seconds, still=i < args.still)
                            for i in range(args.n)))
 
 
@@ -179,9 +192,13 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument('--image', type=Path, action='append', default=[], help='local image to replay; repeat for a sequence')
     ap.add_argument('--image-seconds', type=float, default=3, help='seconds each replay image remains visible')
+    ap.add_argument('--still', type=int, default=0,
+                    help='hold this many of the phones in their seats: they look, but never walk')
     args = ap.parse_args()
     if args.n < 1 or args.fps <= 0 or args.image_seconds <= 0:
         ap.error('n, fps, and image-seconds must be positive')
+    if not 0 <= args.still <= args.n:
+        ap.error('still must be between 0 and n')
     try:
         asyncio.run(run(args))
     except KeyboardInterrupt:
