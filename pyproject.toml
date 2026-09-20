@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "websockets>=14",
     "pillow>=10.1",
+    "opencv-python-headless>=4.10,<5",
     "segno>=1.6",
     "openai>=3.16.2",
     "pydantic>=2",

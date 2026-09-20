@@ -43,6 +43,7 @@ function onJson(msg) {
     $('#joinQr').src = `/api/qr.svg?data=${encodeURIComponent(msg.joinUrl)}`;
     $('#joinUrl').textContent = msg.joinUrl;
     resizeMap();
+    if (mapMode === '3d') setMapMode('3d');
   } else if (msg.type === 'mission') {
     onMission(msg);
   } else if (msg.type === 'state') {
@@ -125,6 +126,23 @@ function renderMetrics() {
 }
 
 function renderControls() {
+  const scan = st.scan;
+  $('#scanToggle').disabled = !scan?.configured;
+  $('#scanToggle').textContent = scan?.enabled ? 'Stop scan' : 'Start scan';
+  $('#scanToggle').setAttribute('aria-pressed', String(!!scan?.enabled));
+  $('#scanRebuild').disabled = !scan?.configured || scan.running || scan.paused || scan.keyframes < 2;
+  $('#scanReset').disabled = !scan || (!scan.keyframes && !scan.last);
+  $('#scanStatus').textContent = !scan?.configured ? 'Connect a scanning GPU worker to start.'
+    : scan.error ? `Scan failed: ${scan.error}`
+    : scan.running ? `Building room from ${scan.batchSize} views…`
+    : !scan.enabled ? 'Ready to scan'
+    : scan.paused ? 'Leave Lobby to capture room views.'
+    : `${scan.keyframes} views captured${scan.last ? ' · Room map ready' : ' · Move slowly with overlapping views'}`;
+  if (mapMode === '3d' && scene3d) {
+    $('#mapStatus').textContent = scene3d.status() === 'failed' ? 'Room map could not load.'
+      : scene3d.status() === 'ready' ? 'Drag to orbit · Scroll to zoom · Click a camera to open its feed'
+      : 'Room layout · Waiting for a reconstructed scan';
+  }
   $('#plannerSw').classList.toggle('on', !!st.planner?.enabled);
   const t = st.target;
   const s = $('#candStatus');
@@ -710,6 +728,51 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---------------------------------------------------------------- map (monochrome)
+let mapMode = 'heatmap';
+let scene3d = null;
+let scene3dLoading = null;
+
+async function setMapMode(mode) {
+  if (mode !== 'heatmap' && mode !== '3d') return;
+  mapMode = mode;
+  for (const button of document.querySelectorAll('#mapModes button')) {
+    button.setAttribute('aria-pressed', String(button.dataset.mode === mode));
+  }
+  const is3d = mode === '3d';
+  $('#map').hidden = is3d;
+  $('#scene3d').hidden = !is3d;
+  $('#mapStatus').textContent = '';
+  if (!is3d) { scene3d?.hide(); resizeMap(); return; }
+  if (!room) { $('#mapStatus').textContent = 'Waiting for room data…'; return; }
+  if (!scene3d) {
+    $('#mapStatus').textContent = 'Loading 3D map…';
+    // Reuse initialization when the view is switched while the module is loading.
+    scene3dLoading ??= import('/web/scene3d.js').then(({createScene3D}) => {
+      scene3d = createScene3D($('#scene3d'), {
+        room, getState: () => st, getThumb: (id) => thumbs.get(id), onPick: openViewer,
+      });
+      $('#scene3d').addEventListener('dblclick', () => scene3d.resetView());
+      return scene3d;
+    }).catch((error) => { scene3dLoading = null; throw error; });
+    try { await scene3dLoading; }
+    catch (error) {
+      if (mapMode === '3d') $('#mapStatus').textContent = '3D map unavailable. Check WebGL and your internet connection, or switch to Heatmap.';
+      return;
+    }
+  }
+  if (mapMode === '3d') {
+    scene3d.show();
+    $('#mapStatus').textContent = st?.scan?.last || room.scene?.url
+      ? 'Drag to orbit · Scroll to zoom · Click a camera to open its feed'
+      : 'Room layout, not a live scan · Drag to orbit · Scroll to zoom';
+  }
+}
+$('#mapModes').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-mode]');
+  if (button) setMapMode(button.dataset.mode);
+});
+window.addEventListener('pagehide', () => scene3d?.hide());
+
 const canvas = $('#map');
 const ctx = canvas.getContext('2d');
 let view = null;
@@ -727,7 +790,7 @@ new ResizeObserver(resizeMap).observe($('#mapWrap'));
 
 function draw() {
   requestAnimationFrame(draw);
-  if (!view || !st) return;
+  if (!view || !st || mapMode === '3d') return;
   ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
 
   // probability heatmap: brighter = the candidate is more likely here (relative to the hottest cell)
@@ -1143,3 +1206,10 @@ function renderAnalysis() {
 setInterval(() => { if (viewing) renderAnalysis(); }, 100);
 new ResizeObserver(() => drawReference?.()).observe($('#referencePreview'));
 renderSearch();
+
+$('#scanToggle').addEventListener('click', () => {
+  send({ type: 'scan', enabled: !st?.scan?.enabled });
+  if (!st?.scan?.enabled) setMapMode('3d');
+});
+$('#scanRebuild').addEventListener('click', () => send({ type: 'scan', action: 'rebuild' }));
+$('#scanReset').addEventListener('click', () => send({ type: 'scan', action: 'reset' }));

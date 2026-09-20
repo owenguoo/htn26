@@ -6,6 +6,7 @@ const params = new URLSearchParams(location.search);
 const FPS = Number(params.get('fps')) || 10;          // frames per second sent to the hub
 const WIDTH = Number(params.get('w')) || 480;         // frame width in px
 const QUALITY = Number(params.get('q')) || 0.5;       // JPEG quality
+let lastScanCapture = 0, captureIsScan = false, encodingFrame = false;
 const FAKE = params.has('fake');                     // no camera: send a generated test pattern
 
 const store = {
@@ -173,7 +174,8 @@ const capCtx = cap.getContext('2d');
 function captureFrame() {
   const ws = state.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN || !state.connected) return;
-  if (ws.bufferedAmount > 256 * 1024) { state.skipped++; return; } // latest wins: drop, don't queue
+  if (encodingFrame || ws.bufferedAmount > 256 * 1024) { state.skipped++; return; } // latest wins: drop, don't queue
+  captureIsScan = !!state.world?.scanning && Date.now() - lastScanCapture >= 1000;
 
   if (FAKE) {
     cap.width = WIDTH; cap.height = Math.round(WIDTH * 0.75);
@@ -194,8 +196,9 @@ function setCaptureRate(fps) {
 }
 
 function grabInto(src, sw, sh) {
-  cap.width = WIDTH;
-  cap.height = Math.round((WIDTH * sh) / sw);
+  // One crisp mapping frame per second while scanning; ordinary video keeps its small payload.
+  cap.width = captureIsScan ? Math.min(768, sw) : WIDTH;
+  cap.height = Math.round((cap.width * sh) / sw);
   capCtx.drawImage(src, 0, 0, cap.width, cap.height);
 }
 
@@ -204,21 +207,26 @@ function sendCapture() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   const header = {
     type: 'frame', seq: state.seq++, tCapture: Date.now(), width: cap.width, height: cap.height,
+    scanKeyframe: captureIsScan,
     heading: currentHeading(), pitch: state.pitch, calibrated: state.calYaw !== null,
     orientation: state.ori,
   };
+  if (captureIsScan) lastScanCapture = header.tCapture;
   const captured = performance.now();
   state.detection.captures.set(header.seq, captured);
   for (const [seq, at] of state.detection.captures) {
     if (captured - at > 1500) state.detection.captures.delete(seq);
   }
+  encodingFrame = true;
   cap.toBlob(async (blob) => {
-    if (!blob) return;
-    const bytes = await blob.arrayBuffer();
-    if (state.ws !== ws || !state.connected || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(pack(header, bytes));
-    state.sent++;
-  }, 'image/jpeg', QUALITY);
+    try {
+      if (!blob || state.ws !== ws || !state.connected || ws.readyState !== WebSocket.OPEN) return;
+      const bytes = await blob.arrayBuffer();
+      if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 256 * 1024) return;
+      ws.send(pack(header, bytes));
+      state.sent++;
+    } finally { encodingFrame = false; }
+  }, 'image/jpeg', captureIsScan ? 0.88 : QUALITY);
 }
 
 function pack(header, bytes) {
@@ -708,6 +716,8 @@ function myPos() {
 
 function onWorld(msg) {
   state.world = msg;
+  $('#scanFeedback').hidden = !msg.scanning;
+  $('#scanFeedback').textContent = msg.scanHint || 'Slowly capture overlapping room views';
   for (const pg of msg.pings || []) {
     if (!state.pings.has(pg.id)) {
       state.pings.set(pg.id, { x: pg.x, y: pg.y, label: pg.label, until: Date.now() + 12000 - pg.ageMs });

@@ -8,6 +8,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script type="importmap">
+    {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+  </script>
   <style>
     :root {
       --bg: #f5faf6; --bg-1: #edf6ef; --bg-2: #e2f0e6; --bg-3: #d4e7da;
@@ -161,6 +164,22 @@
     .card-b { padding: 16px; }
     .stack { display: grid; gap: 16px; align-content: start; }
 
+    .map-modes { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1); }
+    .map-modes button { padding: 5px 10px; font-size: 12px; border-radius: 5px; }
+    .map-modes button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+    #scene3d { position: absolute; inset: 0; overflow: hidden; border-radius: 0 0 10px 10px; }
+    .s3d-canvas, .s3d-labels { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .s3d-labels { pointer-events: none; }
+    .s3d-tag, .s3d-mark { padding: 3px 7px; background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 6px; color: var(--fg); font-size: 12px; max-width: 180px; }
+    .s3d-say, .s3d-sees { font-size: 11px; color: var(--fg-2); }
+    .s3d-tools { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; }
+    .s3d-tools button { background: var(--surface); color: var(--fg); border: 1px solid var(--line); padding: 5px 8px; border-radius: 6px; font-size: 11px; }
+    .s3d-tools button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+    #mapStatus { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--fg-2); }
+    .scan-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+    .scan-controls button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; }
+    #scanStatus { font-size: 12px; color: var(--fg-2); }
+    #mapStatus:empty { display: none; }
     #mapWrap { position: relative; height: 480px; }
     #map { position: absolute; inset: 0; width: 100%; height: 100%; }
 
@@ -394,8 +413,19 @@
         <div class="card">
           <div class="card-h"><h2>Search map</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
             <span class="mono" style="font-size:12px" id="likely"></span>
+            <div class="map-modes" id="mapModes" role="group" aria-label="Map view">
+              <button type="button" data-mode="heatmap" aria-pressed="true">Heatmap</button>
+              <button type="button" data-mode="3d" aria-pressed="false">3D map</button>
+            </div>
 </div>
-          <div id="mapWrap"><canvas id="map"></canvas></div>
+          <div id="mapWrap"><canvas id="map"></canvas><div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
+          <p id="mapStatus" role="status"></p>
+          <div class="scan-controls">
+            <button type="button" id="scanToggle" aria-pressed="false">Start scan</button>
+            <button type="button" id="scanRebuild">Rebuild</button>
+            <button type="button" id="scanReset">Reset scan</button>
+            <span id="scanStatus" role="status">Checking scanner…</span>
+          </div>
         </div>
         <section class="card camera-section" aria-label="Camera feeds">
           <div class="card-h"><h2>Camera feeds</h2><span class="faint mono" id="phoneCount">0</span><span class="spacer"></span>

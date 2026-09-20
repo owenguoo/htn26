@@ -14,3 +14,5 @@ services/inference/**/*.pt
 services/inference/**/*.pth
 services/inference/**/*.safetensors
 services/inference/**/*.ts
+
+web/models/live/

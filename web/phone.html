@@ -99,7 +99,7 @@
 <body>
   <section id="join">
     <h1>Beacon</h1>
-    <p>Your phone's camera joins a shared search team. Frames and voice are only used live and are not stored.</p>
+    <p>Your phone's camera joins a shared search team. Selected mapping images are retained by the host to build the room map.</p>
     <input id="name" maxlength="24" placeholder="Your name (optional)" autocomplete="off">
     <button id="joinBtn" class="primary">Join with camera</button>
     <div id="joinError"></div>
@@ -117,6 +117,7 @@
         <button class="pill mic" id="mic" title="Tap to mute">🎙</button>
       </div>
       <div id="guide"></div>
+      <div class="pill" id="scanFeedback" hidden></div>
       <div class="pill lf" id="lookingFor"></div>
       <div id="toast"></div>
     </div>

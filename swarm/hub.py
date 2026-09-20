@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import asynccontextmanager
 import hashlib
 import io
 import itertools
@@ -34,6 +35,7 @@ from .coverage import Coverage
 from .planner import Planner
 from .sightings import FOUND_CONF, PERSON_HEIGHT_M, POSSIBLE_CONF, MockDetector, Sightings
 from .target import Target
+from .mapper import Mapper
 from .protocol import now_ms, pack, unpack
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -101,6 +103,9 @@ class Phone:
     frame_width: int = 0
     frame_height: int = 0
     frame: bytes | None = None
+    frame_ori: dict | None = None
+    scan_frame: dict | None = None
+    scan_candidates: deque = field(default_factory=lambda: deque(maxlen=4))
     frame_seq: int = -1
     frame_t: float = 0              # capture time, server clock
     frame_at: float = 0             # arrival time, server clock
@@ -186,6 +191,7 @@ class Hub:
         self.directives_cleared: list[str] = []
         self.mission_complete = False       # every responder reached the found candidate
         self.boosted: set[str] = set()      # phones told to capture faster (expanded in a console)
+        self.mapper = None
         self.mission = None                 # Mission Control (LLM); created in main()
 
     # ---- phone lifecycle -------------------------------------------------
@@ -202,6 +208,8 @@ class Hub:
         phone.frame = None
         phone.frame_seq = -1
         phone.frame_t = phone.frame_at = 0
+        phone.scan_frame = None
+        phone.scan_candidates.clear()
         phone.frame_pose = None
         phone.frame_width = phone.frame_height = 0
         phone.clock_offset = None
@@ -291,12 +299,22 @@ class Hub:
             phone.frame_pose["heading"] = phone.heading
         phone.frame_width, phone.frame_height = width, height
         phone.frame = jpeg
+        phone.frame_ori = header.get("orientation") if isinstance(header.get("orientation"), dict) else None
         phone.frame_seq = seq
         phone.frame_at = now
         phone.frames_total += 1
         self.search.expire(now)
         self.search.record_frame(FrameSnapshot(phone.id, phone.stream_id, seq, phone.frame_t,
                                                width, height, phone.frame_pose))
+
+        # Native Swift clients send ordinary JPEG frames, not browser scanKeyframes.
+        # Promote at most two per second with its receive-time pose snapshot.
+        native_due = phone.native and (phone.scan_frame is None or now - phone.scan_frame["at"] >= 450)
+        if (header.get("scanKeyframe") or native_due) and self.mapper and self.mapper.enabled:
+            pose = phone.frame_pose
+            phone.scan_frame = {"jpeg": jpeg, "pose": dict(pose) if pose else None, "pitch": phone.pitch,
+                                "orientation": phone.frame_ori, "at": now}
+            phone.scan_candidates.append(phone.scan_frame)
 
     def on_message(self, phone: Phone, msg: dict) -> None:
         kind = msg.get("type")
@@ -744,6 +762,7 @@ class Hub:
             pings = self.active_pings(now)
             base = {
                 "type": "world", "phase": self.phase, "phones": others,
+                "scanning": bool(self.mapper and self.mapper.enabled and not self.mapper.paused()),
                 "coverage": {k: cov[k] for k in ("cols", "rows", "cell", "x0", "cells")},
                 "searched": cov["searched"], "searchers": len(live),
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
@@ -756,7 +775,8 @@ class Hub:
                         for pg in pings if pg["phones"] is None or p.id in pg["phones"]]
                 stats = {"m2": round(p.searched_cells * cell_m2, 1),
                          "rank": ranked.index(p) + 1, "of": len(ranked)}
-                sends.append(p.send({**base, "me": p.id, "pings": mine, "stats": stats}))
+                sends.append(p.send({**base, "me": p.id, "pings": mine, "stats": stats,
+                                     "scanHint": self.mapper.selection_hints.get(p.id) if self.mapper else None}))
             await asyncio.gather(*sends)
 
     # ---- outbound ----------------------------------------------------------
@@ -775,6 +795,7 @@ class Hub:
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
                 "sightings": self.sightings.snapshot(), "likely": self.likely_sectors(),
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
+                "scan": self.mapper.status() if self.mapper else None,
                 "mission": self.mission.status() if self.mission else {"ready": False, "why": "not started"}}
 
     async def command(self, target: str, cmd: dict) -> None:
@@ -804,7 +825,19 @@ def _seat(seat: dict) -> dict | None:
 
 
 hub = Hub()
-app = FastAPI(title="Beacon hub")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    hub.mapper = Mapper(hub, ROOM, WEB / "models" / "live")
+    task = asyncio.create_task(hub.mapper.loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await hub.mapper.close()
+
+
+app = FastAPI(title="Beacon hub", lifespan=lifespan)
 load_env()
 settings = Settings()
 auth = Auth(settings)
@@ -960,6 +993,15 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                 await hub.ping(msg["x"], msg["y"], msg.get("label") or "Check here", msg.get("phones"))
             elif msg.get("type") == "mission" and hub.mission:
                 asyncio.create_task(hub.mission.run(str(msg.get("text", ""))))
+            elif msg.get("type") == "scan" and hub.mapper:
+                if "enabled" in msg:
+                    hub.mapper.set_enabled(bool(msg["enabled"]))
+                if msg.get("action") == "rebuild":
+                    asyncio.create_task(hub.mapper.rebuild())
+                elif msg.get("action") == "reset":
+                    hub.mapper.reset()
+                elif msg.get("action") == "fit":
+                    hub.mapper.adjust(scale=msg.get("scale"), turn=msg.get("turn"), reset=bool(msg.get("reset")))
             elif msg.get("type") == "autonomy" and hub.mission:
                 hub.mission.set_autonomy(bool(msg.get("enabled")))
     except (WebSocketDisconnect, RuntimeError, ValueError, KeyError):
@@ -1095,6 +1137,7 @@ def main() -> None:
     load_env()
     from .mission import MissionControl  # after load_env so it sees the API key
     hub.mission = MissionControl(hub, ROOM)
+    hub.mapper = Mapper(hub, ROOM, WEB / "models" / "live")
     ap = argparse.ArgumentParser(description="Beacon hub")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8000, help="plain HTTP (dashboard, simulator, tunnel)")
@@ -1125,7 +1168,12 @@ def main() -> None:
         asyncio.create_task(hub.coverage_loop())
         asyncio.create_task(hub.world_loop())
         asyncio.create_task(hub.mission.autonomy_loop())
-        await asyncio.gather(*(uvicorn.Server(c).serve() for c in configs))
+        scan_task = asyncio.create_task(hub.mapper.loop())
+        try:
+            await asyncio.gather(*(uvicorn.Server(c).serve() for c in configs))
+        finally:
+            scan_task.cancel()
+            await hub.mapper.close()
 
     try:
         asyncio.run(serve())
