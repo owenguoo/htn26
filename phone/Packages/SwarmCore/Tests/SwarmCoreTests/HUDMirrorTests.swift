@@ -458,6 +458,214 @@ struct HUDMirrorTests {
         #expect(hud.ambient?.color == HUDMirror.hazardColor)
     }
 
+    // MARK: - The full-screen cards
+
+    @Test func aFindTakesTheScreenAndSaysTheirName() {
+        let hud = mirror(overlay { model in
+            model.apply(.flash(color: nil, text: nil, ttlMs: 2500,
+                               takeover: "found_stay", name: "Sam"), heading: 90, now: 0)
+        })
+        let card = hud.takeover
+        #expect(card?.title == "Sam found")
+        #expect(card?.detail == "Stay with Sam until help reaches you")
+        #expect(card?.color == HUDMirror.plateFound, "the red the operator's map already uses")
+        #expect(card?.window == "detections", "the box that justified it shows through the hole")
+        #expect(card?.seconds == 0, "staying with somebody is not a moment: it holds")
+    }
+
+    /// The finder is never sent a `respond` guide — they are already standing
+    /// there — so the card is also how they learn they are on a find at all.
+    @Test func theFinderIsWithThemWithoutEverBeingGuided() {
+        let state = overlay { model in
+            model.apply(.flash(color: nil, text: nil, ttlMs: 2500,
+                               takeover: "found_stay", name: "Sam"), heading: 90, now: 0)
+        }
+        #expect(state.find == .with)
+        #expect(mirror(state).ambient?.kind == "with")
+    }
+
+    @Test func theCardForStayingWithThemOutlivesAnyTimer() {
+        var model = OverlayModel()
+        model.apply(.flash(color: nil, text: nil, ttlMs: 2500,
+                           takeover: "found_stay", name: "Sam"), heading: 90, now: 0)
+        var diagnostics = SessionDiagnostics()
+        diagnostics.state = .tracking
+        diagnostics.quality = .normal
+        // A minute later, still kneeling next to them.
+        model.update(pose: nil, alignment: nil, source: .none, intrinsics: nil,
+                     diagnostics: diagnostics, transport: .init(), transportState: .connected, now: 60)
+        #expect(HUDMirror.make(from: model.state, captureWidth: 1_920, captureHeight: 1_440,
+                               screenAspect: 393.0 / 852.0).takeover?.title == "Sam found")
+        model.apply(phase: "end")
+        model.update(pose: nil, alignment: nil, source: .none, intrinsics: nil,
+                     diagnostics: diagnostics, transport: .init(), transportState: .connected, now: 61)
+        #expect(HUDMirror.make(from: model.state, captureWidth: 1_920, captureHeight: 1_440,
+                               screenAspect: 393.0 / 852.0).takeover == nil)
+    }
+
+    // MARK: - An obstacle and a person at the same time
+
+    @Test func anObstacleCardStillSaysWhoYouWereRunningTo() throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 0.9, "y": 5, "stale": false}]}
+        """)
+        let hud = mirror(overlay { model in
+            model.apply(hazards, now: 0)
+            model.apply(.guideTurn(sector: "PERSON 2", delta: 40, onTarget: false, text: nil,
+                                   kind: "respond", distance: 12), heading: 90, now: 0)
+        })
+        let card = try #require(hud.takeover)
+        #expect(card.kind == "hazard", "the obstacle is what has to be dealt with first")
+        #expect(card.badge?.text == "Person 2 · 12 m · 40° right")
+        #expect(card.badge?.color == HUDMirror.plateFound, "the person keeps their own colour")
+        #expect(card.window == "arrow", "step around it and carry on toward them")
+    }
+
+    @Test func aFindCardStillWarnsAboutTheObstacle() throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 2.4, "y": 5, "stale": false}]}
+        """)
+        let hud = mirror(overlay { model in
+            model.apply(hazards, now: 0)
+            model.apply(.flash(color: nil, text: nil, ttlMs: 1800,
+                               takeover: "found_go", name: "Sam"), heading: 90, now: 0)
+        })
+        #expect(hud.takeover?.kind == "found_go")
+        #expect(hud.takeover?.badge?.text == "Hazard 2 m ahead")
+        #expect(hud.takeover?.badge?.color == HUDMirror.hazardColor)
+    }
+
+    @Test func aResponderIsSentToThemWithAnArrow() {
+        let hud = mirror(overlay { model in
+            model.apply(.flash(color: nil, text: nil, ttlMs: 1800,
+                               takeover: "found_go", name: "Sam"), heading: 90, now: 0)
+        })
+        #expect(hud.takeover?.detail == "Go to them — follow the arrow")
+        #expect(hud.takeover?.window == "arrow")
+    }
+
+    @Test func aNamelessFindStillHasSomethingToSay() {
+        let hud = mirror(overlay { model in
+            model.apply(.flash(color: nil, text: nil, ttlMs: 2500,
+                               takeover: "found_stay", name: nil), heading: 90, now: 0)
+        })
+        #expect(hud.takeover?.title == "Someone found")
+        #expect(hud.takeover?.detail == "Stay with them until help reaches you")
+    }
+
+    /// Reaching your own sector is worked out on the phone, not sent: the hub
+    /// only sees this heading five times a second.
+    @Test func reachingYourSectorIsTheOneGreenCard() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "E2", delta: 0, onTarget: false, text: nil,
+                                   kind: "search", distance: nil), heading: 90, now: 0)
+        })
+        #expect(hud.takeover?.title == "At your sector")
+        #expect(hud.takeover?.detail == "E2")
+        #expect(hud.takeover?.color == HUDMirror.plateSuccess)
+        #expect(hud.takeover?.window == "plain", "nothing to point at: just keep sweeping")
+    }
+
+    @Test func gettingToAPersonIsNeverAGreenCard() {
+        let hud = mirror(overlay { model in
+            model.apply(.guideTurn(sector: "PERSON 1", delta: 0, onTarget: false, text: nil,
+                                   kind: "respond", distance: 3), heading: 90, now: 0)
+        })
+        #expect(hud.takeover == nil, "arriving at somebody is the hub's red card, not a local green one")
+    }
+
+    @Test func aCardStandsDownOnItsOwnClock() {
+        var model = OverlayModel()
+        model.apply(.flash(color: nil, text: nil, ttlMs: 1800,
+                           takeover: "found_go", name: "Sam"), heading: 90, now: 0)
+        #expect(model.state.takeover != nil)
+        var diagnostics = SessionDiagnostics()
+        diagnostics.state = .tracking
+        diagnostics.quality = .normal
+        model.update(pose: nil, alignment: nil, source: .none, intrinsics: nil,
+                     diagnostics: diagnostics, transport: .init(), transportState: .connected, now: 2)
+        #expect(model.state.takeover == nil, "1.8 s, from the row in the table")
+    }
+
+    @Test func anUnknownCardIsIgnoredRatherThanGuessedAt() {
+        let hud = mirror(overlay { model in
+            model.apply(.flash(color: "#ff0000", text: "hello", ttlMs: 1500,
+                               takeover: "something_new", name: nil), heading: 90, now: 0)
+        })
+        #expect(hud.takeover == nil)
+    }
+
+    // MARK: - The amber ladder
+
+    /// Three rungs: a chip at three metres, a pulsing wash at two, the whole
+    /// screen at one.
+    @Test(arguments: [(2.6, "chip"), (1.8, "wash"), (0.9, "screen")])
+    func gettingCloserToAnObstacleEscalates(_ metres: Double, _ rung: String) throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": \(metres), "y": 5, "stale": false}]}
+        """)
+        let hud = mirror(overlay { $0.apply(hazards, now: 0) })
+        #expect((hud.compass?.markers ?? []).contains { $0.label.hasPrefix("⚠") },
+                "the chip is on the tape at every rung")
+        #expect(hud.warning != nil)
+        #expect((hud.ambient?.kind == "hazard") == (rung != "chip"))
+        #expect((hud.takeover?.kind == "hazard") == (rung == "screen"))
+    }
+
+    @Test func theObstacleCardKeepsAlmostAllOfTheCamera() throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 0.9, "y": 5, "stale": false}]}
+        """)
+        let card = try #require(mirror(overlay { $0.apply(hazards, now: 0) }).takeover)
+        #expect(card.title == "Watch out")
+        #expect(card.detail == "Hazard 1 m ahead")
+        #expect(card.color == HUDMirror.hazardColor)
+        #expect(card.seconds == 0, "no clock: it is up while it is true")
+        let person = try #require(HUDMirror.takeover(kind: "found_go", name: "Sam"))
+        let area = { (t: HubHUDMirror.Takeover) in (1 - t.insetX * 2) * (t.bottom - t.top) }
+        #expect(area(card) > area(person),
+                "the card about what is in front of the lens shows more of it")
+    }
+
+    @Test func anObstacleAtArmsLengthOutranksThePersonYouAreRunningTo() throws {
+        let hazards = try world("""
+        {"phase": "search", "hazards": [{"id": "chair", "x": 0.9, "y": 5, "stale": false}]}
+        """)
+        let hud = mirror(overlay { model in
+            model.apply(hazards, now: 0)
+            model.apply(.flash(color: nil, text: nil, ttlMs: 1800,
+                               takeover: "found_go", name: "Sam"), heading: 90, now: 0)
+        })
+        #expect(hud.takeover?.kind == "hazard")
+    }
+
+    /// A detector that misses one frame must not strobe the screen at the exact
+    /// range where somebody is about to walk into something.
+    @Test func oneMissedDetectionDoesNotStrobeTheObstacleCard() throws {
+        var model = OverlayModel()
+        var diagnostics = SessionDiagnostics()
+        diagnostics.state = .tracking
+        diagnostics.quality = .normal
+        let portrait = simd_quatf(angle: -.pi / 2, axis: [0, 0, 1])
+        let pose = Pose(position: [0, 1.5, 5],
+                        orientation: simd_quatf(angle: -Float(90 * .pi / 180), axis: [0, 1, 0]) * portrait)
+        func tick(_ json: String, at now: Double) -> HubHUDMirror {
+            model.apply(try! world(json), now: now)
+            model.update(pose: pose, alignment: .identity, source: .marker,
+                         intrinsics: Sample.intrinsics(), diagnostics: diagnostics,
+                         transport: .init(), transportState: .connected, now: now)
+            return HUDMirror.make(from: model.state, captureWidth: 1_920, captureHeight: 1_440,
+                                  screenAspect: 393.0 / 852.0)
+        }
+        let seen = """
+        {"phase": "search", "hazards": [{"id": "chair", "x": 0.9, "y": 5, "stale": false}]}
+        """
+        let missed = #"{"phase": "search", "hazards": []}"#
+        #expect(tick(seen, at: 0).takeover?.kind == "hazard")
+        #expect(tick(missed, at: 0.5).takeover?.kind == "hazard", "one dropped frame is not an all-clear")
+        #expect(tick(missed, at: 2).takeover == nil, "a second of nothing is")
+    }
+
     @Test func thereIsNoScoreboardBeforeTheSearchStarts() throws {
         let numbers = try world("""
         {"phase": "lobby", "searched": 0.46, "stats": {"m2": 142.4, "rank": 2, "of": 5}}

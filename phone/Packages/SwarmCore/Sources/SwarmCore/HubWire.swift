@@ -559,7 +559,10 @@ public enum HubCommand: Sendable, Equatable {
     /// Operator "look" by real-world compass bearing. This client runs ARKit
     /// with `.gravity` and has no true north, so it shows the text only.
     case guideCompass(kind: String, sector: String?, compass: Double, untilMs: Double)
-    case flash(color: String?, text: String?, ttlMs: Double)
+    /// `takeover` names one of the full-screen cards in `HUDMirror.takeover`
+    /// and `name` is who it is about; both absent means the plain colour flash
+    /// the hub has always sent, which still renders.
+    case flash(color: String?, text: String?, ttlMs: Double, takeover: String? = nil, name: String? = nil)
     /// nil means "back to your default rate".
     case rate(fps: Double?)
     case ping(id: Int, x: Double, y: Double, label: String, ttlMs: Double)
@@ -655,6 +658,9 @@ public enum HubInbound: Sendable, Equatable {
         var untilMs: Double?
         var color: String?
         var ttlMs: Double?
+        /// Which full-screen card, and who it is about (`swarm/target.py`).
+        var takeover: String?
+        var name: String?
         var fps: Double?
         var id: Int?
         var x: Double?
@@ -686,7 +692,8 @@ public enum HubInbound: Sendable, Equatable {
                 return .guideTurn(sector: sector, delta: delta, onTarget: onTarget ?? false, text: text,
                                   kind: kind ?? "search", distance: distance)
             case "flash":
-                return .flash(color: color, text: text, ttlMs: ttlMs ?? 1500)
+                return .flash(color: color, text: text, ttlMs: ttlMs ?? 1500,
+                              takeover: takeover, name: name)
             case "rate":
                 return .rate(fps: fps)
             case "ping":

@@ -318,15 +318,11 @@ struct FloorPlanCanvas: View {
         }
         guard let low = bins.min(), let high = bins.max(),
               Double(high - low) / Double(top) > heatMinSpread else { return nil }
-        var levels = heatEqualise(bins)
-        // Normalise to the hottest cell. Ranking alone leaves the plateau of
-        // never-looked-at cells at its *midpoint* rank, which early in a search
-        // is about 0.5 for the whole map — a flat, near-invisible tint. See
-        // `heatLevels()` in `web/room.js`.
-        if let peak = levels.max(), peak > 0 {
-            for i in levels.indices { levels[i] /= peak }
-        }
-        return levels
+        // The steps as sent: neither ranked nor renormalised to the hottest
+        // cell. `Coverage.heat()` in `swarm/coverage.py` log-scales the field
+        // around its median, so a step means something on its own, and either
+        // transform throws that away. See `heatLevels()` in `web/room.js`.
+        return bins.map { Double($0) / Double(top) }
     }
 
     /// One base-36 digit, the way `parseInt(c, 36)` reads it. Anything else is 0.
@@ -338,26 +334,6 @@ struct FloorPlanCanvas: View {
         case UInt8(ascii: "A")...UInt8(ascii: "Z"): return Int(byte - UInt8(ascii: "A")) + 10
         default: return 0
         }
-    }
-
-    /// Rank of each bin among all cells, 0…1, ties sharing the midpoint of the
-    /// span they occupy. A plain min/max stretch cannot draw this field: most
-    /// of it is one plateau of cells nobody has looked at, which a linear ramp
-    /// paints as a solid sheet, and that plateau collapses into a step or two
-    /// the moment one detection lifts a single cell far above it — at which
-    /// point the same linear ramp paints the whole room as empty. Ranking
-    /// survives both.
-    static func heatEqualise(_ bins: [Int]) -> [Double] {
-        let n = bins.count
-        var counts = [Int](repeating: 0, count: heatSteps)
-        for b in bins where b >= 0 && b < heatSteps { counts[b] += 1 }
-        var level = [Double](repeating: 0, count: heatSteps)
-        var seen = 0
-        for v in 0..<heatSteps where counts[v] > 0 {
-            level[v] = n > 1 ? (Double(seen) + Double(counts[v] - 1) / 2) / Double(n - 1) : 1
-            seen += counts[v]
-        }
-        return bins.map { $0 >= 0 && $0 < heatSteps ? level[$0] : 0 }
     }
 
     /// `HEAT_MAX_ALPHA` / `HEAT_GAMMA` / `HEAT_STEPS` / `HEAT_MIN_SPREAD` in

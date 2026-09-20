@@ -25,6 +25,9 @@ from .protocol import now_ms
 ARRIVE_M = 1.5       # responders closer than this have arrived
 GUIDE_EVERY_MS = 200
 SAME_PERSON_M = 2.0  # a find this close to somebody already found is that same person
+# `drawFoundPerson` in web/console.js, so the colour a searcher's whole screen
+# turns is the colour the operator's map already marks that person with.
+FOUND_COLOR = "#b72f36"
 
 
 class Victim:
@@ -61,6 +64,15 @@ class Victim:
         w = confidence / total if total else 0.5
         self.fix = (self.fix[0] + w * (x - self.fix[0]), self.fix[1] + w * (y - self.fix[1]))
         self.confidence = max(self.confidence, confidence)
+
+    def takeover(self, kind: str, ttl_ms: int) -> dict:
+        """A full-screen card on a searcher's phone, named rather than worded.
+
+        The phone owns the wording and the layout (`HUDMirror.takeover`); all the
+        hub says is which card and who it is about, so the two cannot drift and
+        the phone can show the person's name rather than "them"."""
+        return {"cmd": "flash", "color": FOUND_COLOR, "takeover": kind,
+                "name": self.label, "ttlMs": ttl_ms}
 
     def snapshot(self, now: float) -> dict:
         return {"id": self.id, "label": self.label,
@@ -210,9 +222,7 @@ class Target:
         secs = (now - self.search_started) / 1000
         who = victim.label if label else ("someone" if len(self.victims) == 1 else f"person {victim.id}")
         self.note(f"FOUND {who} ({round(confidence * 100)}% sure) after {secs:.1f}s", finder)
-        return ([(finder, {"cmd": "flash", "color": "#ff5d73",
-                           "text": "You found them!\nStay on them", "ttlMs": 2500})]
-                + self._staff(victim, viewers))
+        return ([(finder, victim.takeover("found_stay", 2500))] + self._staff(victim, viewers))
 
     def _staff(self, victim: Victim, viewers: dict) -> list[tuple[str, dict]]:
         """Fill a team: free phones first, nearest first, then a spare from a team that has already
@@ -235,8 +245,7 @@ class Target:
                 del giver.responders[pid]
                 victim.responders[pid] = {"arrived": False}
                 self.note(f"pulled off {giver.label} to reach {victim.label}", pid)
-            out.append((pid, {"cmd": "flash", "color": "#ff5d73",
-                              "text": "Person found!\nFollow the arrow", "ttlMs": 1800}))
+            out.append((pid, victim.takeover("found_go", 1800)))
         return out
 
     def _donor(self, needy: Victim) -> tuple[Victim, str] | None:
@@ -276,7 +285,10 @@ class Target:
                     r["arrived"] = True
                     self.note(f"arrived at {victim.label}" if many else "arrived at the candidate", pid)
                     out.append((pid, {"cmd": "guide", "clear": True}))
-                    out.append((pid, {"cmd": "flash", "color": "#7ae582", "text": "You're there ✓", "ttlMs": 1500}))
+                    # Arriving at a person is not a green "task done": it is the
+                    # start of staying with them, and the phone says so in the
+                    # same red it has been saying since the find.
+                    out.append((pid, victim.takeover("found_stay", 1500)))
                     continue
                 bearing = math.degrees(math.atan2(tx - x, -(ty - y))) % 360
                 delta = (bearing - heading + 540) % 360 - 180

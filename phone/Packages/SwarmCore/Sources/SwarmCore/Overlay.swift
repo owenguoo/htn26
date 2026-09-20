@@ -485,6 +485,25 @@ public struct TeammateCue: Sendable, Equatable, Identifiable {
     }
 }
 
+/// A full-screen card, and when it stops being one.
+///
+/// Only the name and the clock live here. The wording, the colour, the glyph
+/// and how long it holds are all in `HUDMirror.takeover(kind:name:)`, so the
+/// phone and the console show one card rather than two that resemble each
+/// other.
+public struct TakeoverCue: Sendable, Equatable {
+    public var kind: String
+    public var name: String?
+    /// Local monotonic time after which the card contracts away.
+    public var until: Double
+
+    public init(kind: String, name: String?, until: Double) {
+        self.kind = kind
+        self.name = name
+        self.until = until
+    }
+}
+
 /// This phone's standing part in a find: on the way, or there.
 ///
 /// Red does not stop at the door. A flash is an event — it announces something
@@ -516,6 +535,12 @@ public struct HazardCue: Sendable, Equatable, Identifiable {
     /// Close enough that it outranks everything else on the bezel: you are
     /// about to walk into it.
     public static let imminentMetres: Float = 2
+    /// Close enough to stop reading the phone. At this range the obstacle is
+    /// the only thing that matters and it takes the whole screen.
+    public static let blockingMetres: Float = 1.2
+
+    /// How close, on the three-step ladder: nil, warn, imminent, blocking.
+    public var blocking: Bool { (distance ?? .infinity) <= Self.blockingMetres }
 
     public var id: String
     public var x: Double
@@ -620,6 +645,10 @@ public struct OverlayState: Sendable, Equatable {
     public var nearestHazard: HazardCue?
     /// Whether this phone is part of a find, and how far into it.
     public var find: FindInvolvement?
+    /// Who that find is, when the hub named them.
+    public var findName: String?
+    /// The full-screen card currently up, if any.
+    public var takeover: TakeoverCue?
     /// The hub's found candidate (`world.candidate`), located like a ping so it
     /// can sit on the compass and float in the camera view. `id` is −1.
     public var candidate: PingCue?
@@ -673,6 +702,8 @@ public struct OverlayModel: Sendable {
     private var detectionRevision: String?
     private var detectionSeq: UInt64?
     private var hazardSeq: UInt64?
+    /// When a hazard was last actually reported — see `hazardHoldSeconds`.
+    private var hazardSeenAt: Double = -.infinity
     private var previousMatches: [HubDetectionBox] = []
     private var previousMatchTime: Double = -.infinity
     private var lastMatchAlert: Double = -.infinity
@@ -760,13 +791,23 @@ public struct OverlayModel: Sendable {
         state.phase = phase
         // Lobby, calibrate and end are not a search. Whatever this phone was
         // part of, it is over, and the screen stops saying otherwise.
-        if phase != "search" && phase != "found" { state.find = nil }
+        if phase != "search" && phase != "found" {
+            state.find = nil
+            state.findName = nil
+        }
     }
 
     /// A `respond` guide means a find team; being steered anywhere else means
     /// the operator has been taken off it.
     private mutating func noteInvolvement(_ kind: String) {
-        state.find = kind == "respond" ? .heading : nil
+        guard kind != "respond" else {
+            // Already `with` them? A respond guide is the hub topping the team
+            // up, not this phone being sent away again.
+            if state.find == nil { state.find = .heading }
+            return
+        }
+        state.find = nil
+        state.findName = nil
     }
 
     public mutating func apply(_ world: HubWorld, now: Double) {
@@ -818,7 +859,31 @@ public struct OverlayModel: Sendable {
                              distance: distance, until: now + untilMs / 1000)
         case .guideCompass(let kind, let sector, let compass, let untilMs):
             guide = .compass(kind: kind, label: sector, bearing: compass, until: now + untilMs / 1000)
-        case .flash(let color, let text, let ttlMs):
+        case .flash(let color, let text, let ttlMs, let takeover, let name):
+            // A named card owns the screen for as long as its own row says, and
+            // brings its own words; the bare colour flash the hub has always
+            // been able to send still works underneath it.
+            if let takeover {
+                // The hub's cards are also how this phone learns its part in a
+                // find — the finder is never sent a `respond` guide, because
+                // they are already standing there, so the guide alone would
+                // have left the one person who actually found somebody with a
+                // screen that said nothing.
+                switch takeover {
+                case "found_stay": state.find = .with
+                case "found_go": state.find = .heading
+                default: break
+                }
+                if let name { state.findName = name }
+                // "Stay with them" is not an announcement, it is what you are
+                // doing. It has no clock; it is derived from `find` and holds
+                // until the search moves on. Everything else is a moment.
+                if takeover != "found_stay", let card = HUDMirror.takeover(kind: takeover, name: name) {
+                    state.takeover = TakeoverCue(kind: takeover, name: name, until: now + card.seconds)
+                }
+                cue(haptic: "flash", intensity: 1)
+                return true
+            }
             let rgb = HexColor.parse(color) ?? HexColor.parse(state.colorHex) ?? (1, 1, 1)
             state.flash = FlashCue(red: rgb.0, green: rgb.1, blue: rgb.2,
                                    text: (text?.isEmpty ?? true) ? nil : text, until: now + ttlMs / 1000)
@@ -967,6 +1032,7 @@ public struct OverlayModel: Sendable {
         if let flash = state.flash, now > flash.until { state.flash = nil }
         if let toast = state.toast, now > toast.until { state.toast = nil }
         if let hazards = state.hazards, now > hazards.until { state.hazards = nil }
+        if let takeover = state.takeover, now > takeover.until { state.takeover = nil }
         if let detections = state.detections, now > detections.until { state.detections = nil }
         if let sound = state.directionalSound, now > sound.until { state.directionalSound = nil }
         state.pings.removeAll { now > $0.until }
@@ -993,7 +1059,7 @@ public struct OverlayModel: Sendable {
         updateTeammates(pose: usablePose, roomPose: roomPose, alignment: alignment,
                         intrinsics: intrinsics)
         updateHazards(pose: usablePose, roomPose: roomPose, alignment: alignment,
-                      intrinsics: intrinsics)
+                      intrinsics: intrinsics, now: now)
     }
 
     /// Rewrites the banner from the *live* offset, every tick.
@@ -1061,6 +1127,12 @@ public struct OverlayModel: Sendable {
             // buzz every time the operator drifted a degree over the boundary.
             if onTarget && !wasOnTarget {
                 cue(haptic: "onTarget", intensity: 0.6)
+                // Arriving on your own sector is the one card the hub does not
+                // send: it is geometry this phone works out for itself, every
+                // frame, from a heading the hub only sees five times a second.
+                if kind != "respond", let card = HUDMirror.takeover(kind: "sector", name: label) {
+                    state.takeover = TakeoverCue(kind: "sector", name: label, until: now + card.seconds)
+                }
                 wasOnTarget = true
             } else if abs(off) > GuideThresholds.onTargetReleaseDegrees {
                 wasOnTarget = false
@@ -1194,8 +1266,16 @@ public struct OverlayModel: Sendable {
     /// reads while walking. Stale hazards are skipped — the hub marks a hazard
     /// stale when nothing has seen it recently, and steering somebody around a
     /// chair that has been moved is its own hazard.
-    private mutating func updateHazards(pose: Pose?, roomPose: RoomPose?,
-                                        alignment: RoomAlignment?, intrinsics: CameraIntrinsics?) {
+    /// How long a hazard is remembered after the hub stops reporting it.
+    ///
+    /// Hazards come from a detector running on 2 Hz frames, and detectors miss
+    /// one now and then. Without this, a single missed frame takes the amber
+    /// screen away and the next one brings it back — a strobe, at exactly the
+    /// range where somebody is about to walk into something.
+    private static let hazardHoldSeconds: Double = 1.0
+
+    private mutating func updateHazards(pose: Pose?, roomPose: RoomPose?, alignment: RoomAlignment?,
+                                        intrinsics: CameraIntrinsics?, now: Double) {
         let placed = (state.world?.hazards ?? []).compactMap { hazard -> HazardCue? in
             guard !hazard.stale, hazard.x.isFinite, hazard.y.isFinite else { return nil }
             var cue = HazardCue(id: hazard.id, x: hazard.x, y: hazard.y)
@@ -1205,7 +1285,12 @@ public struct OverlayModel: Sendable {
             guard let distance = cue.distance, distance <= HazardCue.warnMetres else { return nil }
             return cue
         }
-        state.nearestHazard = placed.min { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }
+        if let nearest = placed.min(by: { ($0.distance ?? .infinity) < ($1.distance ?? .infinity) }) {
+            state.nearestHazard = nearest
+            hazardSeenAt = now
+        } else if now - hazardSeenAt > Self.hazardHoldSeconds {
+            state.nearestHazard = nil
+        }
     }
 
     /// Everyone else on the search, placed the same way.

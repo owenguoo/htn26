@@ -179,6 +179,15 @@ public struct OperatorView: View {
                     .transition(GenieTransition(anchor: genieAnchor))
             }
 
+            // Over the chrome but under the flash: the plate hides the HUD it
+            // is standing in for, while the camera and its detection boxes go
+            // on showing through the hole in it.
+            if let card = model.frame.hud.takeover {
+                TakeoverView(takeover: card,
+                             bearingDegrees: overlay.arrow.map { Double($0.bearingRadians) * 180 / .pi },
+                             chip: takeoverChip)
+                    .transition(.opacity)
+            }
             // Last, and over everything: a flash the audience can see from the
             // back of the room is the point of the flash.
             if let flash = overlay.flash {
@@ -207,6 +216,15 @@ public struct OperatorView: View {
         }.ignoresSafeArea())
         .onAppear { model.attach() }
         .onDisappear { model.detach() }
+    }
+
+    /// "SAM · 12 m" under the takeover's arrow: the name the card is already
+    /// shouting, and how far there is to walk.
+    private var takeoverChip: String? {
+        guard let title = model.frame.hud.takeover?.title,
+              let distance = overlay.arrow?.distance else { return nil }
+        let name = title.replacingOccurrences(of: " found", with: "").uppercased()
+        return String(format: "%@ · %.0f m", name, Double(distance))
     }
 
     private var chrome: some View {

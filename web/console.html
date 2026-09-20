@@ -43,10 +43,10 @@
     .faint { color: var(--fg-3); }
 
     /* shell */
-    .wrap { max-width: 1440px; margin: 0 auto; padding: 0 24px 40px; }
+    .wrap { max-width: none; margin: 0 auto; padding: 0 24px 40px; }
     header { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,0.94); backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
-    .bar { max-width: 1440px; margin: 0 auto; padding: 0 24px; height: 64px; display: flex; align-items: center; gap: 10px; }
+    .bar { max-width: none; margin: 0 auto; padding: 0 24px; height: 64px; display: flex; align-items: center; gap: 10px; }
     .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
     .logo img { display: block; width: 44px; height: 44px; object-fit: contain; }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
@@ -79,13 +79,30 @@
     .upload-zone:hover, .upload-zone.dragging { background: var(--accent-bg); border-color: var(--accent); }
     .upload-zone:disabled { opacity: .5; cursor: wait; }
     .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .search-panel input, .search-panel select, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 7px; }
+    .search-panel select, .settings input[type="number"], .person-dialog input[type="text"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 7px; }
+    /* One button starts the whole flow; the sheet behind it asks for the name
+       and the photo together, so nobody is half-added. */
+    .add-person { width: 100%; justify-content: center; height: 38px; }
+    .person-dialog { width: min(460px, calc(100% - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; }
+    .person-dialog .field-label { display: block; margin: 16px 0 6px; font-size: 13px; font-weight: 500; }
+    .person-dialog input[type="text"] { width: 100%; }
+    .person-dialog .upload-zone { margin-top: 14px; min-height: 92px; }
+    .inference-note { margin: 8px 0 0; font-size: 12px; color: var(--fg-3); }
+    #searchMessage.err, #personMessage.err { color: var(--red); }
+    #personMessage:empty { display: none; }
+    #personMessage { margin-top: 10px; font-size: 13px; color: var(--fg-2); }
+    /* Threats: what the swarm has flagged in the room, newest first. */
+    .threat-row { display: flex; align-items: baseline; gap: 8px; padding: 9px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .threat-row:last-child { border-bottom: 0; }
+    .threat-row .what { font-weight: 500; }
+    .threat-row .where { color: var(--fg-2); }
+    .threat-row .age { margin-left: auto; font: 12px var(--mono); color: var(--fg-3); }
+    .threat-row.stale { opacity: .55; }
+    #threatList .empty { padding: 20px 16px; font-size: 13px; }
     #referencePreview { max-width: 100%; max-height: 280px; margin-top: 12px; }
     #personChoices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     #searchMessage:empty { display: none; }
     #searchMessage { margin-top: 10px; color: var(--fg-2); font-size: 13px; }
-    .analysis { padding: 12px 16px; border-top: 1px solid var(--line); }
-    #analyzedFrame { max-width: 100%; max-height: 240px; display: block; margin-top: 10px; }
     /* start / stop — the search controls live in the top bar, so the clock and
        the buttons read as one strip instead of a second row of chrome under
        the header. The button's own disabled state says whether the swarm is
@@ -104,7 +121,7 @@
        who is still out there. Hidden until there is something to say; red the
        moment somebody is found, so the find is visible from across the room. */
     .live { border-top: 1px solid var(--line); background: var(--bg-1); }
-    .live-inner { max-width: 1440px; margin: 0 auto; padding: 7px 24px; min-height: 38px;
+    .live-inner { max-width: none; margin: 0 auto; padding: 7px 24px; min-height: 38px;
       display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--fg-2); }
     .live-lead { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-weight: 500; color: var(--fg); }
     .live-lead b { font-weight: 600; }
@@ -189,11 +206,17 @@
     .metric.alert .v { color: var(--red); }
 
     /* cards */
-    .grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; margin-bottom: 16px; }
-    .grid.bottom { grid-template-columns: minmax(0, 1fr) 380px; }
+    /* Three columns across the whole screen: who we are looking for on the
+       left, the room in the middle with its cameras under it, and what has
+       happened on the right. The middle is the only one that takes the slack. */
+    .grid { display: grid; grid-template-columns: 330px minmax(0, 1fr) 360px; gap: 16px;
+      margin-bottom: 16px; align-items: start; }
+    .side-column { align-content: start; }
     .card { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); min-width: 0; }
-    .card-h { height: 48px; padding: 0 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
-    .card-h h2 { margin: 0; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+    .card-h { height: 52px; padding: 0 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+    .card-h h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em;
+      display: flex; align-items: center; gap: 9px; }
+    .card-h h2 svg { width: 18px; height: 18px; }
     .card-h h2 svg { flex: none; color: var(--fg-2); }
     .card-b { padding: 16px; }
     .stack { display: grid; gap: 16px; align-content: start; }
@@ -248,7 +271,6 @@
        the cleared end of the ramp is transparent over the map's white floor. */
     .heat-scale { flex: 0 0 auto; width: 54px; height: 10px; border-radius: var(--r-sm);
       border: 1px solid var(--line); background-color: #fff; }
-    #markerBtn.arming { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     .map-key.sighting::before, .map-key.rescued::before { content: ""; position: absolute; left: 50%; top: 4px;
       width: 5px; height: 5px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
     .map-key.sighting::after, .map-key.rescued::after { content: ""; position: absolute; left: 50%; bottom: 3px;
@@ -259,7 +281,7 @@
 
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .row + .row { margin-top: 14px; }
-    .row .label { font-weight: 500; }
+    .row .label { font-weight: 500; font-size: 15px; }
     .row .hint { font-size: 12px; color: var(--fg-3); }
     .switch { width: 36px; height: 20px; border-radius: var(--r-pill); background: var(--bg-3); border: 1px solid var(--line-2);
       position: relative; transition: background .15s; flex: none; }
@@ -273,6 +295,13 @@
     .stepper span { min-width: 28px; text-align: center; font-family: var(--mono); }
     .status { font-size: 13px; padding: 10px 12px; border-radius: var(--r); background: var(--bg-1); border: 1px solid var(--line); }
     .status.found { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-hover); }
+    /* A name turns "Person 2 found" on every searcher's phone into "Sam found",
+       which is the difference between a record and a person. Optional: a search
+       that starts before anybody knows the name must not wait for one. */
+    #personName { width: 100%; margin-top: 10px; padding: 7px 9px; font: inherit; font-size: 13px;
+                  border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1);
+                  color: var(--fg-1); }
+    #personName:placeholder-shown { color: var(--fg-3); }
     .people-roster { display: grid; gap: 4px; margin-top: 10px; }
     .people-roster:empty { display: none; }
     .person-row { display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 6px 8px;
@@ -286,7 +315,11 @@
     .found-list:empty { display: none; }
     .found-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--fg-3); }
     .found-row .who { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--fg-1); white-space: nowrap; }
-    .divider { height: 1px; background: var(--line); margin: 16px -16px; }
+    /* A border, not a 1px filled block: a background of that height lands on a
+       fractional device pixel wherever the content above it happens to end, so
+       it painted heavier than the hairlines the card borders draw. Same
+       mechanism now, same weight. */
+    .divider { height: 0; border-top: 1px solid var(--line); margin: 16px -16px; }
 
     .overview { padding: 20px 0 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
     .overview h1 { margin: 0; font-size: 24px; letter-spacing: -.03em; }
@@ -304,7 +337,7 @@
     /* One type scale throughout: 14px headings and labels, 12px prose. The
        sections are told apart by space and a hairline, not by size. */
     .settings-body { padding: 4px 20px 20px; display: grid; gap: 24px; }
-    .set-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    .set-head h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
     .set-head p { margin: 2px 0 0; font-size: 12px; color: var(--fg-3); }
     .set-rows { margin-top: 6px; }
     .set-rows .row { padding: 12px 0; }
@@ -366,6 +399,15 @@
     .system-details .metric .v { font-size: 20px; }
     @media (max-width: 900px) { body.chat-docked { padding-right: 0; } }
     @media (max-width: 640px) { .chat-launcher { right: 16px; } }
+    /* The wall keeps its height whether or not anyone has joined: a card that
+       collapses to a line of text reads as though the feature is missing, and
+       the page reflows under the operator the moment the first phone arrives. */
+    /* One row's worth: the card header, a tile's 4:3 picture and its name row.
+       Enough that an empty wall holds its place, not so much that a single row
+       of cameras floats in a field of white. */
+    .camera-section { min-height: 300px; display: flex; flex-direction: column; }
+    .camera-section .camera-track { flex: 1 1 auto; align-content: start; }
+    .camera-section .empty { flex: 1 1 auto; display: grid; place-items: center; }
     /* camera wall: three to a row, wrapping down the card. Every feed is on the
        page at once — a horizontal strip with arrows hid the phones that were
        not first, which is the opposite of what a wall of cameras is for. */
@@ -379,7 +421,10 @@
        about the wall, not a measurement to line up in a column. */
     #phoneCount { font-size: 13px; }
     .camera-open { display: block; width: 100%; text-align: left; }
-    .camera-preview { position: relative; aspect-ratio: 16 / 10; display: grid; place-items: center;
+    /* The phones stream portrait frames, so a 16:10 tile spent most of itself on
+       grey bars either side of the picture. 4:3 gives the frame more of the
+       card and the wall more height, which is what it is for. */
+    .camera-preview { position: relative; aspect-ratio: 4 / 3; display: grid; place-items: center;
       background: var(--bg-2); overflow: hidden; }
     .camera-preview .placeholder { color: var(--fg-2); padding: 16px; text-align: center; }
     .thumb { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
@@ -405,27 +450,27 @@
     .system-details .metrics { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
     .empty { padding: 40px 16px; text-align: center; color: var(--fg-3); }
 
-    /* expanded feed */
+    /* expanded feed: a panel docked to the right edge, like Mission Control,
+       rather than a modal over the whole console. The operator keeps the map
+       and the wall in view while they read one camera. */
     tbody tr { cursor: pointer; }
-    .viewer { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; padding: 32px;
-      background: rgba(0,0,0,0.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
-    .viewer.on { display: grid; }
-    /* `.vimg` is `flex: 1 1 0`, so it eats every spare pixel and the children
-       always add up to exactly the box height — which left the last row of
-       camera details pinned against the bottom border, which the box's
-       corners used to clip. The gutter is on the box rather than on `.vstats`
-       so it is there whether the details are open or shut. */
-    .vbox { width: min(1040px, 100%); height: min(88dvh, 960px); max-height: 100%; display: flex; flex-direction: column;
-      padding-bottom: 16px;
-      background: var(--bg); border: 1px solid var(--line-2); border-radius: var(--r); overflow-x: hidden; overflow-y: auto;
-      box-shadow: 0 30px 80px rgba(0,0,0,0.6); animation: vIn .18s ease-out; }
-    @keyframes vIn { from { opacity: 0; transform: scale(.98); } }
-    .vh { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+    .viewer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 20; display: none;
+      width: min(420px, 100vw); }
+    .viewer.on { display: block; }
+    body.viewer-docked { padding-right: min(420px, 100vw); }
+    .vbox { width: 100%; height: 100%; display: flex; flex-direction: column; padding-bottom: 16px;
+      background: var(--surface); border: 0; border-left: 1px solid var(--line); border-radius: 0;
+      overflow-x: hidden; overflow-y: auto;
+      box-shadow: -12px 0 48px rgba(23,55,38,.10); animation: vIn .18s ease-out; }
+    @keyframes vIn { from { opacity: 0; transform: translateX(16px); } }
+    .vh { position: sticky; top: 0; z-index: 1; background: var(--surface);
+      display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-bottom: 1px solid var(--line); }
     .vh .num { font: 500 13px var(--mono); padding: 2px 8px; border-radius: var(--r-sm); background: var(--bg-3); }
     .vh { flex-shrink: 0; }
     .vh b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 320px; flex: 1 1 0; overflow: hidden; }
-    .vimg img { display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
+    .vimg { position: relative; background: #050505; display: grid; place-items: center;
+      min-height: 220px; flex: 0 0 auto; overflow: hidden; }
+    .vimg img { display: block; width: auto; height: auto; max-width: 100%; max-height: 46vh; object-fit: contain; }
     .vnone { position: absolute; color: #b3cebd; font-size: 13px; }
     #vHudCanvas { position: absolute; left: 0; top: 0; pointer-events: none; }
     .vcap { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80%; display: none;
@@ -438,29 +483,33 @@
     .vhudnote.warn { color: #ffb703; }
     #vHud.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     #vHud.on kbd { color: #555; border-color: #999; }
-    /* Seven readings, each wide enough for a sentence: values wrap instead of
-       being clipped, and nothing is abbreviated into jargon. */
-    .vstats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* One block of readings rather than a scatter of pills: hairlines between
+       them, square corners, flush with the panel's edges. */
+    .vstats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
       border-top: 1px solid var(--line); }
-    .vstats div { padding: 10px 16px; border-left: 1px solid var(--line); border-top: 1px solid var(--line);
-      min-width: 0; }
-    .vstats div.wide { grid-column: span 2; }
+    .vstats > div { padding: 10px 16px; min-width: 0;
+      border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); }
+    .vstats > div:nth-child(odd), .vstats > div.wide { border-left: 0; }
+    .vstats > div.wide { grid-column: 1 / -1; }
+    .vacts { display: flex; align-items: center; gap: 8px; padding: 12px 16px; }
+    .vlog { padding: 4px 0 0; }
+    .vlog h3 { margin: 0; padding: 12px 16px 6px; font-size: 11px; font-weight: 500; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--fg-3); border-top: 1px solid var(--line); }
+    .vlog .ev { grid-template-columns: 52px 1fr; padding: 7px 16px; }
+    .vlog .empty { padding: 18px 16px; text-align: left; font-size: 13px; }
     .vstats .k { font-size: 11px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase;
       color: var(--fg-3); }
     .vstats .v { margin-top: 3px; font-size: 14px; font-weight: 500; line-height: 1.35;
       font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
-    .analysis, .vstats { flex-shrink: 0; }
-    #analysisMeta { overflow-wrap: anywhere; }
+    .vstats { flex-shrink: 0; }
+    @media (max-width: 900px) { body.viewer-docked { padding-right: 0; } }
     @media (max-width: 640px) {
       .camera-track { grid-template-columns: minmax(0, 1fr); }
-      .viewer { padding: 12px; }
-      .vbox { height: calc(100dvh - 24px); }
       .vh { gap: 6px; padding: 0 10px; }
-      .vstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .vstats div.wide { grid-column: span 2; }
-      .vh #vRemove { display: none; }
-      .vimg { min-height: 240px; }
+      .vstats { grid-template-columns: minmax(0, 1fr); }
+      .vstats > div.wide { grid-column: auto; }
+      .vimg { min-height: 200px; }
     }
     /* activity */
     #log { max-height: 180px; overflow: auto; }
@@ -470,9 +519,16 @@
     .ev b { font-weight: 500; font-family: var(--mono); }
     .ev.hot { color: var(--red); }
 
+    /* Not enough width for three: the right column goes under the other two and
+       lays its two cards out side by side rather than stretching one of them. */
+    @media (max-width: 1440px) {
+      .grid { grid-template-columns: 300px minmax(0, 1fr); }
+      .right-column { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     @media (max-width: 1100px) {
       .camera-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .grid, .grid.bottom { grid-template-columns: 1fr; }
+      .grid { grid-template-columns: 1fr; }
+      .right-column { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: repeat(3, 1fr); }
       .metric:nth-child(4) { border-left: 0; }
       .metric:nth-child(n+4) { border-top: 1px solid var(--line); }
@@ -532,26 +588,26 @@
         <section>
           <div class="set-head">
             <h2>Search</h2>
-            <p>How sure a match has to be, and who decides where to look next.</p>
+            <p>How sure a match must be, and who picks where to look.</p>
           </div>
           <div class="set-rows">
-            <div class="row"><div><div class="label"><label for="threshold">Match sensitivity</label></div><div class="hint">Higher values require a closer visual match</div></div>
+            <div class="row"><div><div class="label"><label for="threshold">Match sensitivity</label></div><div class="hint">Higher is stricter</div></div>
               <div class="row-control"><input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.70"><button class="btn sm" id="saveThreshold">Apply</button></div></div>
-            <div class="row"><div><div class="label">Planner</div><div class="hint">Bayesian search: each phone goes where it's most likely to find them</div></div>
+            <div class="row"><div><div class="label">Planner</div><div class="hint">Each phone goes where a find is most likely</div></div>
               <button class="switch" id="plannerSw" aria-label="Planner"></button></div>
           </div>
         </section>
         <section>
           <div class="set-head">
             <h2>Response</h2>
-            <p>What the swarm does the moment someone is found.</p>
+            <p>What happens the moment someone is found.</p>
           </div>
           <div class="set-rows">
-            <div class="row"><div><div class="label">Responders</div><div class="hint">Nearest phones sent when found</div></div>
+            <div class="row"><div><div class="label">Responders</div><div class="hint">Nearest phones sent to a find</div></div>
               <div class="stepper"><button id="respMinus" aria-label="Fewer">&minus;</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
-            <div class="row"><div><div class="label">Test candidates</div><div class="hint">Drop mock people on the map to rehearse finding more than one</div></div>
-              <div class="row-control"><button class="btn sm" id="candClear" hidden>Clear</button><button class="btn sm primary" id="candBtn">Place candidate</button></div></div>
-            <div class="row"><div><div class="label">Simulation</div><div class="hint">A whole drill at once: one to three people to find, one to three hazards in their way, scattered at random. Replaces whatever is staged</div></div>
+            <div class="row"><div><div class="label">Test candidates</div><div class="hint">Mock people on the map, for rehearsal</div></div>
+              <div class="row-control"><button class="btn sm" id="candClear" hidden>Clear</button><button class="btn sm" id="candBtn">Place candidate</button></div></div>
+            <div class="row"><div><div class="label">Simulation</div><div class="hint">Stages a whole drill at random. Replaces what is staged</div></div>
               <div class="row-control"><button class="btn sm" id="simBtn">Run simulation</button></div></div>
           </div>
         </section>
@@ -560,20 +616,56 @@
 
     <dialog class="confirm" id="resetConfirm" aria-labelledby="resetConfirmTitle">
       <h2 id="resetConfirmTitle">Reset the session?</h2>
-      <p>Clears the find and the coverage map, and sends every phone back to marker scanning.</p>
+      <p>This cannot be undone.</p>
       <div class="confirm-acts">
         <button class="btn" id="resetCancel" type="button" autofocus>Cancel</button>
         <button class="btn solid-danger" id="resetGo" type="button">Reset session</button>
       </div>
     </dialog>
 
+    <dialog class="confirm person-dialog" id="personDialog" aria-labelledby="personDialogTitle">
+      <h2 id="personDialogTitle">Add a person to find</h2>
+      <p>The name goes out to every searcher's phone. The photo is what each frame is matched against.</p>
+      <label class="field-label" for="personName">Name</label>
+      <input id="personName" type="text" maxlength="40" autocomplete="off" placeholder="e.g. Alex Rhee">
+      <input id="referenceFile" type="file" accept="image/*" aria-label="Photo of this person" hidden>
+      <button class="upload-zone" type="button" id="uploadPhoto"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg><strong id="uploadTitle">Choose a photo</strong><span id="uploadHint">or drop one here</span></button>
+      <canvas id="referencePreview" hidden aria-label="Numbered people in the photo"></canvas>
+      <div id="personChoices"></div>
+      <div id="personMessage" role="status"></div>
+      <div class="confirm-acts"><button class="btn" id="personCancel" type="button">Cancel</button></div>
+    </dialog>
+
     <div id="recs"></div>
     <section class="grid">
+      <div class="stack side-column">
+        <section class="card search-panel" aria-label="People to find">
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12.735 14c.618 0 1.093-.561.872-1.139a6.002 6.002 0 0 0-11.215 0c-.22.578.254 1.139.872 1.139h9.47Z"/></svg>People to find</h2><span class="spacer"></span>
+            <span class="faint" id="peopleCount"></span>
+            <button class="btn sm" id="clearReference" type="button" hidden>Clear all</button></div>
+          <div class="card-b">
+            <fieldset id="searchTools" style="border:0;padding:0;margin:0">
+              <button class="btn primary add-person" id="addPerson" type="button"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 3.25a.75.75 0 0 1 .75.75v3.25H12a.75.75 0 0 1 0 1.5H8.75V12a.75.75 0 0 1-1.5 0V8.75H4a.75.75 0 0 1 0-1.5h3.25V4A.75.75 0 0 1 8 3.25Z"/></svg>Add person</button>
+              <p class="hint inference-note" id="inferenceNote" hidden>Inference is off.</p>
+              <div class="people-roster" id="peopleRoster"></div>
+            </fieldset>
+            <div id="searchMessage" role="status"></div>
+            <div class="divider"></div>
+            <div class="status" id="candStatus">No candidate placed</div>
+            <div class="found-list" id="foundList"></div>
+            <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
+          </div>
+        </section>
+        <section class="card" aria-label="Threats">
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M6.701 2.25c.577-1 2.02-1 2.598 0l5.2 9a1.5 1.5 0 0 1-1.299 2.25H2.8A1.5 1.5 0 0 1 1.5 11.25l5.2-9ZM8 5a.75.75 0 0 1 .75.75v2.5a.75.75 0 0 1-1.5 0v-2.5A.75.75 0 0 1 8 5Zm0 6.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" clip-rule="evenodd"/></svg>Threats</h2><span class="spacer"></span>
+            <span class="faint" id="threatCount"></span></div>
+          <div id="threatList"></div>
+        </section>
+      </div>
       <div class="stack map-column">
         <div class="card">
-          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.37 2.257a1.25 1.25 0 0 1 1.214-.054l3.378 1.69 2.133-1.313A1.25 1.25 0 0 1 14 3.644v7.326c0 .434-.225.837-.595 1.065l-2.775 1.708a1.25 1.25 0 0 1-1.214.053l-3.378-1.689-2.133 1.313A1.25 1.25 0 0 1 2 12.354V5.029c0-.434.225-.837.595-1.064L5.37 2.257ZM6 4a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 6 4Zm4.75 2.75a.75.75 0 0 0-1.5 0v4.5a.75.75 0 0 0 1.5 0v-4.5Z" clip-rule="evenodd"/></svg>Search map</h2><span class="faint mono" id="roomName"></span><span class="spacer"></span>
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.37 2.257a1.25 1.25 0 0 1 1.214-.054l3.378 1.69 2.133-1.313A1.25 1.25 0 0 1 14 3.644v7.326c0 .434-.225.837-.595 1.065l-2.775 1.708a1.25 1.25 0 0 1-1.214.053l-3.378-1.689-2.133 1.313A1.25 1.25 0 0 1 2 12.354V5.029c0-.434.225-.837.595-1.064L5.37 2.257ZM6 4a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 6 4Zm4.75 2.75a.75.75 0 0 0-1.5 0v4.5a.75.75 0 0 0 1.5 0v-4.5Z" clip-rule="evenodd"/></svg>Search map</h2><span class="spacer"></span>
             <span class="mono" style="font-size:12px" id="likely"></span>
-            <button class="btn sm" id="markerBtn" type="button" title="Put the printed marker where it is in the room">Place marker</button>
             <div class="map-modes" id="mapModes" role="group" aria-label="Map view">
               <button type="button" data-mode="heatmap" aria-pressed="true">Heatmap</button>
               <button type="button" data-mode="grid" aria-pressed="false">Grid</button>
@@ -599,29 +691,11 @@
           <div class="empty" id="phonesEmpty">No cameras connected.</div>
         </section>
       </div>
-      <div class="stack">
-        <section class="card search-panel" aria-label="Person search">
-          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12.735 14c.618 0 1.093-.561.872-1.139a6.002 6.002 0 0 0-11.215 0c-.22.578.254 1.139.872 1.139h9.47Z"/></svg>People to find</h2><span class="spacer"></span></div>
-          <div class="card-b">
-            <fieldset id="searchTools" style="border:0;padding:0;margin:0">
-              <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" multiple aria-label="Upload photos" hidden>
-              <button class="upload-zone" type="button" id="uploadPhoto"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg><strong id="uploadTitle">Drop photos here</strong><span id="uploadHint"></span></button>
-              <button class="btn" id="clearReference" type="button" hidden>Clear</button>
-</div>
-              <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
-              <div class="people-roster" id="peopleRoster"></div>
-            </fieldset>
-            <div id="searchMessage" role="status"></div>
-          </div>
+      <div class="stack side-column right-column">
+        <section class="card" aria-label="Activity">
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 4.75a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM6.25 3a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 7.25a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 11.5a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM4 12.25a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM3 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>Activity</h2></div>
+          <div id="log"><div class="empty">Nothing yet</div></div>
         </section>
-        <div class="card">
-          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M9 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/> <path fill-rule="evenodd" d="M9.68 5.26a.75.75 0 0 1 1.06 0 3.875 3.875 0 0 1 0 5.48.75.75 0 1 1-1.06-1.06 2.375 2.375 0 0 0 0-3.36.75.75 0 0 1 0-1.06Zm-3.36 0a.75.75 0 0 1 0 1.06 2.375 2.375 0 0 0 0 3.36.75.75 0 1 1-1.06 1.06 3.875 3.875 0 0 1 0-5.48.75.75 0 0 1 1.06 0Z" clip-rule="evenodd"/> <path fill-rule="evenodd" d="M11.89 3.05a.75.75 0 0 1 1.06 0 7 7 0 0 1 0 9.9.75.75 0 1 1-1.06-1.06 5.5 5.5 0 0 0 0-7.78.75.75 0 0 1 0-1.06Zm-7.78 0a.75.75 0 0 1 0 1.06 5.5 5.5 0 0 0 0 7.78.75.75 0 1 1-1.06 1.06 7 7 0 0 1 0-9.9.75.75 0 0 1 1.06 0Z" clip-rule="evenodd"/></svg>Search status</h2></div>
-          <div class="card-b">
-            <div class="status" id="candStatus">No candidate placed</div>
-            <div class="found-list" id="foundList"></div>
-            <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
-          </div>
-        </div>
         <section class="card system-details" aria-label="System details"><div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6 6v4h4V6H6Z"/> <path fill-rule="evenodd" d="M5.75 1a.75.75 0 0 0-.75.75V3a2 2 0 0 0-2 2H1.75a.75.75 0 0 0 0 1.5H3v.75H1.75a.75.75 0 0 0 0 1.5H3v.75H1.75a.75.75 0 0 0 0 1.5H3a2 2 0 0 0 2 2v1.25a.75.75 0 0 0 1.5 0V13h.75v1.25a.75.75 0 0 0 1.5 0V13h.75v1.25a.75.75 0 0 0 1.5 0V13a2 2 0 0 0 2-2h1.25a.75.75 0 0 0 0-1.5H13v-.75h1.25a.75.75 0 0 0 0-1.5H13V6.5h1.25a.75.75 0 0 0 0-1.5H13a2 2 0 0 0-2-2V1.75a.75.75 0 0 0-1.5 0V3h-.75V1.75a.75.75 0 0 0-1.5 0V3H6.5V1.75A.75.75 0 0 0 5.75 1ZM11 4.5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V5a.5.5 0 0 1 .5-.5h6Z" clip-rule="evenodd"/></svg>System details</h2></div>
     <div class="metrics">
       <div class="metric" title="Phones connected and sending video right now"><div class="k">Active phones</div><div class="v" id="mLive">0</div></div>
@@ -632,10 +706,6 @@
     </div>
 
     </section>
-        <section class="card" aria-label="Activity">
-          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 4.75a1 1 0 1 0 0-2 1 1 0 0 0 0 2ZM6.25 3a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 7.25a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM6.25 11.5a.75.75 0 0 0 0 1.5h7a.75.75 0 0 0 0-1.5h-7ZM4 12.25a1 1 0 1 1-2 0 1 1 0 0 1 2 0ZM3 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>Activity</h2></div>
-          <div id="log"><div class="empty">Nothing yet</div></div>
-        </section>
       </div>
     </section>
 
@@ -655,30 +725,32 @@
       <span class="chat-state" aria-hidden="true"></span>
     </button>
 
-  <div class="viewer" id="viewer">
+  <aside class="viewer" id="viewer" aria-label="Expanded camera">
     <div class="vbox">
       <div class="vh">
         <span class="num" id="vNum"></span><b id="vName"></b>
         <span id="vBadges"></span><span class="spacer"></span>
         <button class="btn sm" id="vHud" title="Show what's on this phone's screen (H)">HUD</button>
-        <button class="btn sm danger" id="vRemove" title="End this phone's session and drop it from the swarm">Remove</button>
-        <button class="btn sm" id="vClose">Close</button>
+        <button type="button" class="chat-close" id="vClose" aria-label="Close camera" title="Close (Esc)"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"/></svg></button>
       </div>
       <div class="vimg"><img id="vImg" alt=""><canvas id="vHudCanvas"></canvas><div class="vnone" id="vNone">Waiting for video…</div>
         <div class="vhudnote" id="vHudNote" hidden></div><div class="vcap" id="vCap"></div></div>
-      <div class="analysis"><strong>Analyzed source frame</strong><div id="analysisMeta" class="muted">No current result</div><button class="btn" id="confirmSighting" hidden>Confirm visual sighting</button><canvas id="analyzedFrame" hidden></canvas></div>
-      <details class="camera-details"><summary>Camera details</summary>
       <div class="vstats">
-        <div><div class="k">Doing now</div><div class="v" id="vTask"></div></div>
+        <div class="wide"><div class="k">Doing now</div><div class="v" id="vTask"></div></div>
         <div class="wide"><div class="k">Where in the room</div><div class="v" id="vPos"></div></div>
-        <div><div class="k">Camera facing</div><div class="v" id="vHd"></div></div>
-        <div><div class="k">Camera tilt</div><div class="v" id="vPitch"></div></div>
+        <div><div class="k">Facing</div><div class="v" id="vHd"></div></div>
+        <div><div class="k">Tilt</div><div class="v" id="vPitch"></div></div>
         <div><div class="k">Frames / second</div><div class="v" id="vFps"></div></div>
-        <div><div class="k">Latency</div><div class="v" id="vLat"></div></div>
         <div><div class="k">Area searched</div><div class="v" id="vM2"></div></div>
-      </div></details>
+      </div>
+      <div class="vacts">
+        <button class="btn sm primary" id="confirmSighting" hidden>Confirm sighting</button>
+        <span class="spacer"></span>
+        <button class="btn sm danger" id="vRemove" title="End this phone's session and drop it from the swarm">Remove</button>
+      </div>
+      <section class="vlog" aria-label="Camera activity"><h3>Activity</h3><div id="vLog"></div></section>
     </div>
-  </div>
+  </aside>
 
   <script type="module" src="/web/console.js"></script>
 </body>

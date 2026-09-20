@@ -136,12 +136,52 @@ class Coverage:
         if total > 0:
             self.prob = [p / total for p in self.prob]
 
-    def snapshot(self) -> dict:
-        top = max(self.prob) or 1
+    def heat(self) -> str:
+        """The probability field in 36 steps, log-scaled around the uniform prior.
+
+        Two encodings failed before this one. Linear against the hottest cell
+        threw the map away the moment a sighting landed: boosts compound until
+        one cell holds most of the mass, and `round(35 * p / top)` then put 1188
+        of 1200 cells on step 0. Log across the field's own extremes moved the
+        problem rather than fixing it — the span from the most-cleared cell to
+        the hottest is set by two outliers, so the body of the floor bunched up
+        at the bottom and the map went blank again.
+
+        The reference that means something is the uniform prior, 1/cells: the
+        value every cell starts at, and the one it keeps while nobody has looked
+        there. Step 17 or so is "no information", above it is "more likely than
+        average", below it is "somebody has swept this". Each half is log-scaled
+        over its own range, so one enormous spike cannot flatten the rest and a
+        heavily cleared corner cannot either.
+
+        Consumers read the steps directly (`heatLevels` in `web/room.js` and its
+        Swift mirror) — they must not renormalise to the hottest cell, or the
+        anchor is lost.
+        """
         last = len(HEAT_LEVELS) - 1
+        n = len(self.prob)
+        if not n:
+            return ""
+        mid = sorted(self.prob)[n // 2]
+        top = max(self.prob)
+        floor = min((p for p in self.prob if p > 0), default=0)
+        up = math.log(top / mid) if top > mid > 0 else 0.0
+        down = math.log(mid / floor) if 0 < floor < mid else 0.0
+        out = []
+        for p in self.prob:
+            if p >= mid:
+                level = 0.5 + (0.5 * math.log(p / mid) / up if up else 0.0)
+            elif p > 0:
+                level = 0.5 - (0.5 * math.log(mid / p) / down if down else 0.0)
+            else:
+                level = 0.0
+            out.append(HEAT_LEVELS[round(last * min(1.0, max(0.0, level)))])
+        return "".join(out)
+
+    def snapshot(self) -> dict:
         return {
             "cols": self.cols, "rows": self.rows, "cell": self.cell, "x0": self.x0,
             "cells": "".join("1" if seen else "0" for seen in self.looked),
-            "heat": "".join(HEAT_LEVELS[round(last * p / top)] for p in self.prob),  # relative to the hottest cell
+            "heat": self.heat(),
             "searched": sum(self.looked) / len(self.looked),
         }

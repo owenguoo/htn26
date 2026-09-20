@@ -193,24 +193,6 @@ export function heatAlpha(level) {
   return HEAT_MAX_ALPHA * Math.pow(Math.min(1, Math.max(0, level)), HEAT_GAMMA);
 }
 
-/// Rank of each bin among all cells, 0..1, ties sharing the midpoint of the
-/// span they occupy. `bins` holds one 0..HEAT_STEPS-1 index per cell.
-export function heatEqualise(bins) {
-  const n = bins.length;
-  const counts = new Int32Array(HEAT_STEPS);
-  for (let i = 0; i < n; i++) counts[bins[i]]++;
-  const level = new Float64Array(HEAT_STEPS);
-  let seen = 0;
-  for (let v = 0; v < HEAT_STEPS; v++) {
-    if (!counts[v]) continue;
-    level[v] = n > 1 ? (seen + (counts[v] - 1) / 2) / (n - 1) : 1;
-    seen += counts[v];
-  }
-  const out = new Float64Array(n);
-  for (let i = 0; i < n; i++) out[i] = level[bins[i]];
-  return out;
-}
-
 /// Row-major 0..1 levels for a coverage snapshot, or null when the field is
 /// too flat to draw.
 export function heatLevels(cov) {
@@ -226,10 +208,19 @@ export function heatLevels(cov) {
     if (bin > high) high = bin;
   }
   if (!((high - low) / (HEAT_STEPS - 1) > HEAT_MIN_SPREAD)) return null;
-  const levels = heatEqualise(bins);
-  let top = 0;
-  for (let i = 0; i < n; i++) if (levels[i] > top) top = levels[i];
-  if (top > 0) for (let i = 0; i < n; i++) levels[i] /= top;
+  // The steps as sent, and nothing else done to them.
+  //
+  // `Coverage.heat()` in `swarm/coverage.py` log-scales the field around its
+  // median, so a step already means something on its own: the middle of the
+  // range is a typical cell, above it is likelier than most of the floor,
+  // below it is ground somebody has swept. Ranking the steps (which this did
+  // while the hub still encoded linearly) spreads the cells evenly over 0..1
+  // by construction and paints about a third of the floor dark whatever the
+  // probabilities are — the cloud that made the map look fuzzy. Renormalising
+  // to the hottest cell is just as wrong now: it throws the anchor away, and
+  // one spike drags the whole floor to nothing.
+  const levels = new Float64Array(n);
+  for (let i = 0; i < n; i++) levels[i] = bins[i] / (HEAT_STEPS - 1);
   return levels;
 }
 

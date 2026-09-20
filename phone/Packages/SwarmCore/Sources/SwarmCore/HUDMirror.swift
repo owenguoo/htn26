@@ -70,6 +70,53 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
         public var tone: String
     }
 
+    /// A full-screen card that takes the phone for a second or two, at the
+    /// moments worth taking it for.
+    ///
+    /// **A takeover is a frame and a plate, never a fill.** The colour is the
+    /// surround and the live camera sits in a window in the middle of it, so
+    /// the searcher goes on looking at the room the whole time it holds. That
+    /// is also why it is measured in seconds: the window is a crop, and a crop
+    /// is only survivable for as long as somebody is standing still reading it.
+    /// What it leaves behind is `ambient`, which holds the same colour at the
+    /// bezel with the camera back at full frame, for as long as the situation
+    /// lasts.
+    public struct Takeover: Sendable, Equatable, Encodable {
+        /// "sector", "found_stay" or "found_go".
+        public var kind: String
+        public var color: String
+        public var title: String
+        public var detail: String?
+        /// The line under the camera window.
+        public var footer: String?
+        /// SF Symbol name. The console keeps its own glyph for each kind; this
+        /// is the phone's, mirrored so it is obvious the two mean one thing.
+        public var symbol: String
+        /// What belongs in the window: "detections", "arrow" or "plain".
+        public var window: String
+        /// The other thing that is also true. A plate can only be one colour,
+        /// and when an obstacle and a person are both live one of them has to
+        /// be dealt with first — but the one that loses the plate must not be
+        /// lost off the screen, so it rides here in its own colour.
+        public var badge: Badge?
+        /// The window as fractions of the card: inset from each side, and where
+        /// its top and bottom edges sit. Here rather than in the renderers so
+        /// the phone and the console cut the same hole — and so a card that is
+        /// *about* what is in front of you can have a bigger one.
+        public var insetX: Double
+        public var top: Double
+        public var bottom: Double
+        /// How long it holds before it contracts away. Zero means it is not on
+        /// a clock at all: it is up for exactly as long as it is true.
+        public var seconds: Double
+    }
+
+    /// A second thing, in its own colour, on somebody else's plate.
+    public struct Badge: Sendable, Equatable, Encodable {
+        public var text: String
+        public var color: String
+    }
+
     /// A standing wash of colour over the whole screen saying what situation
     /// this operator is in. Not an event — a state, held for as long as it is
     /// true.
@@ -116,6 +163,7 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
     public var objective: Objective?
     public var warning: Warning?
     public var ambient: Ambient?
+    public var takeover: Takeover?
     /// "142 m² swept · 2nd of 5 · room 46%". One pre-formatted line: the hub
     /// has been sending every phone its own swept area and rank since the
     /// beginning and nothing has ever shown it to the person doing the walking.
@@ -205,6 +253,73 @@ public enum HUDMirror {
     /// The console's `warn` pill. A hazard and a turn-you-have-not-made-yet are
     /// the same kind of thing — caution, not emergency — so they share it.
     static let hazardColor = "#ffb703"
+
+    // A whole screen of colour is a different instrument from a chip on a tape.
+    // The chip colours above are tuned to be legible at 15 pt over video; at
+    // full bleed they go fluorescent. These two are the console's own — the
+    // green a marker scan flashes (`--accent`) and the red `drawFoundPerson`
+    // marks a found person with on the operator's map — so a searcher's screen
+    // and the operator's map turn the same colour about the same event.
+    static let plateSuccess = "#18834b"
+    static let plateFound = "#b72f36"
+
+    /// The full-screen cards, as a table. One row per moment worth stopping
+    /// somebody for; the hub picks the row by name (`swarm/target.py`) and the
+    /// wording, the glyph and the seconds live here, where they are tested.
+    ///
+    /// Two of these rows have no clock (`seconds: 0`), and the difference is
+    /// what the card is about. `found_go` and `sector` are *moments* — somebody
+    /// was found, you reached your sector — and a moment is over in a second or
+    /// two. `found_stay` is not a moment, it is what you are doing for as long
+    /// as you are kneeling next to somebody, so it is derived from
+    /// `OverlayState.find` and held until the search moves on. The obstacle
+    /// card, likewise held, is built by `hazardPlate(text:)` from live range.
+    ///
+    /// Holding a card is only safe because of what the card *is*: a frame, with
+    /// the camera still live through the window. The two held cards are also
+    /// the two where the operator is standing still.
+    static func takeover(kind: String, name: String?) -> HubHUDMirror.Takeover? {
+        let who = (name?.trimmingCharacters(in: .whitespaces)).flatMap { $0.isEmpty ? nil : $0 }
+        switch kind {
+        case "sector":
+            return .init(kind: kind, color: plateSuccess, title: "At your sector", detail: who,
+                         footer: "Sweep it slowly, phone up", symbol: "checkmark",
+                         window: "plain", badge: nil, insetX: 0.11, top: 0.30, bottom: 0.88, seconds: 1.5)
+        case "found_stay":
+            return .init(kind: kind, color: plateFound, title: "\(who ?? "Someone") found",
+                         detail: "Stay with \(who ?? "them") until help reaches you",
+                         footer: nil, symbol: "person.crop.square.badge.camera",
+                         window: "detections", badge: nil,
+                         insetX: 0.11, top: 0.30, bottom: 0.88, seconds: 0)
+        case "found_go":
+            return .init(kind: kind, color: plateFound, title: "\(who ?? "Someone") found",
+                         detail: "Go to them — follow the arrow", footer: nil,
+                         symbol: "location.north", window: "arrow", badge: nil,
+                         insetX: 0.11, top: 0.30, bottom: 0.88, seconds: 1.8)
+        default:
+            return nil
+        }
+    }
+
+    /// The obstacle card, for the last metre.
+    ///
+    /// The amber ladder has three rungs and this is the top one: a chip on the
+    /// tape at three metres, a pulsing wash at two, and the whole screen here.
+    /// It is the only card with no clock — it is up while you are that close and
+    /// it goes when you are not, because a timer would either nag somebody who
+    /// has already stepped aside or clear while they are still about to walk
+    /// into the thing.
+    ///
+    /// It is also the only card with a *wide* window. Every other card crops the
+    /// camera to make room for words; this one is about what is directly in
+    /// front of the lens, so the plate is a thick frame and the room keeps
+    /// nearly all of the screen. Cropping hard here would be the joke telling
+    /// itself.
+    static func hazardPlate(text: String) -> HubHUDMirror.Takeover {
+        .init(kind: "hazard", color: hazardColor, title: "Watch out", detail: text,
+              footer: "Look up from the phone", symbol: "exclamationmark.triangle.fill",
+              window: "plain", badge: nil, insetX: 0.05, top: 0.26, bottom: 0.91, seconds: 0)
+    }
     public static let soundColor = "#ff3b30"
     /// `MARKER_COLOR` in `web/console.js`, which is what the map — both the
     /// console's and the phone's — fills the alignment marker with. Before the
@@ -537,11 +652,41 @@ public enum HUDMirror {
             }
         }()
 
+        // Three sources, in the order they get the screen:
+        //
+        //  1. an obstacle at arm's length — nothing outranks the next two steps,
+        //     not even the person you are sprinting to;
+        //  2. standing with somebody, which is held, not timed, because it is
+        //     what you are doing rather than something that just happened;
+        //  3. whatever moment the hub or the geometry last announced.
+        var plate = (hazard?.blocking == true ? warning.map { hazardPlate(text: $0.text) } : nil)
+            ?? (overlay.find == .with ? takeover(kind: "found_stay", name: overlay.findName) : nil)
+            ?? overlay.takeover.flatMap { takeover(kind: $0.kind, name: $0.name) }
+
+        // An obstacle and a person, both at once. A plate is one colour, so the
+        // one that has to be dealt with first takes it — and the other rides as
+        // a badge in its own colour rather than falling off the screen. Losing
+        // the person because a chair is in the way is the failure this prevents.
+        if plate?.kind == "hazard" {
+            if let objective {
+                plate?.badge = .init(text: "\(objective.title) · \(objective.detail)",
+                                     color: plateFound)
+                // Step around it and carry on: point at them through the window.
+                plate?.window = "arrow"
+            } else if overlay.find == .with, let who = overlay.findName {
+                // Nowhere to be steered — you are already on them — but the
+                // amber screen must not read as "the person is over".
+                plate?.badge = .init(text: "Still with \(who)", color: plateFound)
+            }
+        } else if plate != nil, let warning {
+            plate?.badge = .init(text: warning.text, color: hazardColor)
+        }
+
         // The least important thing on the screen, so the first to go: a
         // scoreboard has no business sharing a glance with a find, a shout or
         // the operator's voice.
         let quiet = overlay.toast == nil && banner?.tone != "alert" && edge == nil
-            && warning == nil && ambient == nil
+            && warning == nil && ambient == nil && plate == nil
         let stats = searching && quiet
             ? statsLine(squareMetres: overlay.world?.stats?.m2, rank: overlay.world?.stats?.rank,
                         of: overlay.world?.stats?.of, searched: overlay.world?.searched)
@@ -554,7 +699,7 @@ public enum HUDMirror {
                             dets: overlay.hazards == nil ? overlay.detections?.boxes
                                 : (overlay.detections?.boxes ?? []) + (overlay.hazards?.boxes ?? []),
                             soundEdge: edge, objective: objective, warning: warning,
-                            ambient: ambient, stats: stats)
+                            ambient: ambient, takeover: plate, stats: stats)
     }
     /// A pixel in the landscape capture → 0…1 in the upright frame the hub has.
     /// The encoder rotates 90° clockwise: (x, y) in W×H lands at (H − y, x) in H×W.

@@ -1,4 +1,4 @@
-import { frameKey, freshSighting, scoreLabel } from '/web/inference-ui.js';
+import { frameKey, freshSighting } from '/web/inference-ui.js';
 import { makeView, drawRoom, drawCone, heatLevels, heatCanvas, heatGradientCSS } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
@@ -17,7 +17,6 @@ let snapshotAt = 0;
 let drawReference = null;
 let searchBusy = false;
 let dragPos = null;          // candidate position while dragging
-let armingMarker = false;    // next map click drops the marker
 const MARKER_COLOR = '#6b4fbb';
 let lastDragSend = 0;
 
@@ -42,7 +41,6 @@ function send(msg) {
 function onJson(msg) {
   if (msg.type === 'hello') {
     room = msg.room;
-    $('#roomName').textContent = `${room.width} × ${room.depth} m`;
     $('#joinQr').src = `/api/qr.svg?data=${encodeURIComponent(msg.joinUrl)}`;
     $('#joinUrl').textContent = msg.joinUrl;
     resizeMap();
@@ -90,7 +88,6 @@ function render() {
   renderViewer();
   renderSearch();
   renderStart();
-  renderMarkerBtn();
   renderMetrics();
   renderControls();
   renderPhones();
@@ -124,20 +121,6 @@ function renderStart() {
   btn.classList.toggle('danger', on);
   btn.disabled = !on && !ready;
   btn.title = on || ready || !live ? '' : `${scanned} of ${live} phones have scanned the marker`;
-}
-
-$('#markerBtn').addEventListener('click', () => {
-  if (st?.marker) { send({ type: 'marker', remove: true }); armingMarker = false; }
-  else armingMarker = !armingMarker;
-  renderMarkerBtn();
-});
-
-function renderMarkerBtn() {
-  const btn = $('#markerBtn');
-  const placed = !!st?.marker;
-  btn.textContent = placed ? 'Clear marker' : armingMarker ? 'Click the map…' : 'Place marker';
-  btn.classList.toggle('arming', armingMarker && !placed);
-  if (placed) armingMarker = false;
 }
 
 $('#startBtn').addEventListener('click', () => {
@@ -206,8 +189,7 @@ function renderControls() {
     // Responder progress is per person and is already on each row below; a
     // second team count here only competes with it.
     const missing = t.stillMissing || 0;
-    s.textContent = `${plural(victims.length, 'person', 'people')} found`
-      + (missing ? ` · still looking for ${plural(missing, 'more', 'more')}` : '');
+    s.textContent = `${victims.length} found` + (missing ? ` · ${missing} to go` : '');
   } else {
     const top = (st.sightings || []).reduce((a, b) => (b.confidence > (a?.confidence ?? 0) ? b : a), null);
     // Say whose position this is. A bare "Hidden at (-5.1, 4.7)" reads as though the hub
@@ -224,6 +206,7 @@ function renderControls() {
          : one ? 'not found yet' : 'none found yet');
   }
   renderFoundList(victims);
+  renderThreats();
   renderLive(victims, t);
   renderPeople(st.search?.people);
   $('#respN').textContent = t ? t.respondersWanted : respondersPref;
@@ -240,7 +223,6 @@ function renderControls() {
   renderAutonomy(m);
   $('#candBtn').disabled = st.search?.mode === 'real';
   $('#candBtn').textContent = hidden.length ? 'Add another' : 'Place candidate';
-  $('#candBtn').classList.toggle('primary', !hidden.length);
   $('#candClear').hidden = !t || st.search?.mode === 'real';
   // Mock people may not be scattered through a search for a real one — the hub
   // refuses it, so the control says so rather than letting it be pressed.
@@ -346,8 +328,10 @@ function renderLive(victims, t) {
       const { live } = readiness();
       text = `Searching · ${plural(live, 'phone', 'phones')} · `
         + `${Math.round((st.coverage?.searched || 0) * 100)}% of the room covered`;
-      const likely = st.likely?.[0];
-      side = likely ? `Most likely ${likely.sector}` : stillLooking(victims, t);
+      // The most likely sector belongs over the map it points at, where it is
+      // already printed with its share; saying it twice on one screen is worse
+      // than saying it once.
+      side = stillLooking(victims, t);
     }
   }
   strip.hidden = !text;
@@ -367,12 +351,48 @@ function renderFoundList(victims) {
   if (key === listMemo.found) return;
   listMemo.found = key;
   $('#foundList').innerHTML = victims.map((v) => {
-    const finder = phones.get(v.foundBy);
-    // How long ago it happened is in the Activity log to the tenth of a second;
-    // what this row is for is who found them and whether help has arrived.
-    const detail = `found by #${finder?.index ?? '?'} · ${teamArrived(v)}/${v.respondersWanted ?? 0} with them`;
-    return `<div class="found-row"><span class="who">${teamFull(v) ? '✓' : '→'} Person ${v.id}</span>`
+    // One fact per row: how many responders are with them. Who found them is in
+    // the strip at the top and in the Activity log, and "found by #?" — which
+    // is what a finder who has since left the swarm renders as — says nothing.
+    const detail = `${teamArrived(v)} of ${v.respondersWanted ?? 0} with them`;
+    return `<div class="found-row"><span class="who">${teamFull(v) ? '✓' : '→'} ${escapeHtml(v.label || `Person ${v.id}`)}</span>`
       + `<span>${escapeHtml(detail)}</span></div>`;
+  }).join('');
+}
+
+// What the swarm has flagged in the room: obstacles in the way, and people it
+// has seen but not identified. Straight off `hazards` and `detectedPeople` in
+// the hub's state — the same observations the map draws — named by the
+// planner's sector and aged from the observation's own timestamp. The phones
+// report these on their own while the search runs; there is nothing to start.
+let threatKey = '';
+
+function renderThreats() {
+  const now = st.t || Date.now();
+  const rows = [
+    ...(st.hazards || []).map((h) => ({ ...h, what: 'Obstacle' })),
+    ...(st.detectedPeople || []).map((h) => ({ ...h, what: 'Unidentified person' })),
+  ].sort((a, b) => b.t - a.t);
+  // The console's state sends the raw observations, so staleness is worked out
+  // here on the same 15 s the map uses rather than read off a field only the
+  // phones' world message carries.
+  for (const r of rows) r.old = Date.now() - r.t > 15000;
+  const key = JSON.stringify(rows.map((r) => [r.id, r.old]));
+  $('#threatCount').textContent = rows.length ? `${rows.length} flagged` : '';
+  if (key === threatKey) return;
+  threatKey = key;
+  if (!rows.length) {
+    $('#threatList').innerHTML = running()
+      ? '<div class="empty">Nothing flagged yet</div>'
+      : '<div class="empty">Phones flag obstacles once the search starts</div>';
+    return;
+  }
+  $('#threatList').innerHTML = rows.map((r) => {
+    const sector = sectorAt(r.x, r.y);
+    const where = sector ? `in ${sector}` : `${Math.max(0, r.y).toFixed(1)} m from the stage`;
+    const age = Number.isFinite(r.t) ? `${Math.max(0, Math.round((now - r.t) / 1000))}s ago` : '';
+    return `<div class="threat-row${r.old ? ' stale' : ''}"><span class="what">${r.what}</span>`
+      + `<span class="where">${escapeHtml(where)}</span><span class="age">${age}</span></div>`;
   }).join('');
 }
 
@@ -497,6 +517,10 @@ function openViewer(id) {
   $('#vNone').style.display = '';
   if (thumbs.has(id)) { $('#vImg').src = thumbs.get(id); $('#vNone').style.display = 'none'; }
   $('#viewer').classList.add('on');
+  document.body.classList.add('viewer-docked');
+  // Two panels cannot share the right edge; opening one puts the other away.
+  if (!$('#chatPanel').hidden) toggleChat(false, false);
+  resizeMap();
   send({ type: 'focus', phoneId: id }); // hub streams this phone faster while it's open
   renderViewer();
 }
@@ -506,6 +530,9 @@ function closeViewer() {
   clearSourceFrames();
   clearHud();
   $('#viewer').classList.remove('on');
+  document.body.classList.remove('viewer-docked');
+  viewerLogKey = '';
+  resizeMap();
   send({ type: 'focus', phoneId: null });
 }
 
@@ -537,10 +564,27 @@ function renderViewer() {
   $('#vHd').textContent = fmtHeading(pose);
   $('#vPitch').textContent = fmtTilt(p.pitch);
   $('#vFps').textContent = `${p.fps.toFixed(1)} / s`;
-  $('#vLat').textContent = p.latencyMs != null ? `${p.latencyMs} ms` : 'Unknown';
   // A bare area means nothing on its own — say what share of the floor it is.
   const m2 = p.searchedM2 ?? 0, floor = room ? room.width * room.depth : 0;
   $('#vM2').textContent = floor ? `${m2} m² · ${Math.round(100 * m2 / floor)}% of the floor` : `${m2} m²`;
+  renderViewerLog(p);
+}
+
+// What the planner has recorded about this camera, newest first. The console's
+// own Activity card keeps the whole room's story; this is the slice belonging
+// to the phone on screen, and it is rebuilt only when it changes.
+let viewerLogKey = '';
+
+function renderViewerLog(p) {
+  const mine = (st.planner?.log || []).filter((e) => e.phoneId === p.id).slice(-8).reverse();
+  const key = `${p.id}:${JSON.stringify(mine)}`;
+  if (key === viewerLogKey) return;
+  viewerLogKey = key;
+  $('#vLog').innerHTML = mine.length ? mine.map((e) => {
+    const t = new Date(e.t).toLocaleTimeString([], { hour12: false });
+    const hot = /FOUND|dispatched/.test(e.text) ? ' hot' : '';
+    return `<div class="ev${hot}"><time>${t}</time><div>${escapeHtml(e.text)}</div></div>`;
+  }).join('') : '<div class="empty">Nothing from this camera yet</div>';
 }
 
 $('#vClose').addEventListener('click', closeViewer);
@@ -675,6 +719,42 @@ function drawHud() {
     ctx.fillText(hud.objective.detail, x + 12 * k, y + 32 * k);
     ctx.textAlign = 'center';
   }
+  // The full-screen card, drawn last so it covers the HUD it stands in for —
+  // with a real hole in it, so the operator sees the same window onto the feed
+  // that the searcher is looking through.
+  if (hud.takeover) {
+    const t = hud.takeover;
+    // The window comes from the card's own row, so the console cuts the same
+    // hole the phone does — including the hazard card's much wider one.
+    const wx = sx + sw * t.insetX, wy = sy + sh * t.top;
+    const ww = sw - sw * t.insetX * 2, wh = sh * (t.bottom - t.top);
+    ctx.save();
+    // Even-odd: the outer rect minus the window, so the plate is a frame.
+    ctx.beginPath();
+    ctx.rect(sx, sy, sw, sh);
+    ctx.roundRect(wx, wy, ww, wh, 8 * k);
+    ctx.fillStyle = t.color;
+    ctx.fill('evenodd');
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.roundRect(wx, wy, ww, wh, 8 * k); ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = `800 ${(t.kind === 'hazard' ? 28 : 34) * k}px Geist, system-ui`;
+    ctx.fillText(t.title, sx + sw / 2, wy * 0.62 + sy * 0.38);
+    if (t.detail) {
+      ctx.font = `600 ${17 * k}px Geist, system-ui`;
+      ctx.fillText(t.detail, sx + sw / 2, wy - 22 * k);
+    }
+    if (t.badge) {
+      // The other thing that is also true, in its own colour.
+      pill(ctx, sx + sw / 2, wy - (t.detail ? 46 : 22) * k, t.badge.text, t.badge.color, '#fff', 13 * k, true);
+    }
+    if (t.footer) {
+      ctx.font = `600 ${15 * k}px Geist, system-ui`;
+      ctx.fillText(t.footer, sx + sw / 2, (wy + wh + sy + sh) / 2);
+    }
+    ctx.restore();
+  }
   if (hud.card) {
     const cy = sy + sh * 0.42;
     ctx.fillStyle = 'rgba(0,0,0,0.8)';
@@ -753,7 +833,6 @@ function removePhone(p) {
   send({ type: 'remove', phoneId: p.id });
   if (viewing === p.id) closeViewer();
 }
-$('#viewer').addEventListener('click', (e) => { if (e.target === $('#viewer')) closeViewer(); });
 
 function renderLog() {
   const log = [...(st.planner?.log || [])].reverse().slice(0, 5);
@@ -995,6 +1074,7 @@ function setResponders(d) {
 }
 
 function toggleChat(open, restoreFocus = true) {
+  if (open && viewing) closeViewer();
   $('#chatPanel').hidden = !open;
   document.body.classList.toggle('chat-docked', open);
   $('#chatOpen').setAttribute('aria-expanded', String(open));
@@ -1579,13 +1659,6 @@ function sendCandidate(pos) {
 }
 canvas.addEventListener('mousedown', (e) => {
   if (e.altKey && view) { send({ type: 'ping', ...roomPoint(e) }); return; } // alt-click pings too
-  if (armingMarker && view) {
-    send({ type: 'marker', ...roomPoint(e) });
-    armingMarker = false;
-    renderMarkerBtn();
-    e.preventDefault();
-    return;
-  }
   const grabbed = nearCandidate(e);
   if (grabbed) { dragPos = { id: grabbed.id, ...roomPoint(e) }; e.preventDefault(); return; }
   const p = phoneAt(e);
@@ -1609,8 +1682,7 @@ canvas.addEventListener('contextmenu', (e) => { // right-click: ping, like Valor
   if (view) send({ type: 'ping', ...roomPoint(e) });
 });
 canvas.addEventListener('mousemove', (e) => {
-  canvas.style.cursor = armingMarker ? 'crosshair'
-    : dragPos ? 'grabbing'
+  canvas.style.cursor = dragPos ? 'grabbing'
     : nearCandidate(e) ? 'grab'
     : phoneAt(e) ? 'pointer' : 'default';
 });
@@ -1662,12 +1734,25 @@ async function searchApi(path, options = {}) {
   return body;
 }
 
+// The hub's own words for these are true but terse, and they arrive at the
+// moment an operator has just typed a name and picked a photo.
+function explainSearchError(message) {
+  if (/inference disabled/i.test(message)) return 'Inference is off, so no photo can be matched. Start the inference worker, then add them again.';
+  if (/inference unavailable|inference request failed/i.test(message)) return 'The inference worker did not answer. Check that it is still running, then add them again.';
+  return message;
+}
+
 function renderSearch() {
   $('#searchTools').disabled = searchBusy;
   $('#saveThreshold').disabled = searchBusy;
   $('#threshold').disabled = searchBusy;
   const search = st?.search;
   $('#clearReference').hidden = !drawReference && !search?.referenceAvailable;
+  // Adding somebody needs the matcher: without it the photo step 503s after the
+  // operator has already typed a name, so the button says so before they start.
+  const matcher = !st || search?.enabled !== false;
+  $('#addPerson').disabled = searchBusy || !matcher;
+  $('#inferenceNote').hidden = matcher;
   if (search && document.activeElement !== $('#threshold')) $('#threshold').value = search.threshold.toFixed(2);
 }
 
@@ -1675,15 +1760,26 @@ async function searchAction(action) {
   if (searchBusy) return;
   searchBusy = true;
   renderSearch();
-  try { await action(); } catch (error) { $('#searchMessage').textContent = error.message; }
+  // A failure leaves the add-person sheet open on purpose: nobody was added,
+  // and closing it would look exactly like success.
+  try { await action(); } catch (error) { searchNote(explainSearchError(error.message), true); }
   finally { searchBusy = false; renderSearch(); }
+}
+
+// The add-person sheet has its own status line; when it is open that is where
+// the operator is looking, so both carry the same sentence.
+function searchNote(text, bad = false) {
+  $('#searchMessage').textContent = text;
+  $('#searchMessage').classList.toggle('err', bad);
+  $('#personMessage').textContent = $('#personDialog').open ? text : '';
+  $('#personMessage').classList.toggle('err', bad);
 }
 
 function clearReferencePreview() {
   drawReference = null;
-  pendingPhotos = [];
   $('#referencePreview').hidden = true;
   $('#personChoices').replaceChildren();
+  $('#personName').value = '';
   $('#referenceFile').value = '';
 }
 
@@ -1695,8 +1791,7 @@ function renderPeople(people = []) {
   $('#peopleRoster').innerHTML = people.map((person) =>
     `<div class="person-row"><span class="who">${escapeHtml(person.label)}</span><span class="spacer"></span>`
     + `<button type="button" data-person="${escapeHtml(person.id)}">Remove</button></div>`).join('');
-  $('#uploadTitle').textContent = people.length ? 'Drop another photo here' : 'Drop photos here';
-  $('#uploadHint').textContent = people.length ? `${people.length} being searched for` : '';
+  $('#peopleCount').textContent = people.length ? `${people.length} being searched for` : '';
 }
 
 $('#peopleRoster').addEventListener('click', (event) => {
@@ -1706,7 +1801,7 @@ $('#peopleRoster').addEventListener('click', (event) => {
     await searchApi(`/api/search/reference/${encodeURIComponent(id)}`, {method: 'DELETE'});
     if (st?.search) st.search.sightings = [];
     clearSourceFrames();
-    $('#searchMessage').textContent = 'Removed from the people to find.';
+    searchNote('Removed from the people to find.');
   });
 });
 
@@ -1725,7 +1820,7 @@ $('#saveThreshold').addEventListener('click', () => {
     await searchApi('/api/search/threshold', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({threshold})});
     if (st?.search) st.search.sightings = [];
     clearSourceFrames();
-    $('#searchMessage').textContent = `Threshold set to ${threshold.toFixed(2)}`;
+    searchNote(`Threshold set to ${threshold.toFixed(2)}`);
   });
 });
 
@@ -1769,29 +1864,28 @@ function paintPeople(canvas, detections, selected = -1) {
     ctx.fillText(String(i + 1), x + 6 * scale, y + 17 * scale);
   });
 }
+// One person at a time: the sheet asks for the name, takes one photo, and then
+// asks which person in it to search for. A queue of photos was faster to drop
+// and impossible to name.
+$('#addPerson').addEventListener('click', () => {
+  clearReferencePreview();
+  searchNote('');
+  $('#personDialog').showModal();
+  $('#personName').focus();
+});
+$('#personCancel').addEventListener('click', () => $('#personDialog').close());
+$('#personDialog').addEventListener('close', () => clearReferencePreview());
+
 $('#uploadPhoto').addEventListener('click', () => $('#referenceFile').click());
 $('#referenceFile').addEventListener('change', () => {
-  queuePhotos($('#referenceFile').files);
+  takePhoto($('#referenceFile').files);
   $('#referenceFile').value = '';
 });
 
-// One photo per person. They're worked through one at a time, because each one needs the operator
-// to say which person in it to search for.
-let pendingPhotos = [];
-
-function queuePhotos(files) {
-  const photos = [...files].filter((f) => !f.type || f.type.startsWith('image/'));
-  if (!photos.length) {
-    $('#searchMessage').textContent = 'Choose image files.';
-    return;
-  }
-  pendingPhotos = photos.slice(1);
-  uploadReferencePhoto(photos[0]);
-}
-
-function nextQueuedPhoto() {
-  const next = pendingPhotos.shift();
-  if (next) uploadReferencePhoto(next);
+function takePhoto(files) {
+  const photo = [...files].find((f) => !f.type || f.type.startsWith('image/'));
+  if (!photo) { searchNote('Choose an image file.'); return; }
+  uploadReferencePhoto(photo);
 }
 const uploadZone = $('#uploadPhoto');
 for (const eventName of ['dragenter', 'dragover']) {
@@ -1809,7 +1903,7 @@ uploadZone.addEventListener('drop', (event) => {
   event.preventDefault();
   uploadZone.classList.remove('dragging');
   if (searchBusy) return;
-  queuePhotos(event.dataTransfer.files);
+  takePhoto(event.dataTransfer.files);
 });
 
 function uploadReferencePhoto(file) {
@@ -1818,7 +1912,7 @@ function uploadReferencePhoto(file) {
     drawReference = null;
     $('#personChoices').replaceChildren();
     $('#referencePreview').hidden = true;
-    $('#searchMessage').textContent = 'Finding people in the reference…';
+    searchNote('Finding people in the photo…');
     if (file.type && !file.type.startsWith('image/')) throw new Error('Choose an image file.');
     if (file.size > 25_000_000) throw new Error('Choose a photo smaller than 25 MB.');
     const image = new Image();
@@ -1839,10 +1933,9 @@ function uploadReferencePhoto(file) {
       paintPeople(preview, result.detections, selected);
     };
     drawReference();
-    const queued = pendingPhotos.length ? ` · ${pendingPhotos.length} more photo${pendingPhotos.length === 1 ? '' : 's'} to go` : '';
-    $('#searchMessage').textContent = result.detections.length
-      ? `Choose the person to search for in this photo.${queued}`
-      : `No people detected. Try another photo.${queued}`;
+    searchNote(result.detections.length
+      ? 'Which one are we looking for?'
+      : 'No people detected. Try another photo.');
     result.detections.forEach((person, index) => {
       const button = document.createElement('button');
       button.className = 'btn'; button.textContent = `Person ${index + 1}`;
@@ -1850,73 +1943,53 @@ function uploadReferencePhoto(file) {
         // The first photo starts the roster (and a fresh search); the rest add to it, so every
         // frame gets matched against all of them.
         const roster = st?.search?.people || [];
-        const params = new URLSearchParams({box: person.box.join(','), label: `Person ${roster.length + 1}`});
+        // Whatever the operator typed, or a number. The label rides through to
+        // the searchers' phones, which is why it is worth asking for.
+        const named = $('#personName').value.trim();
+        const params = new URLSearchParams({box: person.box.join(','),
+                                            label: named || `Person ${roster.length + 1}`});
         if (roster.length) params.set('add', '1');
         await searchApi(`/api/search/reference?${params}`, {method: 'PUT', headers: {'Content-Type': 'image/jpeg'}, body: blob});
         if (st?.search) st.search.sightings = [];
         clearSourceFrames();
         selected = index;
         drawReference();
-        $('#searchMessage').textContent = pendingPhotos.length ? 'Added. Next photo…' : 'Added to the people to find.';
-      }).then(nextQueuedPhoto));
+        $('#personDialog').close();
+        searchNote(`${named || `Person ${roster.length + 1}`} added to the people to find.`);
+      }));
       $('#personChoices').append(button);
     });
   });
 }
 
-let analysisKey = null;
 function clearSourceFrames() {
   for (const frame of sourceFrames.values()) URL.revokeObjectURL(frame.url);
   sourceFrames.clear();
-  analysisKey = null;
-  $('#analyzedFrame').hidden = true;
 }
+// The analysed frame itself is gone from the panel — the live feed above is the
+// same camera a moment later, and the still under it was one more picture to
+// parse. What is left is the decision it existed for: when this phone is
+// holding a match, offer to confirm it.
 function renderAnalysis() {
-  const canvas = $('#analyzedFrame');
   const confirm = $('#confirmSighting');
   confirm.hidden = true;
   confirm.onclick = null;
-  const result = st?.search?.sightings?.find(s => s.phoneId === viewing && freshSighting(s, st.search, st.t, snapshotAt, performance.now()));
-  if (!result) {
-    analysisKey = null; canvas.hidden = true;
-    $('#analysisMeta').textContent = 'No current result';
-    return;
-  }
-  if (result.matched) {
-    const identity = {phoneId: result.phoneId, streamId: result.streamId, seq: result.seq, searchRevision: result.searchRevision};
-    confirm.hidden = false;
-    confirm.disabled = searchBusy;
-    confirm.onclick = () => searchAction(async () => {
-      const updated = await searchApi('/api/search/confirm', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(identity)});
-      if (st) st.search = updated;
-      $('#searchMessage').textContent = 'Visual sighting confirmed. Target location remains unknown.';
-      renderAnalysis();
-    });
-  }
-  const age = Math.max(0, Math.round(st.t - result.t + performance.now() - snapshotAt));
-  const scores = result.boxes.map(scoreLabel).join(' / ') || 'No people detected';
-  const frame = sourceFrames.get(frameKey(result));
-  $('#analysisMeta').textContent = `${result.matched ? 'Likely sighting' : 'No likely match'} · Phone ${result.phoneId} · Frame ${result.seq} · ${age} ms old · ${scores}${frame ? '' : ' · Exact preview unavailable'}`;
-  if (!frame) { analysisKey = null; canvas.hidden = true; return; }
-  const key = frameKey(result);
-  if (analysisKey === key) return;
-  analysisKey = key;
-  canvas.hidden = true;
-  const image = new Image();
-  image.onload = () => {
-    if (analysisKey !== key || !sourceFrames.has(key)) return;
-    canvas.width = result.width; canvas.height = result.height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-    ctx.lineWidth = 3;
-    for (const box of result.boxes) {
-      ctx.strokeStyle = box.similarity >= st.search.threshold ? '#57d879' : '#fff';
-      ctx.strokeRect(box.x * canvas.width, box.y * canvas.height, box.w * canvas.width, box.h * canvas.height);
-    }
-    canvas.hidden = false;
-  };
-  image.src = frame.url;
+  const result = st?.search?.sightings?.find(s => s.phoneId === viewing
+    && freshSighting(s, st.search, st.t, snapshotAt, performance.now()));
+  if (!result?.matched) return;
+  const identity = {phoneId: result.phoneId, streamId: result.streamId, seq: result.seq,
+                    searchRevision: result.searchRevision};
+  confirm.hidden = false;
+  confirm.disabled = searchBusy;
+  confirm.onclick = () => searchAction(async () => {
+    const updated = await searchApi('/api/search/confirm', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(identity)});
+    if (st) st.search = updated;
+    searchNote('Visual sighting confirmed. Target location remains unknown.');
+    renderAnalysis();
+  });
 }
+
 setInterval(() => { if (viewing) renderAnalysis(); }, 100);
 new ResizeObserver(() => drawReference?.()).observe($('#referencePreview'));
 renderSearch();
