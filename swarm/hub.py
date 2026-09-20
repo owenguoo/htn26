@@ -36,6 +36,7 @@ from .planner import Planner
 from .sightings import FOUND_CONF, PERSON_HEIGHT_M, POSSIBLE_CONF, MockDetector, Sightings
 from .target import Target
 from .mapper import Mapper
+from .sim_api import install_sim_routes
 from .hazards import Hazards, HazardResult, ObjectDetection, floor_position
 from .detection import normalize_box
 from .protocol import now_ms, pack, unpack
@@ -969,13 +970,14 @@ load_env()
 settings = Settings()
 auth = Auth(settings)
 install_routes(app, hub, auth)
+install_sim_routes(app, auth)
 
 
 @app.middleware("http")
 async def no_stale_pages(request, call_next):
     """Pages and scripts change often during development; make browsers (and phones) revalidate every time."""
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path == "/console" or request.url.path.startswith("/web/"):
+    if request.url.path in ("/", "/console", "/simulator") or request.url.path.startswith("/web/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -1283,6 +1285,12 @@ def join_page() -> HTMLResponse:
 @app.get("/console")
 def console_page() -> HTMLResponse:
     return _page("console.html")
+
+
+@app.get("/simulator")
+def simulator_page() -> HTMLResponse:
+    """Rescue simulator: rehearse a search on a scanned floor plan. Separate from the live hub state."""
+    return _page("simulator.html")
 
 
 @app.get("/web/{name}.js")

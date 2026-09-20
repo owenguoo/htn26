@@ -17,3 +17,4 @@ services/inference/**/*.ts
 
 web/models/live/
 /.runtime/
+web/sim/envs/user/
