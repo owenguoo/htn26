@@ -12,6 +12,8 @@ from swarm.protocol import now_ms
 
 
 def sighting(hub):
+    # A hub starts in "calibrate"; a sighting only exists once the operator has started the search.
+    hub.phase = 'search'
     hub.search.set_reference('v')
     hub.search.connect('p', 's')
     t = now_ms()
@@ -327,6 +329,7 @@ def test_ordinary_phase_publication_survives_search_edit(monkeypatch, edit):
 def test_real_mode_rejects_geometric_rehearsal_evidence():
     from swarm.hub import Phone
     hub = Hub()
+    hub.phase = 'search'  # detections only land while the search is running
     phone = Phone('p', 1, seat={'x': 0, 'y': 2}, heading=0)
     hub.phones['p'] = phone
     boxes = [hub.mock_detector._box(2, 0, .99)]

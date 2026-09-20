@@ -19,4 +19,10 @@ dependencies = [
 dev = [
     "httpx>=0.28.1",
     "pytest>=9.1.1",
+    "pytest-timeout>=2.4.0",
 ]
+
+[tool.pytest.ini_options]
+# Several tests drive real concurrency through the hub. A wrong assumption there used to
+# hang the whole CI run for hours instead of failing; this turns that into a failed test.
+timeout = 120

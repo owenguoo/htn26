@@ -93,6 +93,7 @@ class FakeWorker:
 @asynccontextmanager
 async def system(monkeypatch, worker_url, key='test-model-key', baseten_key=''):
     hub = module.Hub()
+    hub.phase = 'search'  # a hub starts in "calibrate"; the inference bridge only runs during the search
     settings = Settings(inference_url=worker_url, inference_key=key, bridge_key='test-bridge-key',
                         baseten_key=baseten_key)
     auth = Auth(settings)

@@ -8,6 +8,7 @@ from swarm.protocol import pack
 
 
 def test_service_keys_and_browser_origin_checks_remain():
+    phase = module.hub.phase
     with TestClient(module.app) as client:
         assert client.post('/api/detections', json={}).status_code == 401
         assert client.post('/api/pose', json={}).status_code == 401
@@ -20,7 +21,7 @@ def test_service_keys_and_browser_origin_checks_remain():
                 if message.get('type') != 'state':
                     break
             assert message.get('error') == 'same-origin request required'
-        assert module.hub.phase == 'search'
+        assert module.hub.phase == phase  # the refused request changed nothing
 
 
 def test_latest_pending_fairness_and_bound():
@@ -45,6 +46,7 @@ def test_latest_pending_fairness_and_bound():
 def test_console_needs_no_login_but_keeps_origin_and_service_checks(monkeypatch):
     from swarm.control import Auth, Settings, install_routes
     from fastapi import FastAPI
+    phase = module.hub.phase
     hub = module.Hub()
     settings = Settings(bridge_key='bridge')
     auth = Auth(settings)
@@ -61,7 +63,7 @@ def test_console_needs_no_login_but_keeps_origin_and_service_checks(monkeypatch)
         with client.websocket_connect('/ws/frames', headers={'Authorization': 'Bearer bridge'}) as ws:
             ws.send_json({'type': 'phase', 'phase': 'end'})
             assert ws.receive_json()['error'] == 'same-origin request required'
-        assert module.hub.phase == 'search'
+        assert module.hub.phase == phase  # the refused request changed nothing
 
 
 def test_slow_inference_keeps_latest_and_discards_transition():
@@ -217,6 +219,7 @@ def test_delivery_rechecks_revision_after_phone_lock(monkeypatch):
     from fastapi import HTTPException
     async def run():
         hub = module.Hub()
+        hub.phase = 'search'  # detections are only accepted while the search is running
         hub.search.set_reference('v')
         hub.search.connect('p', 's')
         timestamp = now_ms()
@@ -352,6 +355,7 @@ def test_detection_delivery_preserves_scores_and_current_threshold(monkeypatch):
 
     async def run():
         hub = module.Hub()
+        hub.phase = 'search'  # detections are only accepted while the search is running
         hub.search.set_reference('v')
         hub.search.connect('p', 's')
         timestamp = now_ms()

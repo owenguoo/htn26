@@ -15,6 +15,8 @@ POSE = {'x': 0.0, 'y': 12.0, 'heading': 0.0}  # facing the stage from the back o
 def result(hub, similarity, *, h=.5, pose=POSE, seq=1):
     """Register a frame and accept a real result for it; returns the accepted entry."""
     if hub.search.target_version is None:
+        # A hub starts in "calibrate"; detections only count as evidence once the search is running.
+        hub.phase = 'search'
         asyncio.run(hub.enter_real_search())
         hub.search.set_reference('v')
         hub.search.connect('p', 's')
