@@ -146,13 +146,13 @@ struct HUDSoundEdgeView: View {
 struct HUDStackView: View {
     let hud: HubHUDMirror
 
-    /// Same increments the drawing uses (60/40/30/36/26 × k), at the phone's k ≈ 1.
+    /// Same increments the drawing uses (60/30/40/30/36 × k), at the phone's k ≈ 1.
     /// Tape is taller than the console's 40 so the marker chip and degree
     /// labels are not stacked on top of each other.
     private var contentHeight: CGFloat {
         let rows: [(Bool, CGFloat)] = [(hud.compass != nil, 60), (hud.warning != nil, 30),
                                        (hud.banner != nil, 40), (hud.lookingFor != nil, 30),
-                                       (hud.toast != nil, 36), (hud.stats != nil, 26)]
+                                       (hud.toast != nil, 36)]
         return max(1, rows.reduce(0) { $0 + ($1.0 ? $1.1 : 0) })
     }
 
@@ -193,15 +193,6 @@ struct HUDStackView: View {
                     HUDStyle.pill(&context, at: CGPoint(x: size.width / 2, y: top + 14 * k), text: toast,
                                   background: HUDStyle.toastBackground, foreground: HUDStyle.deepInk,
                                   size: 13 * k, bold: true, maxWidth: size.width - 30 * k)
-                    top += 36 * k
-                }
-                // Last, smallest, and gone the moment anything louder appears —
-                // the mirror decides that, not this renderer.
-                if let stats = hud.stats {
-                    HUDStyle.pill(&context, at: CGPoint(x: size.width / 2, y: top + 11 * k), text: stats,
-                                  background: HUDStyle.tapeBackground.opacity(0.8),
-                                  foreground: HUDStyle.lookingForInk,
-                                  size: 11 * k, maxWidth: size.width - 30 * k)
                 }
             }
         }

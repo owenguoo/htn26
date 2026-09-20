@@ -51,6 +51,8 @@ final class Haptics {
     /// to arrive on time.
     func prepare() {
         impact.prepare()
+        heavy.prepare()
+        light.prepare()
         notice.prepare()
         selection.prepare()
     }
@@ -78,6 +80,14 @@ final class Haptics {
             impact.impactOccurred(intensity: intensity)
         case "message":
             light.impactOccurred(intensity: intensity)
+        case "pulse":
+            // The beat under a pulsing screen. Which generator carries it is
+            // the whole message: a hazard three metres off should be felt as a
+            // tick, the same hazard at arm's length as a thump. One pattern,
+            // three weights, chosen by how close the thing is.
+            if intensity >= 0.8 { heavy.impactOccurred(intensity: intensity) }
+            else if intensity >= 0.5 { impact.impactOccurred(intensity: intensity) }
+            else { light.impactOccurred(intensity: intensity) }
         case "onTarget":
             // Landing on the target is a detent, not an event — the same feel
             // a picker gives when it clicks into a value.

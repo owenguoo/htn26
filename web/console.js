@@ -1,4 +1,4 @@
-import { frameKey, freshSighting } from '/web/inference-ui.js';
+import { frameKey } from '/web/inference-ui.js';
 import { makeView, drawRoom, drawCone, heatLevels, heatCanvas, heatGradientCSS } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
@@ -31,7 +31,7 @@ function connect() {
 }
 
 function setConn(live) {
-  if (!live) { st = null; clearSourceFrames(); renderSearch(); renderAnalysis(); }
+  if (!live) { st = null; clearSourceFrames(); renderSearch(); }
 }
 
 function send(msg) {
@@ -544,7 +544,6 @@ function stepViewer(d) {
 
 function renderViewer() {
   if (!viewing) return;
-  renderAnalysis();
   const p = phones.get(viewing);
   if (!p) { closeViewer(); return; }
   $('#vNum').textContent = `#${p.index}`;
@@ -695,9 +694,6 @@ function drawHud() {
   }
   if (hud.lookingFor) { pill(ctx, sx + sw / 2, top + 12 * k, hud.lookingFor, 'rgba(12,17,32,0.85)', '#eef2ff', 12 * k); top += 30 * k; }
   if (hud.toast) { pill(ctx, sx + sw / 2, top + 14 * k, hud.toast, 'rgba(255,255,255,0.95)', '#05070f', 13 * k, true); top += 36 * k; }
-  // Last in the stack and smallest: the phone shows the operator their own
-  // swept area and rank. The phone decides when it is quiet enough to show.
-  if (hud.stats) { pill(ctx, sx + sw / 2, top + 11 * k, hud.stats, 'rgba(12,17,32,0.72)', '#dfe5f2', 11 * k); top += 26 * k; }
   // Bottom-right, opposite where the phone puts its mini-map: who this operator
   // is being sent to, standing still while the banner above rewrites itself.
   if (hud.objective) {
@@ -1143,10 +1139,6 @@ async function setMapMode(mode) {
   if (!is3d) {
     scene3d?.hide();
     gridKey = '';
-    if (mode === 'grid' && st?.coverage) {
-      $('#mapStatus').textContent = `Every ${st.coverage.cell} m cell the search keeps, shaded by how likely the person is to be in it`
-        + `${st.planner?.sectorSize ? ` · heavier lines are the ${st.planner.sectorSize} m sectors the swarm is sent to` : ''}`;
-    }
     resizeMap();
     return;
   }
@@ -1966,31 +1958,6 @@ function clearSourceFrames() {
   for (const frame of sourceFrames.values()) URL.revokeObjectURL(frame.url);
   sourceFrames.clear();
 }
-// The analysed frame itself is gone from the panel — the live feed above is the
-// same camera a moment later, and the still under it was one more picture to
-// parse. What is left is the decision it existed for: when this phone is
-// holding a match, offer to confirm it.
-function renderAnalysis() {
-  const confirm = $('#confirmSighting');
-  confirm.hidden = true;
-  confirm.onclick = null;
-  const result = st?.search?.sightings?.find(s => s.phoneId === viewing
-    && freshSighting(s, st.search, st.t, snapshotAt, performance.now()));
-  if (!result?.matched) return;
-  const identity = {phoneId: result.phoneId, streamId: result.streamId, seq: result.seq,
-                    searchRevision: result.searchRevision};
-  confirm.hidden = false;
-  confirm.disabled = searchBusy;
-  confirm.onclick = () => searchAction(async () => {
-    const updated = await searchApi('/api/search/confirm', {method: 'POST',
-      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(identity)});
-    if (st) st.search = updated;
-    searchNote('Visual sighting confirmed. Target location remains unknown.');
-    renderAnalysis();
-  });
-}
-
-setInterval(() => { if (viewing) renderAnalysis(); }, 100);
 new ResizeObserver(() => drawReference?.()).observe($('#referencePreview'));
 renderSearch();
 

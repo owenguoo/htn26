@@ -260,6 +260,19 @@ enum TypeScale {
     static let readout = Font.caption2.monospacedDigit().weight(.semibold)
     /// A glyph sitting in a row of text.
     static let inlineSymbol = Font.body.weight(.bold)
+
+    /// The headline on anything that takes the whole screen: the takeover
+    /// plates and the flash.
+    ///
+    /// Not rounded. Rounded is a friendly, soft-cornered voice and it was
+    /// reading as an app being pleased with itself at the two moments — a
+    /// person found, something in your way — when the screen should sound flat
+    /// and certain. `.black` in the default grotesque is the same size and
+    /// twice as serious.
+    ///
+    /// A size, not a text style, because these are read at arm's length in one
+    /// glance and Dynamic Type shrinking them would defeat the card.
+    static func alert(_ size: CGFloat) -> Font { .system(size: size, weight: .black) }
 }
 
 // MARK: - Environment

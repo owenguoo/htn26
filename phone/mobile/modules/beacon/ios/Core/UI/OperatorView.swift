@@ -118,7 +118,7 @@ public struct OperatorView: View {
             // Always mounted so appear/disappear can ease rather than pop.
             // Underneath the edge band and the chrome: the wash is the mood of
             // the screen, not a thing on top of it.
-            HUDAmbientView(ambient: model.frame.hud.ambient)
+            HUDAmbientView(ambient: model.frame.hud.ambient, onPulse: model.pulse)
             HUDSoundEdgeView(edge: model.frame.hud.soundEdge)
 
             chrome
@@ -196,7 +196,10 @@ public struct OperatorView: View {
         }
         .coordinateSpace(.named(Self.space))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { contentSize = $0 }
-        .animation(.easeOut(duration: 0.12), value: overlay.flash)
+        // Matches `FlashView.fadeOut`: the view eases its own way in, and this
+        // is what carries it back out when the cue expires. 0.12 s was a cut,
+        // not a fade, and read as the screen glitching rather than answering.
+        .animation(.easeInOut(duration: FlashView.fadeOut), value: overlay.flash)
         .animation(.easeOut(duration: 0.2), value: overlay.phase)
         // A lock is confirmed once, by the full-screen green flash
         // (`OverlayEngine.lockFlashText`). The calibrate card used to be held

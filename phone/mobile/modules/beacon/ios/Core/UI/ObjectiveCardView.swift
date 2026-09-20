@@ -22,9 +22,15 @@ struct ObjectiveCardView: View {
 
     var body: some View {
         HStack(spacing: Space.s) {
-            Image(systemName: symbol)
+            // A plain arrow, turned to the bearing. It was `location.north`,
+            // which draws a horizontal rule across the top of the head — that
+            // glyph means "north on a map", not "that way", and it pointed the
+            // same direction whatever the operator did. This one points.
+            Image(systemName: "arrow.up")
                 .font(TypeScale.inlineSymbol)
                 .foregroundStyle(tint)
+                .rotationEffect(.degrees(objective.bearing))
+                .animation(.easeOut(duration: 0.15), value: objective.bearing)
             VStack(alignment: .leading, spacing: 1) {
                 Text(objective.title)
                     .font(TypeScale.statusTitle)
@@ -55,11 +61,6 @@ struct ObjectiveCardView: View {
         case "ok": .ssOK
         default: .ssAttention
         }
-    }
-
-    /// A find is a person; everything else is a place to point a camera.
-    private var symbol: String {
-        objective.tone == "alert" ? "figure.wave" : "location.north.line.fill"
     }
 
     private var background: some ShapeStyle {

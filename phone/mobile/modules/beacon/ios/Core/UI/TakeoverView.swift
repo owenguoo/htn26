@@ -86,11 +86,9 @@ struct TakeoverView: View {
             Image(systemName: takeover.symbol)
                 .font(.system(size: 28, weight: .medium))
             Text(takeover.title)
-                // Fixed, not a text style: this is read at arm's length in one
-                // glance, and Dynamic Type shrinking it would defeat the card.
                 // The hazard card runs smaller because it gave its space to the
                 // window, which is the point of that card.
-                .font(.system(size: isHazard ? 28 : 34, weight: .heavy, design: .rounded))
+                .font(TypeScale.alert(isHazard ? 28 : 34))
                 .minimumScaleFactor(0.6)
             if let detail = takeover.detail {
                 Text(detail)

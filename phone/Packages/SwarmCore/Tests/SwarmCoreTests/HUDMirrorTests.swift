@@ -313,7 +313,8 @@ struct HUDMirrorTests {
             model.apply(.guideTurn(sector: "PERSON 2", delta: 40, onTarget: false, text: nil,
                                    kind: "respond", distance: 24), heading: 90, now: 0)
         })
-        #expect(hud.objective == .init(title: "Person 2", detail: "24 m · 40° right", tone: "alert"))
+        #expect(hud.objective == .init(title: "Person 2", detail: "24 m · 40° right",
+                                       bearing: 40, tone: "alert"))
     }
 
     @Test func theObjectiveIsASweepWhenNobodyHasBeenFound() {
@@ -321,7 +322,8 @@ struct HUDMirrorTests {
             model.apply(.guideTurn(sector: "B3", delta: -12, onTarget: false, text: nil,
                                    kind: "search", distance: nil), heading: 90, now: 0)
         })
-        #expect(hud.objective == .init(title: "Sweeping B3", detail: "12° left", tone: "warn"))
+        #expect(hud.objective == .init(title: "Sweeping B3", detail: "12° left",
+                                       bearing: -12, tone: "warn"))
     }
 
     @Test func thereIsNoObjectiveWithNowhereToBeSent() {
@@ -361,37 +363,6 @@ struct HUDMirrorTests {
         #expect(mirror(overlay { $0.apply(hazards, now: 0) }).warning == nil)
     }
 
-    @Test func theStatsLineIsWordedOnce() throws {
-        let numbers = try world("""
-        {"phase": "search", "searched": 0.46, "stats": {"m2": 142.4, "rank": 2, "of": 5}}
-        """)
-        #expect(mirror(overlay { $0.apply(numbers, now: 0) }).stats == "142 m² swept · 2nd of 5 · room 46%")
-    }
-
-    @Test func rankIsLeftOutWhenThereIsNobodyToBeAheadOf() throws {
-        let alone = try world("""
-        {"phase": "search", "searched": 0.1, "stats": {"m2": 20, "rank": 1, "of": 1}}
-        """)
-        #expect(mirror(overlay { $0.apply(alone, now: 0) }).stats == "20 m² swept · room 10%")
-    }
-
-    @Test(arguments: [(1, "1st"), (2, "2nd"), (3, "3rd"), (4, "4th"),
-                      (11, "11th"), (12, "12th"), (13, "13th"), (21, "21st")])
-    func ordinalsSurviveTheTeens(_ n: Int, _ expected: String) {
-        #expect(HUDMirror.ordinal(n) == expected)
-    }
-
-    @Test func theScoreboardStandsDownForAnythingLouder() throws {
-        let numbers = try world("""
-        {"phase": "search", "searched": 0.46, "stats": {"m2": 142.4, "rank": 2, "of": 5}}
-        """)
-        let shouted = mirror(overlay { model in
-            model.apply(numbers, now: 0)
-            model.apply(.message(text: "everyone to the back", ttlMs: 8000), heading: 90, now: 0)
-        })
-        #expect(shouted.stats == nil)
-    }
-
     // MARK: - The wash that stays on
 
     /// A `respond` guide is the start of a find, and the screen says so until
@@ -401,7 +372,9 @@ struct HUDMirrorTests {
             model.apply(.guideTurn(sector: "PERSON 1", delta: 20, onTarget: false, text: nil,
                                    kind: "respond", distance: 14), heading: 90, now: 0)
         })
-        #expect(hud.ambient == .init(kind: "find", color: HUDMirror.alertColor, intensity: 0.85))
+        #expect(hud.ambient?.kind == "find")
+        #expect(hud.ambient?.color == HUDMirror.alertColor)
+        #expect((hud.ambient?.pulseMs ?? 0) > 0, "walking to somebody beats")
     }
 
     /// The hub clears a find team's guide when that phone reaches the person.
@@ -412,8 +385,11 @@ struct HUDMirrorTests {
                                    kind: "respond", distance: 14), heading: 90, now: 0)
             model.apply(.guideClear, heading: 90, now: 1)
         })
-        #expect(hud.ambient == .init(kind: "with", color: HUDMirror.alertColor, intensity: 0.45),
+        #expect(hud.ambient?.kind == "with")
+        #expect(hud.ambient?.color == HUDMirror.alertColor,
                 "still red — the emergency did not end when they got there")
+        #expect(hud.ambient?.pulseMs == 0,
+                "a phone still buzzing at somebody kneeling over a casualty is nagging")
         #expect(hud.objective == nil, "the guide is gone, so there is nothing left to steer to")
     }
 
@@ -456,6 +432,34 @@ struct HUDMirrorTests {
         })
         #expect(hud.ambient?.kind == "hazard")
         #expect(hud.ambient?.color == HUDMirror.hazardColor)
+    }
+
+    /// The light and the buzz come off one number, and that number rises as the
+    /// thing gets closer.
+    @Test func closingOnAnObstacleBeatsHarderAndFaster() throws {
+        func wash(at metres: Double) throws -> HubHUDMirror.Ambient? {
+            let hazards = try world("""
+            {"phase": "search", "hazards": [{"id": "chair", "x": \(metres), "y": 5, "stale": false}]}
+            """)
+            return mirror(overlay { $0.apply(hazards, now: 0) }).ambient
+        }
+        let far = try #require(try wash(at: 1.9))
+        let near = try #require(try wash(at: 1.2))
+        #expect(near.intensity > far.intensity, "harder")
+        #expect(near.pulseMs < far.pulseMs, "and faster")
+        #expect(far.pulseMs > 0)
+    }
+
+    @Test func walkingInOnSomebodyBeatsHarderAsYouArrive() {
+        func wash(at metres: Float) -> HubHUDMirror.Ambient? {
+            mirror(overlay { model in
+                model.apply(.guideTurn(sector: "PERSON 1", delta: 10, onTarget: false, text: nil,
+                                       kind: "respond", distance: Double(metres)), heading: 90, now: 0)
+            }).ambient
+        }
+        guard let far = wash(at: 18), let near = wash(at: 2) else { return }
+        #expect(near.intensity > far.intensity)
+        #expect(near.pulseMs < far.pulseMs)
     }
 
     // MARK: - The full-screen cards
@@ -664,12 +668,5 @@ struct HUDMirrorTests {
         #expect(tick(seen, at: 0).takeover?.kind == "hazard")
         #expect(tick(missed, at: 0.5).takeover?.kind == "hazard", "one dropped frame is not an all-clear")
         #expect(tick(missed, at: 2).takeover == nil, "a second of nothing is")
-    }
-
-    @Test func thereIsNoScoreboardBeforeTheSearchStarts() throws {
-        let numbers = try world("""
-        {"phase": "lobby", "searched": 0.46, "stats": {"m2": 142.4, "rank": 2, "of": 5}}
-        """)
-        #expect(mirror(overlay { $0.apply(numbers, now: 0) }).stats == nil)
     }
 }

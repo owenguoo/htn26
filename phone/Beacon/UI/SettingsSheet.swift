@@ -15,7 +15,6 @@ import SwarmCore
 /// actually read.
 struct SettingsSheet: View {
     let model: OperatorViewModel
-    @Binding var showDebug: Bool
     @Binding var showMiniMap: Bool
     let onLeave: () -> Void
 
@@ -44,7 +43,6 @@ struct SettingsSheet: View {
                 }
 
                 Section("Over the camera") {
-                    Toggle("Marker outlines", systemImage: "viewfinder", isOn: $showDebug)
                     Toggle("Mini-map", systemImage: "map.fill", isOn: $showMiniMap)
                 }
 

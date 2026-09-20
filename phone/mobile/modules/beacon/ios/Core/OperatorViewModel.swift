@@ -30,9 +30,20 @@ public final class OperatorViewModel {
     /// does not become 30 actor hops a second saying the same thing.
     private var driveBounds: DriveBounds?
     private let haptics = Haptics()
+    private var pulseSerial: UInt64 = 0
 
     public init(runtime: SwarmRuntime = .shared) {
         self.runtime = runtime
+    }
+
+    /// One beat of the ambient wash, felt as well as seen.
+    ///
+    /// Driven by `HUDAmbientView`, not by the cue stream: a cue is something
+    /// that happened once, and this is a rhythm. It is the same loop that
+    /// animates the light, so the two cannot drift apart.
+    public func pulse(_ intensity: Double) {
+        pulseSerial &+= 1
+        haptics.play(HapticCue(pattern: "pulse", intensity: Float(intensity), serial: pulseSerial))
     }
 
     public func attach() {

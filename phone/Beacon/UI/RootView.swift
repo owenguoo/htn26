@@ -12,7 +12,6 @@ struct RootView: View {
     /// the operator with no recalibrate, no toggles and no way out but the
     /// app switcher.
     @State private var isShowingSettings = false
-    @State private var showDebug = false
     @State private var showMiniMap = true
 
     /// The operator screen is worth showing.
@@ -30,7 +29,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if showsOperator {
-                OperatorView(model: model, showDebug: showDebug, showMiniMap: showMiniMap,
+                OperatorView(model: model, showMiniMap: showMiniMap,
                              onRequestSettings: { isShowingSettings = true })
                     .transition(.opacity)
             } else {
@@ -43,8 +42,7 @@ struct RootView: View {
         // another loading step.
         .animation(.easeInOut(duration: 0.25), value: showsOperator)
         .sheet(isPresented: $isShowingSettings) {
-            SettingsSheet(model: model, showDebug: $showDebug, showMiniMap: $showMiniMap,
-                          onLeave: leave)
+            SettingsSheet(model: model, showMiniMap: $showMiniMap, onLeave: leave)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // No `.background(.black)`: the `Form` brings `systemGroupedBackground`,

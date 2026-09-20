@@ -21,10 +21,15 @@ import SwarmCore
 /// did not end when they got there.
 struct HUDAmbientView: View {
     let ambient: HubHUDMirror.Ambient?
+    /// Fired on the bright edge of every beat, with the ambient's own
+    /// intensity. The light and the buzz come off the same loop on purpose:
+    /// two clocks would drift, and a screen flashing out of time with the hand
+    /// is worse than either on its own.
+    var onPulse: @MainActor (Double) -> Void = { _ in }
 
     /// Eases the wash in and out rather than snapping between situations.
     @State private var shown = false
-    @State private var pulseDim = false
+    @State private var dim = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -39,36 +44,36 @@ struct HUDAmbientView: View {
                     endRadius: max(geometry.size.width, geometry.size.height) * 0.8)
             }
         }
-        .opacity(opacity)
+        .opacity(shown ? (dim ? 0.5 : 1) : 0)
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .onAppear { sync(to: ambient) }
-        .onChange(of: ambient?.kind) { _, _ in sync(to: ambient) }
-        .onChange(of: ambient?.color) { _, _ in sync(to: ambient) }
+        .onChange(of: ambient == nil) { _, gone in
+            withAnimation(.easeInOut(duration: gone ? 0.45 : 0.35)) { shown = !gone }
+        }
+        .onAppear { withAnimation(.easeInOut(duration: 0.35)) { shown = ambient != nil } }
+        // Re-keyed whenever the rhythm changes, so closing on something restarts
+        // the loop at the new tempo instead of finishing the old beat first.
+        .task(id: ambient?.pulseMs.rounded()) { await beat() }
     }
 
-    private var opacity: Double {
-        guard shown, let ambient else { return 0 }
-        guard ambient.kind == "find" || ambient.kind == "hazard" else { return 1 }
-        return pulseDim ? 0.55 : 1
-    }
-
-    private func sync(to ambient: HubHUDMirror.Ambient?) {
-        guard let ambient else {
-            withAnimation(.easeInOut(duration: 0.45)) { shown = false }
+    /// One heartbeat: a quick brighten with the buzz, then a slower decay. Not
+    /// `repeatForever`, because that animates without ever handing control back,
+    /// and the haptic has to land on the same edge as the light.
+    @MainActor
+    private func beat() async {
+        guard let period = ambient?.pulseMs, period > 0 else {
+            withAnimation(.easeInOut(duration: 0.3)) { dim = false }
             return
         }
-        withAnimation(.easeInOut(duration: 0.35)) { shown = true }
-        pulseDim = false
-        guard ambient.kind == "find" || ambient.kind == "hazard" else { return }
-        // A hazard breathes faster than a walk: it is about the next two steps.
-        // The find period matches `HUDSoundEdgeView`'s 0.9 s exactly — while
-        // walking to somebody off to one side both are up at once, and two red
-        // pulses on slightly different clocks beat against each other.
-        let period = ambient.kind == "hazard" ? 0.55 : 0.9
-        withAnimation(.easeInOut(duration: period).repeatForever(autoreverses: true)) {
-            pulseDim = true
+        let rise = period * 0.3, fall = period * 0.7
+        while !Task.isCancelled {
+            onPulse(ambient?.intensity ?? 0.6)
+            withAnimation(.easeOut(duration: rise / 1000)) { dim = false }
+            try? await Task.sleep(for: .milliseconds(Int(rise)))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: fall / 1000)) { dim = true }
+            try? await Task.sleep(for: .milliseconds(Int(fall)))
         }
     }
 }

@@ -191,7 +191,15 @@ public struct OperatorStatus: Sendable, Equatable {
         case .idle, .permissions:
             self.init(level: .attention, title: "Starting the camera…")
         case .recalibrating:
-            self.init(level: .attention, title: "Needs recalibrating", hint: Self.locateHint)
+            // `.ok`, so the pill stays down. ARKit drops in and out of
+            // relocalizing constantly while somebody walks, and a notice that
+            // appears and disappears every few seconds is read as the app being
+            // broken rather than as information. The case that actually needs
+            // the operator to do something — alignment gone entirely — is
+            // `.calibrating where alignment == .none` below, which still
+            // speaks, and the phase card still puts up the "Recalibrate" prompt
+            // with it.
+            self.init(level: .ok, title: "Recalibrating")
         case .lost:
             self.init(level: .problem, title: "Tracking lost",
                       hint: pill.alignment == .marker ? "Move slowly, find a marker"

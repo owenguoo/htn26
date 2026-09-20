@@ -65,6 +65,10 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
     public struct Objective: Sendable, Equatable, Encodable {
         public var title: String
         public var detail: String
+        /// Degrees right of where the phone is facing. The card's arrow turns
+        /// by this, so the glyph is a direction rather than decoration — the
+        /// detail line says "40° right" and the arrow means it.
+        public var bearing: Double
         /// "alert", "ok" or "warn" — the console's three pill colours, taken
         /// straight from the banner so the card and the banner never disagree.
         public var tone: String
@@ -132,8 +136,16 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
         /// "hazard" — about to walk into something.
         public var kind: String
         public var color: String
-        /// 0…1, how hard to paint the bezel.
+        /// 0…1, how hard to paint the bezel — and how hard to buzz. It rises as
+        /// the thing gets closer, so "nearly there" and "about to hit it" do
+        /// not feel the same.
         public var intensity: Double
+        /// Milliseconds between beats, or 0 for a wash that simply holds.
+        ///
+        /// The renderer drives the light *and* the haptic from this one number,
+        /// which is the only way they stay on the same beat. A screen pulsing
+        /// at one rate against a buzz at another is worse than either alone.
+        public var pulseMs: Double
     }
 
     /// Something in the way. Amber, because the colour language of this HUD is
@@ -164,10 +176,6 @@ public struct HubHUDMirror: Sendable, Equatable, Encodable {
     public var warning: Warning?
     public var ambient: Ambient?
     public var takeover: Takeover?
-    /// "142 m² swept · 2nd of 5 · room 46%". One pre-formatted line: the hub
-    /// has been sending every phone its own swept area and rank since the
-    /// beginning and nothing has ever shown it to the person doing the walking.
-    public var stats: String?
 }
 
 /// The words on the lobby / calibrate / end cards. Here rather than in the
@@ -284,7 +292,8 @@ public enum HUDMirror {
         case "sector":
             return .init(kind: kind, color: plateSuccess, title: "At your sector", detail: who,
                          footer: "Sweep it slowly, phone up", symbol: "checkmark",
-                         window: "plain", badge: nil, insetX: 0.11, top: 0.30, bottom: 0.88, seconds: 1.5)
+                         window: "plain", badge: nil,
+                         insetX: 0.11, top: 0.30, bottom: 0.88, seconds: 1.5)
         case "found_stay":
             return .init(kind: kind, color: plateFound, title: "\(who ?? "Someone") found",
                          detail: "Stay with \(who ?? "them") until help reaches you",
@@ -434,35 +443,11 @@ public enum HUDMirror {
         }
     }
 
-    /// The contribution line, worded and rounded here because neither renderer
-    /// gets to phrase it — an ordinal written twice in two languages is an
-    /// ordinal that will eventually disagree with itself.
-    static func statsLine(squareMetres: Double?, rank: Int?, of: Int?, searched: Double?) -> String? {
-        var parts: [String] = []
-        if let squareMetres, squareMetres >= 1 {
-            parts.append(String(format: "%.0f m² swept", squareMetres))
-        }
-        // Rank means nothing on your own, and reads as a taunt rather than a
-        // nudge when there is nobody to be ahead of.
-        if let rank, let of, of > 1 {
-            parts.append("\(ordinal(rank)) of \(of)")
-        }
-        if let searched {
-            parts.append(String(format: "room %.0f%%", searched * 100))
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    /// 1st, 2nd, 3rd, 4th — and 11th, 12th, 13th, which are the ones a naive
-    /// last-digit rule gets wrong.
-    static func ordinal(_ n: Int) -> String {
-        switch (n % 100, n % 10) {
-        case (11...13, _): "\(n)th"
-        case (_, 1): "\(n)st"
-        case (_, 2): "\(n)nd"
-        case (_, 3): "\(n)rd"
-        default: "\(n)th"
-        }
+    /// 0 at `from`, 1 at `to`, clamped. Written once because three different
+    /// things now get more insistent as they get closer.
+    static func ramp(_ value: Double, from: Double, to: Double) -> Double {
+        guard from != to else { return 1 }
+        return max(0, min(1, (from - value) / (from - to)))
     }
 
     static func objectiveDetail(offsetDegrees: Double, distance: Double?, onTarget: Bool) -> String {
@@ -635,19 +620,32 @@ public enum HUDMirror {
                          detail: objectiveDetail(offsetDegrees: off,
                                                  distance: arrow.distance.map(Double.init),
                                                  onTarget: cue.onTarget),
-                         tone: cue.tone)
+                         bearing: off, tone: cue.tone)
         }
 
         // What the whole screen is saying, for as long as it is true. A hazard
         // you are about to hit takes it, the same way it takes the bezel — for
         // those two metres the obstacle is the emergency.
         let ambient: HubHUDMirror.Ambient? = {
-            if imminent, hazard != nil {
-                return .init(kind: "hazard", color: hazardColor, intensity: 0.7)
+            if imminent, let hazard {
+                // Full urgency at the blocking range, fading back out toward the
+                // range where it was only worth a chip.
+                let close = ramp(Double(hazard.distance ?? 0), from: Double(HazardCue.warnMetres),
+                                 to: Double(HazardCue.blockingMetres))
+                return .init(kind: "hazard", color: hazardColor,
+                             intensity: 0.4 + 0.6 * close, pulseMs: 900 - 600 * close)
             }
             switch overlay.find {
-            case .heading: return .init(kind: "find", color: alertColor, intensity: 0.85)
-            case .with: return .init(kind: "with", color: alertColor, intensity: 0.45)
+            case .heading:
+                // Twenty metres away is a direction; two metres away is nearly
+                // there, and it should feel like it in the hand.
+                let close = ramp(overlay.arrow?.distance.map(Double.init) ?? 12, from: 20, to: 1.5)
+                return .init(kind: "find", color: alertColor,
+                             intensity: 0.55 + 0.45 * close, pulseMs: 1100 - 500 * close)
+            case .with:
+                // Standing with somebody: held, and silent. A phone still
+                // buzzing at a person kneeling over a casualty is nagging.
+                return .init(kind: "with", color: alertColor, intensity: 0.45, pulseMs: 0)
             case nil: return nil
             }
         }()
@@ -682,16 +680,6 @@ public enum HUDMirror {
             plate?.badge = .init(text: warning.text, color: hazardColor)
         }
 
-        // The least important thing on the screen, so the first to go: a
-        // scoreboard has no business sharing a glance with a find, a shout or
-        // the operator's voice.
-        let quiet = overlay.toast == nil && banner?.tone != "alert" && edge == nil
-            && warning == nil && ambient == nil && plate == nil
-        let stats = searching && quiet
-            ? statsLine(squareMetres: overlay.world?.stats?.m2, rank: overlay.world?.stats?.rank,
-                        of: overlay.world?.stats?.of, searched: overlay.world?.searched)
-            : nil
-
         return HubHUDMirror(compass: compass, banner: banner, lookingFor: lookingFor,
                             toast: overlay.toast.map { "📣 " + $0.text }, card: card, ar: ar,
                             screen: visibleFrame(captureWidth: captureWidth, captureHeight: captureHeight,
@@ -699,7 +687,7 @@ public enum HUDMirror {
                             dets: overlay.hazards == nil ? overlay.detections?.boxes
                                 : (overlay.detections?.boxes ?? []) + (overlay.hazards?.boxes ?? []),
                             soundEdge: edge, objective: objective, warning: warning,
-                            ambient: ambient, takeover: plate, stats: stats)
+                            ambient: ambient, takeover: plate)
     }
     /// A pixel in the landscape capture → 0…1 in the upright frame the hub has.
     /// The encoder rotates 90° clockwise: (x, y) in W×H lands at (H − y, x) in H×W.
