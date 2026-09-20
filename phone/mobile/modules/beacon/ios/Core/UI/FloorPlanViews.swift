@@ -140,19 +140,32 @@ struct MiniMapView: View {
     let pings: [PingCue]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            FloorPlanCanvas(room: room, world: world, me: me, colorHex: colorHex, pings: pings, followsMe: true)
-                .clipShape(Radius.rect(Radius.plate))
-                .overlay(Radius.rect(Radius.plate).stroke(MapInk.plateBorder, lineWidth: 1))
+        FloorPlanCanvas(room: room, world: world, me: me, colorHex: colorHex, pings: pings, followsMe: true)
+            .clipShape(Radius.rect(Radius.plate))
+            .overlay(Radius.rect(Radius.plate).stroke(MapInk.plateBorder, lineWidth: 1))
+            .overlay(alignment: .bottom) {
             if let searched = world?.searched {
-                Text("\(Int((searched * 100).rounded()))% searched")
+                VStack(spacing: Space.xs) {
+                    HStack {
+                        Text("Searched")
+                            .foregroundStyle(.hudInkSecondary)
+                        Spacer(minLength: Space.xs)
+                        Text("\(Int((searched * 100).rounded()))%")
+                            .foregroundStyle(.hudInk)
+                    }
                     .font(TypeScale.readout)
-                    .foregroundStyle(.hudInk)
-                    // The caption sits on the camera, not on the plate, so it
-                    // needs its own backdrop or it disappears over a bright wall.
-                    .shadow(color: .hudVoid, radius: 2)
+                    ProgressView(value: min(1, max(0, searched)))
+                        .progressViewStyle(.linear)
+                        .tint(.ssOK)
+                        .accessibilityLabel("Area searched")
+                        .accessibilityValue("\(Int((searched * 100).rounded())) percent")
+                }
+                .padding(.horizontal, Space.s)
+                .padding(.vertical, Space.s)
+                .background(Surface.hudChrome, in: Radius.rect(Radius.plate))
+                .padding(Space.xs)
             }
-        }
+            }
         .cameraChrome()
     }
 }

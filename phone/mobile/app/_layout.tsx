@@ -1,5 +1,7 @@
-import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
+import { DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
+import { Appearance } from 'react-native';
 
 /**
  * Routes only, and no colour. The navigator is already a UIKit
@@ -7,13 +9,19 @@ import { StatusBar } from 'expo-status-bar';
  * large title and the sheet detents are Apple's — the three hardcoded hexes
  * that used to pin them to black are gone.
  *
- * Dark always: `app.json` pins `userInterfaceStyle` and `ThemeController`
- * paints every window. React Navigation follows with `DarkTheme`.
+ * Light always: `app.json` pins `userInterfaceStyle`, `ThemeController`
+ * paints every window, and `Appearance.setColorScheme('light')` keeps React
+ * Navigation / form sheets in sync before the native module has rebuilt.
+ * Camera chrome still opts into dark locally via `cameraChrome()`.
  */
 export default function RootLayout() {
+  useEffect(() => {
+    Appearance.setColorScheme('light');
+  }, []);
+
   return (
-    <ThemeProvider value={DarkTheme}>
-      <StatusBar style="light" />
+    <ThemeProvider value={DefaultTheme}>
+      <StatusBar style="dark" />
       <Stack>
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="join" options={{ title: 'Beacon', headerLargeTitleEnabled: true }} />

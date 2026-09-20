@@ -91,6 +91,29 @@ public final class AudioSessionOwner {
         apply()
     }
 
+    /// Requests the built-in mic's stereo beam while leaving external and
+    /// Bluetooth routes alone. Preferences are best-effort; callers must still
+    /// inspect the engine's actual channel count and fall back to mono.
+    public func prepareDirectionalInput() {
+        let session = AVAudioSession.sharedInstance()
+        guard let input = session.availableInputs?.first(where: { $0.portType == .builtInMic }),
+              let source = input.dataSources?.first(where: {
+                  $0.supportedPolarPatterns?.contains(.stereo) == true
+              }) else { return }
+        do {
+            try session.setPreferredInput(input)
+            try input.setPreferredDataSource(source)
+            try source.setPreferredPolarPattern(.stereo)
+            try session.setPreferredInputOrientation(.portrait)
+            if session.maximumInputNumberOfChannels >= 2 {
+                try session.setPreferredInputNumberOfChannels(2)
+            }
+        } catch {
+            // Direction is optional. The active mono route remains valid for
+            // voice and `install()` verifies what the engine actually supplied.
+        }
+    }
+
     private func apply() {
         let session = AVAudioSession.sharedInstance()
         guard !uses.isEmpty else {
@@ -156,6 +179,9 @@ public final class AudioSessionOwner {
 //   5. Muting clears iOS's orange microphone indicator; unmuting brings it back
 //      within a second and the next sentence is not clipped.
 //   6. A phone call interrupts and, on hanging up, capture resumes by itself.
+//   7. On a built-in stereo route, a hand clap on each side produces the
+//      matching edge flash and SOUND compass marker; speech, the phone's own
+//      ping, and AirPods produce no false directional cue.
 @MainActor
 public final class MicrophoneCapture {
     /// Whether there is a live tap, and if not, why not. Process-wide because
@@ -199,6 +225,8 @@ public final class MicrophoneCapture {
     /// One buffer, on its way from the tap thread to the actor.
     private struct Chunk: Sendable {
         let samples: [Float]
+        let stereoLeft: [Float]?
+        let stereoRight: [Float]?
         let rate: Double
         /// `CACurrentMediaTime()`'s domain — the same one `SwarmRuntime` hands
         /// the client as `uptime`, or `tCapture` on the wire is nonsense.
@@ -279,6 +307,7 @@ public final class MicrophoneCapture {
     // MARK: - Engine
 
     private func install() -> Bool {
+        AudioSessionOwner.shared.prepareDirectionalInput()
         let input = engine.inputNode
         // The web client asks `getUserMedia` for echo cancellation, noise
         // suppression and automatic gain. This is AVFoundation's equivalent of
@@ -287,7 +316,16 @@ public final class MicrophoneCapture {
         // voice gate and get transcribed as a word. Best effort — it is
         // unavailable on some routes, and failing to enable it is not a reason
         // to have no microphone.
-        try? input.setVoiceProcessingEnabled(true)
+        let hardwareFormat = input.outputFormat(forBus: 0)
+        // Voice processing is mono. Keep it on for mono/Bluetooth routes, but
+        // leave a built-in stereo route untouched so its level difference can
+        // feed the directional detector. Loud-sound onset/decay gating and the
+        // explicit local-beep suppression replace its noise/echo help there.
+        if hardwareFormat.channelCount < 2 {
+            try? input.setVoiceProcessingEnabled(true)
+        } else {
+            try? input.setVoiceProcessingEnabled(false)
+        }
 
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { return false }
@@ -303,19 +341,22 @@ public final class MicrophoneCapture {
         // 4096 frames, exactly `ScriptProcessor(4096, 1, 1)` in `phone.js`, so
         // the pre-roll chunk is the same slice of time on both clients.
         input.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, when in
-            guard let channel = buffer.floatChannelData?[0] else { return }
+            guard let channels = buffer.floatChannelData else { return }
             let count = Int(buffer.frameLength)
             guard count > 0 else { return }
-            // Channel 0 rather than a mix: the built-in microphone is mono, and
-            // averaging a multi-channel route would fold in whatever the second
-            // element hears from the other side of the phone.
-            let samples = Array(UnsafeBufferPointer(start: channel, count: count))
+            let left = Array(UnsafeBufferPointer(start: channels[0], count: count))
+            let right = buffer.format.channelCount > 1
+                ? Array(UnsafeBufferPointer(start: channels[1], count: count)) : nil
+            // Speech wants mono even when the detector has stereo. Averaging is
+            // stable across left/right orientation and keeps the wire unchanged.
+            let samples = right.map { right in zip(left, right).map { ($0 + $1) * 0.5 } } ?? left
             // The buffer's own start time, not "now". `AVAudioTime`'s host time
             // is the mach timebase, which is what `CACurrentMediaTime()` reads.
             let at = when.isHostTimeValid
                 ? AVAudioTime.seconds(forHostTime: when.hostTime)
                 : CACurrentMediaTime()
-            continuation.yield(Chunk(samples: samples, rate: buffer.format.sampleRate, at: at))
+            continuation.yield(Chunk(samples: samples, stereoLeft: right == nil ? nil : left,
+                                     stereoRight: right, rate: buffer.format.sampleRate, at: at))
         }
         isTapped = true
 
@@ -333,7 +374,8 @@ public final class MicrophoneCapture {
         // is a WAV of somebody talking backwards.
         pump = Task { [client] in
             for await chunk in stream {
-                await client.offerAudio(samples: chunk.samples, sourceRate: chunk.rate, capturedAt: chunk.at)
+                await client.offerAudio(samples: chunk.samples, sourceRate: chunk.rate, capturedAt: chunk.at,
+                                        stereoLeft: chunk.stereoLeft, stereoRight: chunk.stereoRight)
             }
         }
         return true

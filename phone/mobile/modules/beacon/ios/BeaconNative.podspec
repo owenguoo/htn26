@@ -13,7 +13,7 @@ Pod::Spec.new do |s|
   s.description    = 'Hosts SwarmCore inside an Expo app. JS never touches frames, poses at rate, or the socket.'
   s.author         = ''
   s.homepage       = 'https://github.com/owenguoo/htn26'
-  s.platforms      = { :ios => '17.0' }
+  s.platforms      = { :ios => '26.0' }
   s.source         = { git: '' }
   s.static_framework = true
   s.swift_version  = '6.0'

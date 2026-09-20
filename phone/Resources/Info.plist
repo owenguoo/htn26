@@ -45,12 +45,16 @@
 	<string>Beacon uses the camera to track this phone's position in the room and to send occasional frames to the search orchestrator.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Beacon connects to the search orchestrator running on this local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Beacon listens while you hold the voice button so you can say what the team is looking for. Speech goes to the search hub to set that target and is discarded once it has been read; Beacon never identifies anyone by voice or face.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Beacon uses device motion only to tell whether this phone moved while camera tracking was unavailable.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
+		<key>UISceneConfigurations</key>
+		<dict/>
 	</dict>
 	<key>UIFileSharingEnabled</key>
 	<true/>

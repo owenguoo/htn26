@@ -8,28 +8,21 @@ over WebSocket, and displays commands sent back (full-screen color flash,
 directional arrow, sound, haptic). The operators walk around and sweep their
 cameras; they are not seated.
 
-**This Swift app is the mobile client. `../web/phone.js` is not.** The browser
-client was the prototype that proved the idea; we no longer build on it or put it
-in an operator's hands. Everything an operator sees or does on a phone — the UI,
-the guidance cues, voice input, the HUD — lands here, in Swift. A gap here is a
-gap, not something the web client covers for us.
+**This Swift app is the mobile client.** There is no browser phone client —
+operators join with Beacon. Everything an operator sees or does on a phone —
+the UI, the guidance cues, voice input, the HUD — lands here, in Swift.
 
-`../web/phone.js` stays useful as a **behavioural reference**. It is the working
-implementation of things this client is still catching up to, so read it to learn
-what the hub sends and expects, and to match wording, thresholds and timings.
-Read it; don't extend it.
-
-The rest of the web prototype is a different matter and is still live: the
-orchestrator, the operator console, the dashboard, the feed wall, cone rendering
-and the QR join flow are built, running, and **not ours**. Do not rewrite,
-redesign or "improve" the server or the console. If the wire protocol here
-disagrees with the server, the server wins — ask, don't refactor.
+The rest of the web stack is still live and **not ours**: the orchestrator, the
+operator console, the dashboard, the feed wall, cone rendering and the QR join
+landing page. Do not rewrite, redesign or "improve" the server or the console.
+If the wire protocol here disagrees with the server, the server wins — ask,
+don't refactor.
 
 **The server is the htn26 hub, in this same checkout** (`../swarm/hub.py`,
-`../swarm/protocol.py`, `../web/phone.js`). Phone work must not modify
-`../swarm/`, `../web/`, `../room.json` or `../pyproject.toml`. The protocol is
-still moving on the team's branches, so before each piece of work run
-`git fetch && git diff <last-seen>..origin/main -- swarm/hub.py swarm/protocol.py web/phone.js`.
+`../swarm/protocol.py`). Phone work must not modify `../swarm/`, `../web/`,
+`../room.json` or `../pyproject.toml`. The protocol is still moving on the
+team's branches, so before each piece of work run
+`git fetch && git diff <last-seen>..origin/main -- swarm/hub.py swarm/protocol.py`.
 `HubWire.swift` mirrors it and decodes tolerantly: unknown types, commands and
 fields are ignored, never errors.
 
@@ -66,7 +59,7 @@ Your only valid evidence is:
 
 ```
 cd phone/Packages/SwarmCore && swift test
-xcodebuild -project phone/Beacon.xcodeproj -scheme Beacon -destination 'platform=iOS Simulator,name=iPhone 16' build
+xcodebuild -project phone/Beacon.xcodeproj -scheme Beacon -destination 'platform=iOS Simulator,name=iPhone 16,OS=26.3.1' build
 phone/Scripts/verify.sh --expo --e2e   # all of the above + expo typecheck/lint/Release build
 phone/Scripts/e2e-hub.sh     # replays a walk through SwarmClient into the real hub, asserts /api/state
 ```
@@ -118,8 +111,10 @@ resumable from the last green commit.
 - **HUD mirror:** while a console has the phone expanded the hub sends
   `cmd: hud` and the phone answers `type: hud` at 5 Hz (`HUDMirror.swift`), in
   upright-frame fractions. A reconnect starts un-viewed.
-- **Not implemented:** `audio` (16 kHz PCM voice captions). Native phones do not
-  take part in voice-directed search yet; the hub treats it as optional.
+- **Voice:** live ARKit joins enable `voiceEnabled` and start `MicrophoneCapture`
+  → `SwarmClient.offerAudio` (16 kHz PCM `audio` / `audio_end`, VoiceGate).
+  Replay / drive stay silent. Mic mute lives in Settings; hardware checks are
+  in `DEVICE_CHECKLIST.md`.
 - **Clock:** the hub pings, the phone pongs with its epoch-ms clock, the hub
   works out the offset. Frames carry epoch-ms `tCapture`. `ClockSync` is kept
   with its tests but unused on this path; all overlay TTLs are local-monotonic.
@@ -225,9 +220,10 @@ For the Expo app these live in `mobile/app.json` under `ios.infoPlist` (the
 generated plist is wiped by every prebuild); for the Xcode target, in
 `Resources/Info.plist`.
 
-`NSCameraUsageDescription`, `NSLocalNetworkUsageDescription` plus
-`NSBonjourServices` (iOS local-network permission bites everyone when the
-orchestrator is on the LAN), `NSMotionUsageDescription`.
+`NSCameraUsageDescription`, `NSMicrophoneUsageDescription`,
+`NSLocalNetworkUsageDescription` plus `NSBonjourServices` (iOS local-network
+permission bites everyone when the orchestrator is on the LAN),
+`NSMotionUsageDescription`.
 
 ## Privacy
 

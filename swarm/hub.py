@@ -1101,9 +1101,9 @@ def _page(name: str) -> HTMLResponse:
 
 
 @app.get("/")
-def root() -> HTMLResponse:
-    """The console is the only page the hub serves: phones run the native app (see /ws/phone)."""
-    return _page("console.html")
+def join_page() -> HTMLResponse:
+    """QR / LAN join URL. Operators use the Beacon app; browsers get a deep link."""
+    return _page("join.html")
 
 
 @app.get("/console")
@@ -1158,9 +1158,9 @@ def main() -> None:
 
     print("\n  Beacon hub")
     print(f"  Console:     http://localhost:{args.port}/console")
-    print(f"  Phones join: {hub.join_url}")
+    print(f"  Phones join: {hub.join_url}  (Beacon app)")
     if not has_tls and not args.public_url:
-        print("  ! iPhone cameras need HTTPS: use a tunnel (--public-url) or run scripts/make-cert.sh")
+        print("  ! LAN phones: use a tunnel (--public-url) or run scripts/make-cert.sh")
     print(flush=True)
 
     async def serve() -> None:

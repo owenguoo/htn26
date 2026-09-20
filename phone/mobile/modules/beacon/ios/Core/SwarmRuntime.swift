@@ -74,14 +74,20 @@ public struct RuntimeSession: Sendable {
     /// hub's room dimensions into — `PoseProvider` was deliberately not widened
     /// to carry either, so this is how they reach the provider.
     public let drive: DrivePoseProvider?
+    /// Live ARKit sessions only. Strongly retained here because
+    /// `MicrophoneCapture`'s process registry holds it weakly — without this,
+    /// the tap would deallocate as soon as `start` returned.
+    public let microphone: MicrophoneCapture?
 
     public init(client: SwarmClient, preview: CameraPreviewSource?, venue: Venue,
-                socketURL: URL, drive: DrivePoseProvider? = nil) {
+                socketURL: URL, drive: DrivePoseProvider? = nil,
+                microphone: MicrophoneCapture? = nil) {
         self.client = client
         self.preview = preview
         self.venue = venue
         self.socketURL = socketURL
         self.drive = drive
+        self.microphone = microphone
     }
 }
 
@@ -177,6 +183,9 @@ public final class SwarmRuntime: @unchecked Sendable {
         let session: RuntimeSession
         switch source {
         case .arkit:
+            // Real operators take part in voice-directed search. Replay / drive
+            // stay silent so `swarm-replay` and the hub e2e do not open a mic.
+            configuration.voiceEnabled = true
             let provider = ARKitPoseProvider(configuration: .init(
                 venue: venue, referenceImageGroup: nil, wantsSceneDepth: false,
                 markerBundle: ModuleResources.bundle))
@@ -191,7 +200,9 @@ public final class SwarmRuntime: @unchecked Sendable {
             let client = SwarmClient(configuration: configuration,
                                      dependencies: .init(provider: provider, encoder: encoder,
                                                          uptime: uptime, thermal: thermal))
-            session = RuntimeSession(client: client, preview: preview, venue: venue, socketURL: socketURL)
+            let microphone = await MainActor.run { MicrophoneCapture(client: client) }
+            session = RuntimeSession(client: client, preview: preview, venue: venue,
+                                     socketURL: socketURL, microphone: microphone)
         case .replay:
             guard let url = ModuleResources.fixtureURL(named: options.fixture) else {
                 throw ModuleResources.ResourceError.missingFixture(options.fixture)
@@ -245,6 +256,11 @@ public final class SwarmRuntime: @unchecked Sendable {
         }
         do {
             try await session.client.start()
+            // After the socket is up: a declined / missing mic is soft — frames
+            // and commands keep working; Settings shows "no microphone".
+            if let microphone = session.microphone {
+                await microphone.start()
+            }
         } catch {
             await leave()
             throw error
@@ -253,6 +269,11 @@ public final class SwarmRuntime: @unchecked Sendable {
 
     public func leave() async {
         guard let session else { return }
+        // Tear the tap down while we still hold the strong ref; the registry
+        // alone is weak and would not keep it alive across `publish(nil)`.
+        if let microphone = session.microphone {
+            await MainActor.run { microphone.stop() }
+        }
         publish(nil)
         await session.client.stop()
         await MainActor.run { UIApplication.shared.isIdleTimerDisabled = false }

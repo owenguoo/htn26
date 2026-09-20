@@ -237,4 +237,15 @@ struct ArchitectureTests {
         #expect(lines.contains("/ios"))
         #expect(lines.contains("/android"))
     }
+
+    /// UIKit resolves the scene delegate through the Objective-C runtime name.
+    /// `@objc(SceneDelegate)` deliberately removes the Swift module prefix, so
+    /// the generated plist must ask for `SceneDelegate`, not
+    /// `$(PRODUCT_MODULE_NAME).SceneDelegate` (which traps during launch).
+    @Test func expoSceneManifestNamesTheActualObjectiveCClass() throws {
+        let plugin = repositoryRoot.appendingPathComponent("mobile/plugins/withBeacon.js")
+        let source = try String(contentsOf: plugin, encoding: .utf8)
+        #expect(source.contains("@objc(SceneDelegate)"))
+        #expect(source.contains("UISceneDelegateClassName: 'SceneDelegate'"))
+    }
 }

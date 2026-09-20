@@ -51,6 +51,42 @@ struct HUDMirrorTests {
         #expect(hud.banner == .init(text: "Turn right 40° →", tone: "warn"))
     }
 
+    @Test func aDirectionalSoundBecomesARoomAnchoredAlert() throws {
+        var model = OverlayModel()
+        model.hearDirectionalSound(.init(relativeBearingDegrees: -90, confidence: 0.8),
+                                   heading: 90, now: 0)
+        var diagnostics = SessionDiagnostics()
+        diagnostics.state = .tracking
+        diagnostics.quality = .normal
+        let portrait = simd_quatf(angle: -.pi / 2, axis: [0, 0, 1])
+        let pose = Pose(position: [0, 1.5, 5],
+                        orientation: simd_quatf(angle: -Float(100 * Double.pi / 180), axis: [0, 1, 0]) * portrait)
+        model.update(pose: pose, alignment: .identity, source: .marker, intrinsics: Sample.intrinsics(),
+                     diagnostics: diagnostics, transport: .init(), transportState: .connected, now: 0.5)
+
+        let hud = mirror(model.state)
+        let sound = try #require(hud.compass?.markers.first { $0.label == "SOUND" })
+        #expect(isClose(sound.off, -100, within: 0.1),
+                "the event stays at room heading 0 while the phone turns to 100")
+        #expect(sound.color == HUDMirror.soundColor)
+        #expect(hud.banner == .init(text: "Sound heard · left", tone: "alert"))
+        #expect(hud.soundEdge?.side == "left")
+        let onWire = DeliveredMessage(try HubOutbound.hud(hud).encoded())
+        #expect((onWire.json["soundEdge"] as? [String: Any])?["side"] as? String == "left")
+    }
+
+    @Test func aDirectionalSoundExpires() {
+        var model = OverlayModel()
+        model.hearDirectionalSound(.init(relativeBearingDegrees: 70, confidence: 0.7),
+                                   heading: 10, now: 0)
+        var diagnostics = SessionDiagnostics()
+        diagnostics.state = .tracking
+        diagnostics.quality = .normal
+        model.update(pose: nil, alignment: nil, source: .none, intrinsics: nil,
+                     diagnostics: diagnostics, transport: .init(), transportState: .connected, now: 2.1)
+        #expect(model.state.directionalSound == nil)
+    }
+
     @Test func tonesMatchTheConsolesThreePills() {
         let ok = overlay { $0.apply(.guideTurn(sector: "A1", delta: 2, onTarget: true, text: "Scanning A1…",
                                                kind: "search", distance: nil), heading: 90, now: 0) }
@@ -60,7 +96,7 @@ struct HUDMirrorTests {
         #expect(mirror(alert).banner?.tone == "alert")
         let candidate = mirror(alert).compass?.markers.first { $0.big }
         #expect(candidate?.color == HUDMirror.alertColor)
-        #expect(candidate?.label == "CANDIDATE 4.0m")
+        #expect(candidate?.label == "FIND 4m")
         // Within 16° of the target the marker goes green, as on the web phone.
         #expect(mirror(ok).compass?.markers.first { $0.big }?.color == HUDMirror.onTargetColor)
         let look = overlay { $0.apply(.guideHeading(kind: "look", sector: "door", heading: 200, distance: nil,
@@ -150,16 +186,25 @@ struct HUDMirrorTests {
         world.pings = []
         world.candidate = .init(x: 3, y: 5)
         let idle = mirror(overlay { $0.apply(world, now: 0) })
-        #expect(idle.compass?.markers.contains { $0.label == "CANDIDATE 3m" && $0.color == HUDMirror.alertColor } == true)
-        #expect(idle.ar.contains { $0.label == "CANDIDATE · 3.0 m" })
+        #expect(idle.compass?.markers.contains { $0.label == "FIND 3m" && $0.color == HUDMirror.alertColor } == true)
+        #expect(idle.ar.contains { $0.label == "FIND · 3.0 m" })
 
         let responding = mirror(overlay { model in
             model.apply(world, now: 0)
             model.apply(.guideTurn(sector: "CANDIDATE", delta: 0, onTarget: false, text: nil, kind: "respond",
                                    distance: 3), heading: 90, now: 0)
         })
-        #expect(responding.compass?.markers.filter { $0.label.hasPrefix("CANDIDATE") }.count == 1)
-        #expect(responding.ar.contains { $0.label.hasPrefix("CANDIDATE") }, "still floats in the view")
+        #expect(responding.compass?.markers.filter { $0.label.hasPrefix("FIND") }.count == 1)
+        #expect(responding.ar.contains { $0.label.hasPrefix("FIND") }, "still floats in the view")
+        #expect(responding.soundEdge == nil, "on-target respond: no side bleed")
+
+        let offLeft = mirror(overlay { model in
+            model.apply(world, now: 0)
+            model.apply(.guideTurn(sector: "CANDIDATE", delta: -45, onTarget: false, text: nil, kind: "respond",
+                                   distance: 4), heading: 90, now: 0)
+        })
+        #expect(offLeft.soundEdge?.side == "left")
+        #expect(offLeft.soundEdge?.color == HUDMirror.alertColor)
     }
 
     /// The phone draws its own HUD from the same value it sends the console.

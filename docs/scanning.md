@@ -12,9 +12,9 @@ Install `gpu/requirements-surface.txt` in that worker environment alongside its 
 Run `scripts/gpu_worker.sh start`, then `scripts/gpu_worker.sh status` to check readiness.
 This service is separate from the Baseten person detector.
 
-Join with a real phone camera, leave Lobby, and select Start scan.
+Join with the native iPhone app, leave Lobby, and select Start scan.
 Move slowly around the room with overlapping views of textured walls and furniture.
-The browser sends a sharper scan frame each second; native iPhone frames are sampled at most twice per second.
+Native iPhone frames are sampled at most twice per second.
 Simulated cameras are excluded by default.
 After six new accepted views, the hub requests reconstruction and the 3D mode loads the returned room geometry.
 Rebuild requests an update using the current overlapping views.

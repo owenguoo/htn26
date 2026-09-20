@@ -3,7 +3,7 @@ import { useSyncExternalStore } from 'react';
 /**
  * View toggles only. They matter while the operator screen is up, and a demo
  * does not need them to survive a relaunch. Appearance is not a preference —
- * the app is dark always (`app.json` `userInterfaceStyle: "dark"`).
+ * the app is light always (`app.json` `userInterfaceStyle: "light"`).
  */
 export type Preferences = { showDebug: boolean; showMiniMap: boolean };
 

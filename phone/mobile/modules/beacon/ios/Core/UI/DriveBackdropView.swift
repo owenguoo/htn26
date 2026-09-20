@@ -13,9 +13,8 @@ import SwarmCore
 ///
 /// **It is a backdrop, not a game.** A floor grid on the room's own metre
 /// lines, the room's bounds, and the stage wall are enough to answer "which way
-/// am I facing"; everything is drawn in the mini-map's own palette at low
-/// contrast so it stays behind the HUD rather than competing with it. There is
-/// no texture, no lighting and no motion that is not the operator's.
+/// am I facing". Drawn light (`DriveInk`) so the Simulator rehearsal reads as a
+/// room, not a dark camera feed; the HUD chrome over it stays dark on its own.
 ///
 /// Nothing here is new plumbing: `overlay.room` and `overlay.roomPose` are
 /// already on every `OverlayFrame`.
@@ -26,6 +25,9 @@ struct DriveBackdropView: View {
     let room: HubRoom?
     /// Where the operator has driven to. nil before the first pose.
     let pose: RoomPose?
+    /// The confirmed person, at the same room coordinate used by the compass
+    /// and mini-map. nil until the hub has actually found someone.
+    let candidate: PingCue?
 
     private var width: Double { max(1, room?.width ?? DriveBounds.roomJSON.width) }
     private var depth: Double { max(1, room?.depth ?? DriveBounds.roomJSON.depth) }
@@ -52,12 +54,11 @@ struct DriveBackdropView: View {
             }
         }
         .background(
-            // As dark as the feed it stands in for, so the HUD's contrast is
-            // the same thing in the Simulator as it is on a device.
-            LinearGradient(colors: [Color(red: 0.05, green: 0.07, blue: 0.16), .hudVoid],
+            // Light rehearsal room — not a dark camera stand-in. HUD chrome
+            // over this still pins itself dark with `cameraChrome()`.
+            LinearGradient(colors: [DriveInk.skyTop, DriveInk.skyBottom],
                            startPoint: .top, endPoint: .bottom)
         )
-        .cameraChrome()
         .ignoresSafeArea()
         // The whole point is that `DriveLookLayer` underneath gets the drag.
         .allowsHitTesting(false)
@@ -71,11 +72,11 @@ struct DriveBackdropView: View {
     private func draw(_ context: inout GraphicsContext, camera: RoomCamera) {
         let halfWidth = width / 2
 
-        // The floor, darker than the space above it. The horizon then needs no
-        // line of its own: it is where the two meet.
+        // The floor, a shade darker than the sky so the horizon reads without
+        // an extra line.
         if let floor = camera.polygon([(-halfWidth, 0, 0), (halfWidth, 0, 0),
                                        (halfWidth, depth, 0), (-halfWidth, depth, 0)]) {
-            context.fill(floor, with: .color(MapInk.floor))
+            context.fill(floor, with: .color(DriveInk.floor))
         }
 
         // Metre lines, on the room's own grid — the same numbers the mini-map
@@ -91,17 +92,18 @@ struct DriveBackdropView: View {
             camera.add(&grid, from: (-halfWidth, row, 0), to: (halfWidth, row, 0))
             row += 1
         }
-        context.stroke(grid, with: .color(.white.opacity(0.13)), lineWidth: 1)
+        context.stroke(grid, with: .color(DriveInk.grid), lineWidth: 1)
+
+        drawRehearsalScene(&context, camera: camera)
 
         // The stage wall: the one landmark that makes "facing the stage"
-        // unambiguous without reading anything. Same fill the mini-map gives
-        // the stage, so the two pictures name it the same way.
+        // unambiguous without reading anything.
         let stageWidth = min(width, room?.stage?.width ?? width * 0.4)
         let stageHalf = stageWidth / 2
         if let band = camera.polygon([(-stageHalf, 0, 0), (stageHalf, 0, 0),
                                       (stageHalf, 0, Self.wallHeight), (-stageHalf, 0, Self.wallHeight)]) {
-            context.fill(band, with: .color(MapInk.stage.opacity(0.22)))
-            context.stroke(band, with: .color(MapInk.outline.opacity(0.5)), lineWidth: 1.5)
+            context.fill(band, with: .color(DriveInk.stage))
+            context.stroke(band, with: .color(DriveInk.outline.opacity(0.7)), lineWidth: 1.5)
             label(&context, in: band.boundingRect)
         }
         // The stage platform's own footprint, so its depth is visible from the
@@ -111,7 +113,7 @@ struct DriveBackdropView: View {
             camera.add(&footprint, from: (-stageHalf, stage.depth, 0), to: (stageHalf, stage.depth, 0))
             camera.add(&footprint, from: (-stageHalf, 0, 0), to: (-stageHalf, stage.depth, 0))
             camera.add(&footprint, from: (stageHalf, 0, 0), to: (stageHalf, stage.depth, 0))
-            context.stroke(footprint, with: .color(MapInk.outline.opacity(0.35)), lineWidth: 1)
+            context.stroke(footprint, with: .color(DriveInk.outline.opacity(0.5)), lineWidth: 1)
         }
 
         // The room's bounds, floor line and wall top, so a wall arrives before
@@ -123,7 +125,187 @@ struct DriveBackdropView: View {
             camera.add(&walls, from: (a.0, a.1, Self.wallHeight), to: (b.0, b.1, Self.wallHeight))
             camera.add(&walls, from: (a.0, a.1, 0), to: (a.0, a.1, Self.wallHeight))
         }
-        context.stroke(walls, with: .color(MapInk.outline.opacity(0.28)), lineWidth: 1)
+        context.stroke(walls, with: .color(DriveInk.outline.opacity(0.4)), lineWidth: 1)
+    }
+
+    /// A repeatable, deliberately varied room for exercising the drive mode.
+    ///
+    /// The people cover stage-left, right aisle and rear-room bearings. The
+    /// props give the simulated camera enough landmarks to make turning and
+    /// walking legible without pretending this wireframe is a real camera
+    /// feed. Nothing here participates in search logic: the highlighted person
+    /// below is placed from the hub's real `world.candidate` coordinate.
+    private func drawRehearsalScene(_ context: inout GraphicsContext, camera: RoomCamera) {
+        let people: [(x: Double, y: Double)] = [
+            (-width * 0.24, depth * 0.32),
+            (width * 0.27, depth * 0.52),
+            (-width * 0.08, depth * 0.78),
+        ]
+        for person in people {
+            drawPerson(&context, camera: camera, x: person.x, y: person.y,
+                       color: DriveInk.person)
+        }
+
+        drawTable(&context, camera: camera, x: width * 0.22, y: depth * 0.28,
+                  color: DriveInk.prop)
+        drawChair(&context, camera: camera, x: -width * 0.30, y: depth * 0.48,
+                  color: DriveInk.prop)
+        drawBox(&context, camera: camera, x: width * 0.31, y: depth * 0.67,
+                width: 0.9, depth: 0.55, height: 0.65, color: DriveInk.prop)
+        drawBackpack(&context, camera: camera, x: -width * 0.20, y: depth * 0.64,
+                     color: DriveInk.prop)
+        drawCone(&context, camera: camera, x: width * 0.06, y: depth * 0.42,
+                 color: DriveInk.prop)
+
+        if let candidate {
+            let metres = candidate.distance.map { String(format: " · %.1f m", Double($0)) } ?? ""
+            drawPerson(&context, camera: camera, x: candidate.x, y: candidate.y,
+                       color: HUDStyle.detection, label: "FOUND PERSON\(metres)")
+        }
+    }
+
+    private func drawPerson(_ context: inout GraphicsContext, camera: RoomCamera,
+                            x: Double, y: Double, color: Color, label: String? = nil) {
+        // Same figure as `web/scene3d.js` `makePerson`: CapsuleGeometry(0.2, 0.8)
+        // centred at height 0.8, SphereGeometry(0.14) at 1.62, RingGeometry(0.32, 0.4)
+        // on the floor. Drawn filled so it reads as the 3D mesh, not a stick figure.
+        drawFloorRing(&context, camera: camera, x: x, y: y, inner: 0.32, outer: 0.4,
+                      color: color.opacity(0.6))
+
+        // Capsule mid-section runs 0.4…1.2 (hemispheres of radius 0.2 on each end).
+        if let bottom = camera.point((x, y, 0.4)), let top = camera.point((x, y, 1.2)) {
+            let radius = camera.projectedRadius(at: (x, y, 0.8), metres: 0.2)
+            if let body = stadium(from: bottom, to: top, radius: radius) {
+                context.fill(body, with: .color(color))
+            }
+        }
+
+        if let head = camera.point((x, y, 1.62)) {
+            let radius = camera.projectedRadius(at: (x, y, 1.62), metres: 0.14)
+            context.fill(Path(ellipseIn: CGRect(x: head.x - radius, y: head.y - radius,
+                                                width: radius * 2, height: radius * 2)),
+                         with: .color(color))
+            guard let label else { return }
+            let text = context.resolve(Text(label).font(.system(size: 11, weight: .heavy))
+                .foregroundStyle(HUDStyle.deepInk))
+            let measured = text.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
+            let badge = CGRect(x: head.x - measured.width / 2 - 6,
+                               y: head.y - radius - measured.height - 10,
+                               width: measured.width + 12, height: measured.height + 5)
+            context.fill(Path(roundedRect: badge, cornerRadius: badge.height / 2), with: .color(color))
+            context.draw(text, at: CGPoint(x: badge.midX, y: badge.midY))
+        }
+    }
+
+    /// Floor disc under a person — `RingGeometry(inner, outer)` in scene3d.
+    private func drawFloorRing(_ context: inout GraphicsContext, camera: RoomCamera,
+                               x: Double, y: Double, inner: Double, outer: Double, color: Color) {
+        let steps = 40
+        var outerPoints: [CGPoint] = []
+        var innerPoints: [CGPoint] = []
+        outerPoints.reserveCapacity(steps)
+        innerPoints.reserveCapacity(steps)
+        for i in 0..<steps {
+            let angle = Double(i) / Double(steps) * 2 * .pi
+            if let point = camera.point((x + outer * cos(angle), y + outer * sin(angle), 0.03)) {
+                outerPoints.append(point)
+            }
+            if let point = camera.point((x + inner * cos(angle), y + inner * sin(angle), 0.03)) {
+                innerPoints.append(point)
+            }
+        }
+        guard outerPoints.count >= 3, innerPoints.count >= 3 else { return }
+        var ring = Path()
+        ring.addLines(outerPoints)
+        ring.closeSubpath()
+        ring.addLines(innerPoints.reversed())
+        ring.closeSubpath()
+        context.fill(ring, with: .color(color), style: FillStyle(eoFill: true))
+    }
+
+    /// Screen-space stadium (capsule silhouette) between two projected centres.
+    private func stadium(from a: CGPoint, to b: CGPoint, radius: CGFloat) -> Path? {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let length = hypot(dx, dy)
+        guard length > 0.5, radius > 0.5 else { return nil }
+        let nx = -dy / length * radius, ny = dx / length * radius
+        let start = atan2(ny, nx)
+        var path = Path()
+        path.addArc(center: a, radius: radius, startAngle: .radians(start),
+                    endAngle: .radians(start + .pi), clockwise: false)
+        path.addArc(center: b, radius: radius, startAngle: .radians(start + .pi),
+                    endAngle: .radians(start + 2 * .pi), clockwise: false)
+        path.closeSubpath()
+        return path
+    }
+
+    private func drawTable(_ context: inout GraphicsContext, camera: RoomCamera,
+                           x: Double, y: Double, color: Color) {
+        let halfWidth = 0.75, halfDepth = 0.4, top = 0.78
+        var path = Path()
+        let corners = [(x - halfWidth, y - halfDepth), (x + halfWidth, y - halfDepth),
+                       (x + halfWidth, y + halfDepth), (x - halfWidth, y + halfDepth)]
+        for index in corners.indices {
+            let a = corners[index], b = corners[(index + 1) % corners.count]
+            camera.add(&path, from: (a.0, a.1, top), to: (b.0, b.1, top))
+            camera.add(&path, from: (a.0, a.1, 0), to: (a.0, a.1, top))
+        }
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
+    }
+
+    private func drawChair(_ context: inout GraphicsContext, camera: RoomCamera,
+                           x: Double, y: Double, color: Color) {
+        let half = 0.28, seat = 0.48, back = 1.05
+        var path = Path()
+        let corners = [(x - half, y - half), (x + half, y - half),
+                       (x + half, y + half), (x - half, y + half)]
+        for index in corners.indices {
+            let a = corners[index], b = corners[(index + 1) % corners.count]
+            camera.add(&path, from: (a.0, a.1, seat), to: (b.0, b.1, seat))
+            camera.add(&path, from: (a.0, a.1, 0), to: (a.0, a.1, seat))
+        }
+        camera.add(&path, from: (x - half, y + half, seat), to: (x - half, y + half, back))
+        camera.add(&path, from: (x + half, y + half, seat), to: (x + half, y + half, back))
+        camera.add(&path, from: (x - half, y + half, back), to: (x + half, y + half, back))
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
+    }
+
+    private func drawBox(_ context: inout GraphicsContext, camera: RoomCamera,
+                         x: Double, y: Double, width boxWidth: Double, depth boxDepth: Double,
+                         height: Double, color: Color) {
+        let x0 = x - boxWidth / 2, x1 = x + boxWidth / 2
+        let y0 = y - boxDepth / 2, y1 = y + boxDepth / 2
+        let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        var path = Path()
+        for index in corners.indices {
+            let a = corners[index], b = corners[(index + 1) % corners.count]
+            camera.add(&path, from: (a.0, a.1, 0), to: (b.0, b.1, 0))
+            camera.add(&path, from: (a.0, a.1, height), to: (b.0, b.1, height))
+            camera.add(&path, from: (a.0, a.1, 0), to: (a.0, a.1, height))
+        }
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
+    }
+
+    private func drawBackpack(_ context: inout GraphicsContext, camera: RoomCamera,
+                              x: Double, y: Double, color: Color) {
+        var path = Path()
+        camera.add(&path, from: (x - 0.28, y, 0), to: (x - 0.22, y, 0.66))
+        camera.add(&path, from: (x - 0.22, y, 0.66), to: (x, y, 0.82))
+        camera.add(&path, from: (x, y, 0.82), to: (x + 0.22, y, 0.66))
+        camera.add(&path, from: (x + 0.22, y, 0.66), to: (x + 0.28, y, 0))
+        camera.add(&path, from: (x - 0.28, y, 0), to: (x + 0.28, y, 0))
+        camera.add(&path, from: (x - 0.15, y, 0.72), to: (x + 0.15, y, 0.72))
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
+    }
+
+    private func drawCone(_ context: inout GraphicsContext, camera: RoomCamera,
+                          x: Double, y: Double, color: Color) {
+        var path = Path()
+        camera.add(&path, from: (x - 0.28, y, 0), to: (x, y, 0.7))
+        camera.add(&path, from: (x + 0.28, y, 0), to: (x, y, 0.7))
+        camera.add(&path, from: (x - 0.28, y, 0), to: (x + 0.28, y, 0))
+        camera.add(&path, from: (x - 0.17, y, 0.28), to: (x + 0.17, y, 0.28))
+        context.stroke(path, with: .color(color), lineWidth: 1.5)
     }
 
     /// "STAGE" across the band, but only when the band is big enough on screen
@@ -131,7 +313,7 @@ struct DriveBackdropView: View {
     private func label(_ context: inout GraphicsContext, in rect: CGRect) {
         guard rect.width > 90, rect.height > 24 else { return }
         context.draw(Text("STAGE").font(.system(size: 13, weight: .heavy))
-            .foregroundStyle(MapInk.outline.opacity(0.75)),
+            .foregroundStyle(DriveInk.stageLabel),
                      at: CGPoint(x: rect.midX, y: rect.midY))
     }
 }
@@ -180,6 +362,22 @@ private struct RoomCamera {
         let depth = max(v.z, Self.near)
         return CGPoint(x: Double(size.width) / 2 + v.x / depth * focal,
                        y: Double(size.height) / 2 - v.y / depth * focal)
+    }
+
+    func point(_ point: (Double, Double, Double)) -> CGPoint? {
+        let cameraPoint = view(point)
+        guard cameraPoint.z >= Self.near else { return nil }
+        return screen(cameraPoint)
+    }
+
+    /// A world-space radius expressed in screen points. Taking the larger of
+    /// the room x/y axes keeps billboard details visible from every heading.
+    func projectedRadius(at point: (Double, Double, Double), metres: Double) -> CGFloat {
+        guard let center = self.point(point) else { return 0 }
+        let x = self.point((point.0 + metres, point.1, point.2))
+        let y = self.point((point.0, point.1 + metres, point.2))
+        return max(2, max(x.map { hypot($0.x - center.x, $0.y - center.y) } ?? 0,
+                          y.map { hypot($0.x - center.x, $0.y - center.y) } ?? 0))
     }
 
     /// Appends one room-frame segment, clipped to the near plane.

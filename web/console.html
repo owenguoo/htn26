@@ -65,7 +65,10 @@
     .upload-zone:hover, .upload-zone.dragging { background: var(--accent-bg); border-color: var(--accent); }
     .upload-zone:disabled { opacity: .5; cursor: wait; }
     .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .search-panel input, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
+    .search-panel input, .search-panel select, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
+    .scenario-tools { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .scenario-tools label { color: var(--fg-2); font-size: 13px; }
+    #rehearsalScenario { min-width: 174px; height: 32px; padding: 0 30px 0 10px; }
     #referencePreview { max-width: 100%; max-height: 280px; margin-top: 12px; }
     #personChoices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     #searchMessage:empty { display: none; }
@@ -180,8 +183,28 @@
     .scan-controls button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; }
     #scanStatus { font-size: 12px; color: var(--fg-2); }
     #mapStatus:empty { display: none; }
-    #mapWrap { position: relative; height: 480px; }
+    #mapWrap { position: relative; height: 480px; overflow: hidden; background:
+      radial-gradient(circle at 50% 45%, #fbfdfb 0, #f1f7f3 72%, #e8f1eb 100%); }
     #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #mapWrap.mode-3d .map-legend, #mapWrap.mode-3d .map-scale { display: none; }
+    .map-legend { --map-marker-size: 22px; --map-marker-stroke: 2px; position: absolute; left: 14px; bottom: 14px;
+      display: flex; align-items: center; gap: 16px; padding: 8px 10px; border: 1px solid rgba(179,206,189,.75); border-radius: 7px;
+      background: rgba(255,255,255,.88); box-shadow: 0 4px 18px rgba(23,55,38,.08);
+      color: var(--fg-2); font-size: 11px; pointer-events: none; backdrop-filter: blur(6px); }
+    .map-legend span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .map-key { position: relative; display: inline-block; flex: 0 0 auto; width: var(--map-marker-size); height: var(--map-marker-size);
+      border: var(--map-marker-stroke) solid #fff;
+      border-radius: 50%; background: var(--accent); box-shadow: 0 1px 4px rgba(23,55,38,.18); }
+    .map-key.sighting, .map-key.rescued { background: #fff; box-shadow: none; }
+    .map-key.sighting { color: #d97706; border-color: #d97706; }
+    .map-key.rescued { color: var(--red); border-color: var(--red); }
+    .map-key.sighting::before, .map-key.rescued::before { content: ""; position: absolute; left: 50%; top: 4px;
+      width: 5px; height: 5px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
+    .map-key.sighting::after, .map-key.rescued::after { content: ""; position: absolute; left: 50%; bottom: 3px;
+      width: 9px; height: 6px; border-radius: 4px; background: currentColor; transform: translateX(-50%); }
+    .map-scale { position: absolute; right: 14px; bottom: 14px; display: flex; align-items: flex-end; gap: 6px;
+      color: var(--fg-3); font: 10px var(--mono); pointer-events: none; }
+    .map-scale i { display: block; width: 56px; height: 6px; border: solid var(--fg-3); border-width: 0 1px 1px; }
 
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .row + .row { margin-top: 14px; }
@@ -293,7 +316,7 @@
     .viewer { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; padding: 32px;
       background: rgba(0,0,0,0.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
     .viewer.on { display: grid; }
-    .vbox { width: min(1040px, 100%); max-height: 100%; display: flex; flex-direction: column;
+    .vbox { width: min(1040px, 100%); height: min(88dvh, 960px); max-height: 100%; display: flex; flex-direction: column;
       background: var(--bg); border: 1px solid var(--line-2); border-radius: 14px; overflow-x: hidden; overflow-y: auto;
       box-shadow: 0 30px 80px rgba(0,0,0,0.6); animation: vIn .18s ease-out; }
     @keyframes vIn { from { opacity: 0; transform: scale(.98); } }
@@ -301,8 +324,8 @@
     .vh .num { font: 500 13px var(--mono); padding: 2px 8px; border-radius: 6px; background: var(--bg-3); }
     .vh { flex-shrink: 0; }
     .vh b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 180px; flex-shrink: 0; }
-    .vimg img { display: block; max-width: 100%; max-height: min(66vh, 720px); object-fit: contain; }
+    .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 320px; flex: 1 1 0; overflow: hidden; }
+    .vimg img { display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
     .vimg .live { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px;
       font: 500 11px var(--mono); padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; }
     .vimg .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: breathe 1s infinite; }
@@ -329,11 +352,12 @@
     #analysisMeta { overflow-wrap: anywhere; }
     @media (max-width: 640px) {
       .viewer { padding: 12px; }
+      .vbox { height: calc(100dvh - 24px); }
       .vh { gap: 6px; padding: 0 10px; }
       .vh .vfoot, #vDevice, #vHide { display: none; }
       .vstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .vstats div { border-bottom: 1px solid var(--line); }
-      .vimg img { max-height: 40vh; }
+      .vimg { min-height: 240px; }
     }
     /* activity */
     #log { max-height: 180px; overflow: auto; }
@@ -418,7 +442,10 @@
               <button type="button" data-mode="3d" aria-pressed="false">3D map</button>
             </div>
 </div>
-          <div id="mapWrap"><canvas id="map"></canvas><div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
+          <div id="mapWrap"><canvas id="map" aria-label="Live search map"></canvas>
+            <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span></div>
+            <div class="map-scale" aria-hidden="true"><i></i><span>5 m</span></div>
+            <div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
           <p id="mapStatus" role="status"></p>
           <div class="scan-controls">
             <button type="button" id="scanToggle" aria-pressed="false">Start scan</button>
@@ -444,6 +471,8 @@
               <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" aria-label="Upload photo" hidden>
               <button class="upload-zone" type="button" id="uploadPhoto"><strong>Drop a photo here</strong><span>or click to choose</span></button>
               <button class="btn" id="clearReference" type="button" hidden>Clear</button>
+              <button class="btn" id="rehearsalMode" type="button">Use rehearsal mode</button>
+              <span class="scenario-tools"><label for="rehearsalScenario">Scenario</label><select id="rehearsalScenario" aria-label="Rehearsal scenario"></select><button class="btn primary" id="runScenario" type="button">Run scenario</button></span>
 </div>
               <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
             </fieldset>

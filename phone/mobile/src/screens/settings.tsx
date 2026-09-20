@@ -37,9 +37,7 @@ const MIC_STATUS: Record<MicState, string> = {
   speaking: 'sending',
 };
 
-const MIC_FOOTER: Record<MicState, string> = {
-  unavailable:
-    'No microphone on this session — either it is a replay, or the prompt was declined. iOS Settings › Beacon can grant it.',
+const MIC_FOOTER: Partial<Record<MicState, string>> = {
   muted: 'Off. Nothing is captured while this is off, and the hub was told your last sentence had ended.',
   idle: 'Listening. Nothing leaves the phone until you speak; quiet room audio is never sent.',
   speaking: 'Sending. The operator sees what you say as a live caption. Used live, never stored.',
@@ -111,7 +109,9 @@ export default function Settings() {
         <Section
           title="Voice"
           footer={
-            <Text modifiers={[font({ textStyle: textStyles.footnote })]}>{MIC_FOOTER[micState]}</Text>
+            MIC_FOOTER[micState] ? (
+              <Text modifiers={[font({ textStyle: textStyles.footnote })]}>{MIC_FOOTER[micState]}</Text>
+            ) : undefined
           }>
           <Toggle
             label="Microphone"

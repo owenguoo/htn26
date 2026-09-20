@@ -2,7 +2,7 @@ import Foundation
 
 /// The htn26 hub's phone protocol, as spoken on `/ws/phone`.
 ///
-/// Source of truth: `swarm/hub.py`, `swarm/protocol.py` and `web/phone.js` at the
+/// Source of truth: `swarm/hub.py` and `swarm/protocol.py` at the
 /// repo root. **The hub wins.** Nothing here is negotiated; this file mirrors
 /// what the hub already does so a native phone is indistinguishable from a web
 /// one.
