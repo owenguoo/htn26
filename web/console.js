@@ -1262,8 +1262,10 @@ function drawHazards() {
     ctx.fillStyle = '#fef3c7'; ctx.strokeStyle = '#b45309'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.moveTo(x, y - 11); ctx.lineTo(x + 11, y + 9);
     ctx.lineTo(x - 11, y + 9); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#92400e'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('!', x, y + 5);
+    // Fixed geometry keeps the symbol inside the triangle regardless of canvas text state.
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(x - 1, y - 3, 2, 6);
+    ctx.fillRect(x - 1, y + 5, 2, 2);
     ctx.restore();
   }
 }

@@ -23,7 +23,9 @@ def test_normalization_rejects_misaligned_model_outputs():
 
 def test_yolo_reuses_superset_prompt_without_leaking_other_classes():
     from types import SimpleNamespace
+
     from PIL import Image
+
     from beacon.backends import YoloDetector
 
     class Values:
@@ -41,7 +43,8 @@ def test_yolo_reuses_superset_prompt_without_leaking_other_classes():
             self.calls.append(labels)
         def predict(self, images, **kwargs):
             return [SimpleNamespace(names={0: 'person', 1: 'chair'}, boxes=SimpleNamespace(
-                xyxy=Values([[1, 1, 9, 9], [2, 2, 8, 8]]), conf=Values([.9, .8]), cls=Values([0, 1])))]
+                xyxy=Values([[1, 1, 9, 9], [2, 2, 8, 8]]),
+                conf=Values([.9, .8]), cls=Values([0, 1])))]
 
     detector = YoloDetector.__new__(YoloDetector)
     detector.model = Model()

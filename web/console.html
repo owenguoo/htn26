@@ -192,7 +192,7 @@
       border: var(--map-marker-stroke) solid #fff;
       border-radius: 50%; background: var(--accent); box-shadow: 0 1px 4px rgba(23,55,38,.18); }
     .map-key.sighting, .map-key.rescued { background: #fff; box-shadow: none; }
-    .map-key.hazard { background: #fef3c7; border-color: #b45309; border-radius: 4px; }
+    .hazard-key { flex: 0 0 auto; width: 24px; height: 24px; }
     .map-key.sighting { color: #d97706; border-color: #d97706; }
     .map-key.rescued { color: var(--red); border-color: var(--red); }
     .map-key.marker { border-radius: 5px; background: #6b4fbb; }
@@ -497,7 +497,7 @@
           <div id="mapWrap"><canvas id="map" aria-label="Live search map"></canvas>
             <div class="map-scale" aria-hidden="true"><i></i><span></span></div>
             <div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
-          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span><span id="heatLegend">Cleared<i class="heat-scale"></i>Likely here</span></div>
+          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span><span><svg class="hazard-key" viewBox="-12 -12 24 24" aria-hidden="true"><path d="M0 -11L11 9H-11Z" fill="#fef3c7" stroke="#b45309" stroke-width="2"/><path d="M-1 -3h2v6h-2zM-1 5h2v2h-2z" fill="#92400e"/></svg>Hazard</span><span id="heatLegend">Cleared<i class="heat-scale"></i>Likely here</span></div>
           <p id="mapStatus" role="status"></p>
           <div class="scan-controls">
             <button type="button" id="scanToggle" aria-pressed="false">Start scan</button>
