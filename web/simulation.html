@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Beacon · Simulation</title>
+  <link rel="icon" type="image/png" href="/web/beacon_logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* Same tokens as web/console.html on main: flat chrome, square corners. */
+    :root {
+      --bg: #f5faf6; --bg-1: #edf6ef; --bg-2: #e2f0e6; --bg-3: #d4e7da;
+      --surface: #fff; color-scheme: light;
+      --line: #d5e5da; --line-2: #b3cebd;
+      --fg: #173726; --fg-2: #466653; --fg-3: #597562;
+      --accent: #18834b; --accent-hover: #126b3c; --accent-bg: #e0f5e7;
+      --red: #b72f36; --red-bg: #fcebed; --amber: #d97706; --amber-bg: #fef3c7;
+      --crew-a: #2a7fc0; --crew-b: #6b4fbb;
+      --sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      --r: 0px; --r-sm: 0px; --r-dot: 50%;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans);
+      -webkit-font-smoothing: antialiased; }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .muted { color: var(--fg-2); }
+    .faint { color: var(--fg-3); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    input, select { accent-color: var(--accent); }
+
+    /* shell */
+    .wrap { margin: 0 auto; padding: 0 24px 40px; }
+    header { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,0.94); backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+    .bar { padding: 0 24px; height: 64px; display: flex; align-items: center; gap: 10px; }
+    .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
+    .logo img { display: block; width: 44px; height: 44px; object-fit: contain; }
+    .slash { color: var(--line-2); font-weight: 300; font-size: 20px; }
+    .spacer { flex: 1; }
+    .bar-sep { flex: none; width: 1px; height: 26px; background: var(--line); margin: 0 2px; }
+
+    .btn { height: 34px; padding: 0 12px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: var(--bg);
+      font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+      transition: background .15s, border-color .15s; }
+    .btn:hover { background: var(--bg-2); border-color: var(--accent); }
+    .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); padding: 0 16px; }
+    .btn.primary:hover { background: var(--accent-hover); }
+    .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
+    .btn:disabled { opacity: .4; cursor: default; }
+    select, input[type="number"] { font: inherit; font-size: 13px; color: var(--fg); background: var(--bg-1);
+      border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 0 10px; height: 34px; }
+    select { appearance: none; -webkit-appearance: none; padding-right: 30px; background-image:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none' stroke='%23466653' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 10px center; }
+    input[type="number"] { width: calc(8ch + 22px); font-family: var(--mono); -moz-appearance: textfield; appearance: textfield; }
+    input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    .field { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-2); }
+
+    .overview { padding: 20px 0 16px; display: flex; align-items: center; gap: 16px; }
+    .overview h1 { margin: 0; font-size: 24px; letter-spacing: -.03em; }
+    #status { font-size: 13px; color: var(--fg-3); }
+    #status:empty { display: none; }
+
+    /* metrics */
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: var(--r);
+      background: var(--bg-1); margin-bottom: 16px; }
+    .metric { padding: 14px 18px; border-left: 1px solid var(--line); min-width: 0; }
+    .metric:first-child { border-left: 0; }
+    .metric .k { font-size: 12px; color: var(--fg-2); }
+    .metric .v { font: 500 24px var(--mono); letter-spacing: -0.03em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+    /* cards */
+    .card { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); min-width: 0; }
+    .card-h { height: 52px; padding: 0 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+    .card-h h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+    .card-b { padding: 16px; }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card.rl .card-h { background: var(--accent-bg); }
+    .card.rl .card-h h2 { color: var(--accent-hover); }
+
+    /* map */
+    canvas.map { display: block; width: 100%; aspect-ratio: 48 / 25; background: #f7faf8; }
+    .log { height: 156px; overflow: auto; border-top: 1px solid var(--line); }
+    .ev { display: grid; grid-template-columns: 44px 1fr; gap: 8px; padding: 6px 16px; border-bottom: 1px solid var(--line);
+      font-size: 12px; }
+    .ev:last-child { border-bottom: 0; }
+    .ev time { font: 12px var(--mono); color: var(--fg-3); }
+    .ev b { font-weight: 500; font-family: var(--mono); margin-right: 4px; }
+    .ev.done { color: var(--fg-3); }
+    .empty { padding: 20px 16px; color: var(--fg-3); font-size: 13px; }
+
+    /* transport + legend: one strip under the two maps */
+    .strip { margin-top: 16px; border: 1px solid var(--line); background: var(--surface); }
+    .transport { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+    .transport input[type="range"] { flex: 1; min-width: 0; }
+    .transport select { height: 28px; font-size: 12px; padding-right: 26px; background-position: right 8px center; }
+    .transport .clock { font: 500 14px var(--mono); min-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
+    .map-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; padding: 10px 16px;
+      border-top: 1px solid var(--line); background: var(--bg-1); color: var(--fg-2); font-size: 12px; }
+    .map-legend span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .key { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--crew-a); border: 2px solid #fff;
+      box-shadow: 0 1px 4px rgba(23,55,38,.18); }
+    .key.b { background: var(--crew-b); }
+    .key.busy { background: var(--amber); }
+    .key.found { background: #fff; border: 2px solid var(--red); box-shadow: none; }
+    .key.belief { border-radius: 3px; border: 0; box-shadow: none; width: 40px;
+      background: linear-gradient(90deg, rgba(24,131,75,.04), rgba(24,131,75,.5)); }
+    .key.hazard { border-radius: 3px; border: 1px solid #e0b64a; box-shadow: none;
+      background: repeating-linear-gradient(135deg, rgba(217,119,6,.35) 0 2px, rgba(217,119,6,.06) 2px 6px); }
+    .key.looked { border-radius: 3px; border: 0; box-shadow: none; background: rgba(24,131,75,.34); }
+    .key.cas { background: #fff; border: 2px dashed var(--fg-3); box-shadow: none; }
+    .ev.hot { color: var(--red); }
+    .ev.hot b { color: var(--red); }
+
+    /* results */
+    .three { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; margin-top: 16px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: right; font-weight: 500; font-size: 12px; color: var(--fg-3); padding: 8px 16px; }
+    td { text-align: right; padding: 8px 16px; border-top: 1px solid var(--line); font-family: var(--mono);
+      font-variant-numeric: tabular-nums; }
+    th:first-child, td:first-child { text-align: left; }
+    td:first-child { font-family: var(--sans); color: var(--fg-2); }
+    tr.selected td { color: var(--accent-hover); font-weight: 500; background: var(--accent-bg); }
+    tr.selected td:first-child { font-weight: 600; }
+    canvas#curve { display: block; width: 100%; height: 240px; }
+
+    @media (max-width: 1100px) { .three { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(2, 1fr); }
+      .metric:nth-child(3) { border-left: 0; } .metric:nth-child(n+3) { border-top: 1px solid var(--line); } }
+    @media (max-width: 900px) { .pair { grid-template-columns: 1fr; } .bar { flex-wrap: wrap; height: auto; padding: 10px 16px; }
+      .wrap { padding: 0 16px 32px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="logo"><img src="/web/beacon_logo.png" width="44" height="44" alt="">Beacon</div>
+      <span class="slash">/</span>
+      <span class="muted">Simulation</span>
+      <span class="spacer"></span>
+      <label class="field">Seed <input id="seed" type="number" min="0" aria-label="Incident seed"></label>
+      <button class="btn" id="random" type="button">New</button>
+      <span class="bar-sep" aria-hidden="true"></span>
+      <button class="btn primary" id="run" type="button">Run comparison</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div class="overview">
+      <h1>Baseline vs RL</h1>
+      <span class="spacer"></span>
+      <span id="status">Loading…</span>
+    </div>
+
+    <div class="metrics" aria-label="Measured on unseen incidents">
+      <div class="metric"><div class="k">More people rescued than greedy</div><div class="v" id="uplift">—</div></div>
+      <div class="metric"><div class="k">Won</div><div class="v" id="won">—</div></div>
+      <div class="metric"><div class="k">Lost</div><div class="v" id="lost">—</div></div>
+      <div class="metric"><div class="k">Avg time per decision</div><div class="v" id="latency">—</div></div>
+    </div>
+
+    <section class="pair">
+      <div class="card" id="before">
+        <div class="card-h"><h2 id="before-title">Bayesian greedy</h2></div>
+        <canvas class="map" width="960" height="500" aria-label="Baseline replay"></canvas>
+        <div class="log"><div class="empty">Ready</div></div>
+      </div>
+      <div class="card rl" id="trained">
+        <div class="card-h"><h2>RL commander</h2></div>
+        <canvas class="map" width="960" height="500" aria-label="RL commander replay"></canvas>
+        <div class="log"><div class="empty">Ready</div></div>
+      </div>
+    </section>
+
+    <div class="strip">
+      <div class="transport">
+        <button class="btn sm" id="play" type="button" disabled>Play</button>
+        <input id="scrub" type="range" min="0" max="140" step="0.1" value="0" disabled aria-label="Time in the run">
+        <select id="speed" aria-label="Playback speed">
+          <option value="2">2×</option><option value="5">5×</option><option value="10">10×</option><option value="20" selected>20×</option>
+        </select>
+        <span class="clock" id="time">0:00 / 0:00</span>
+      </div>
+      <div class="map-legend" aria-label="Legend">
+        <span><i class="key"></i>Responder</span><span><i class="key busy"></i>Clearing hazard</span>
+        <span><i class="key belief"></i>Where the people probably are</span><span><i class="key looked"></i>Looked</span>
+        <span><i class="key cas"></i>Casualty (hidden)</span><span><i class="key found"></i>Found</span><span><i class="key hazard"></i>Hazard zone</span>
+      </div>
+    </div>
+
+    <section class="three">
+      <div class="card">
+        <div class="card-h"><h2>Policies</h2><span class="spacer"></span><span class="faint" id="deadline"></span></div>
+        <table>
+          <thead><tr><th>Policy</th><th>Rescues</th><th>All 3</th><th>Decision</th></tr></thead>
+          <tbody id="results"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="card-h"><h2>Training</h2><span class="spacer"></span><span class="faint" id="training"></span></div>
+        <canvas id="curve" aria-label="Rescues per incident on the development set, by PPO update"></canvas>
+
+      </div>
+    </section>
+  </main>
+
+  <script>
+    let report, runData, t = 0, playing = false, last = performance.now();
+    const $ = (id) => document.getElementById(id);
+    const names = {
+      greedy: 'Bayesian greedy', 'prepare-first': 'Hazard clearance first',
+      'lookahead-4': '4-step lookahead', 'lookahead-10': '10-step lookahead', trained: 'RL commander',
+    };
+    const CREW = ['#2a7fc0', '#2a7fc0'];
+    const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+    const deadline = () => runData?.before.deadline ?? 140;
+
+    function context(c) {
+      const d = devicePixelRatio || 1;
+      if (c.width !== 960 * d) { c.width = 960 * d; c.height = 500 * d; }
+      const ctx = c.getContext('2d');
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+      return ctx;
+    }
+
+    // Static geometry, built once from the report: wall and furniture paths, one
+    // floor path per searchable room (flood fill bounded by walls and doors), and
+    // the hatch pattern for the hazard zone.
+    const geo = {};
+    function buildGeometry() {
+      const env = report.environment, grid = env.grid, cs = env.cell * 20, rows = grid.length, cols = grid[0].length;
+      geo.walls = new Path2D(); geo.doors = new Path2D(); geo.furniture = []; geo.cols = cols; geo.rows = rows; geo.cs = cs;
+      // Floor regions bounded by walls and doors: a view cone is clipped to the
+      // region its owner stands in, so nobody sees through a wall.
+      geo.regions = []; geo.regionOf = new Int16Array(rows * cols).fill(-1);
+      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+        if (geo.regionOf[y * cols + x] >= 0 || !'.o'.includes(grid[y][x])) continue;
+        const id = geo.regions.length, path = new Path2D(), stack = [[x, y]];
+        while (stack.length) {
+          const [a, b] = stack.pop(), key = b * cols + a;
+          if (a < 0 || b < 0 || a >= cols || b >= rows || geo.regionOf[key] >= 0 || !'.o'.includes(grid[b][a])) continue;
+          geo.regionOf[key] = id; path.rect(a * cs, b * cs, cs + 0.5, cs + 0.5);
+          stack.push([a + 1, b], [a - 1, b], [a, b + 1], [a, b - 1]);
+        }
+        geo.regions.push(path);
+      }
+      const seenF = new Set();
+      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+        const ch = grid[y][x];
+        if (ch === '#') geo.walls.rect(x * cs, y * cs, cs + 0.5, cs + 0.5);
+        else if (ch === 'd') geo.doors.rect(x * cs, y * cs, cs + 0.5, cs + 0.5);
+        else if (ch === 'o' && !seenF.has(y * cols + x)) {
+          // One path per furniture block, so a seed can leave some of them out.
+          const block = new Path2D(), stack = [[x, y]];
+          while (stack.length) {
+            const [a, b] = stack.pop(), key = b * cols + a;
+            if (a < 0 || b < 0 || a >= cols || b >= rows || seenF.has(key) || grid[b][a] !== 'o') continue;
+            seenF.add(key); block.rect(a * cs, b * cs, cs + 0.5, cs + 0.5);
+            stack.push([a + 1, b], [a - 1, b], [a, b + 1], [a, b - 1]);
+          }
+          geo.furniture.push(block);
+        }
+      }
+      // A serpentine sweep through each room's clear aisles: the route a
+      // responder walks while searching it, so the whole room gets looked at.
+      const sweepOf = (seen, minX, maxX, minY, maxY) => {
+        const rowsOK = [];
+        for (let y = minY; y <= maxY; y++) {
+          let lo = -1, hi = -1;
+          for (let x = minX; x <= maxX; x++) if (seen.has(y * cols + x)) { if (lo < 0) lo = x; hi = x; }
+          if (lo < 0 || hi - lo < 3) continue;
+          let clean = true;
+          for (let x = lo; x <= hi; x++) if (!seen.has(y * cols + x) || grid[y][x] === 'o') { clean = false; break; }
+          if (clean) rowsOK.push({ y, lo, hi });
+        }
+        const picked = [];
+        for (const r of rowsOK) if (!picked.length || r.y - picked.at(-1).y >= 3) picked.push(r);
+        if (!picked.length) return null;
+        const pts = [];
+        picked.forEach((r, i) => {
+          const a = [(r.lo + 1) * env.cell, (r.y + .5) * env.cell], b = [(r.hi) * env.cell, (r.y + .5) * env.cell];
+          pts.push(...(i % 2 ? [b, a] : [a, b]));
+        });
+        return pts;
+      };
+      geo.rooms = report.locations.slice(0, 8).map((loc) => {
+        const seen = new Set(), path = new Path2D();
+        const sx = Math.floor(loc.x / env.cell), sy = Math.floor(loc.y / env.cell);
+        const stack = [[sx, sy]];
+        let minX = cols, maxX = 0, minY = rows, maxY = 0;
+        while (stack.length) {
+          const [x, y] = stack.pop(), key = y * cols + x;
+          if (x < 0 || y < 0 || x >= cols || y >= rows || seen.has(key)) continue;
+          const ch = grid[y][x];
+          if (ch !== '.' && ch !== 'o') continue;
+          seen.add(key); path.rect(x * cs, y * cs, cs + 0.5, cs + 0.5);
+          minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+          stack.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+        }
+        return { path, cx: ((minX + maxX + 1) / 2) * cs, cy: ((minY + maxY + 1) / 2) * cs, top: minY * cs, bottom: (maxY + 1) * cs,
+          sweep: sweepOf(seen, minX, maxX, minY, maxY) };
+      });
+      const tile = document.createElement('canvas'); tile.width = tile.height = 10;
+      const tc = tile.getContext('2d');
+      tc.strokeStyle = 'rgba(217,119,6,.45)'; tc.lineWidth = 1.6;
+      tc.beginPath(); tc.moveTo(-2, 12); tc.lineTo(12, -2); tc.moveTo(-2, 2); tc.lineTo(2, -2); tc.moveTo(8, 12); tc.lineTo(12, 8); tc.stroke();
+      geo.hatch = tc.createPattern(tile, 'repeat');
+      // The hazard zone is the wing that holds the restricted rooms.
+      const wing = geo.rooms.slice(4);
+      geo.hazard = { x: 20, y: 20, w: 40 * 20 - 20, h: Math.max(...wing.map((r) => r.bottom)) - 20 };
+    }
+
+    // Presentation only: each seed mirrors the plan, drops some furniture,
+    // renames rooms and sends two to five responders, so replays don't all
+    // look alike. Responders who share orders walk together.
+    // Routes, timings and outcomes are the real ones.
+    const ROOM_NAMES = ['Ward A', 'Ward B', 'Office', 'Lab', 'Kitchen', 'Break room', 'Workshop', 'Server room',
+      'Records', 'Lounge', 'Clinic', 'Classroom', 'Studio', 'Supply', 'Archive', 'Meeting room'];
+    let view = null;
+    function applyVariation(seed) {
+      let a = (seed >>> 0) || 1;
+      const rng = () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+      const flipX = rng() < 0.5, flipY = rng() < 0.5;
+      const m = new DOMMatrix([flipX ? -1 : 1, 0, 0, flipY ? -1 : 1, flipX ? 960 : 0, flipY ? 500 : 0]);
+      const T = (x, y) => [flipX ? 960 - x : x, flipY ? 500 - y : y];
+      const names = [...ROOM_NAMES];
+      for (let i = names.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [names[i], names[j]] = [names[j], names[i]]; }
+      const walls = new Path2D(); walls.addPath(geo.walls, m);
+      const doors = new Path2D(); doors.addPath(geo.doors, m);
+      const furniture = new Path2D();
+      geo.furniture.forEach((block) => { if (rng() > 0.3) furniture.addPath(block, m); });
+      const rooms = geo.rooms.map((r) => {
+        const path = new Path2D(); path.addPath(r.path, m);
+        const [cx, cy] = T(r.cx, r.cy), ys = [T(0, r.top)[1], T(0, r.bottom)[1]];
+        return { path, cx, cy, top: Math.min(...ys), bottom: Math.max(...ys) };
+      });
+      const h = geo.hazard, c1 = T(h.x, h.y), c2 = T(h.x + h.w, h.y + h.h);
+      const hazard = { x: Math.min(c1[0], c2[0]), y: Math.min(c1[1], c2[1]), w: h.w, h: h.h };
+      const regions = geo.regions.map((r) => { const q = new Path2D(); q.addPath(r, m); return q; });
+      view = { T, walls, doors, furniture, rooms, hazard, regions, names: names.slice(0, 8),
+        team: (() => { const n = 2 + Math.floor(rng() * 4); return [Math.ceil(n / 2), Math.floor(n / 2)]; })(),
+        found: geo.rooms.map(() => 1 + (rng() < 0.35 ? 1 : 0)) };
+    }
+
+    function pathLengths(j) {
+      if (j._len) return j._len;
+      const L = [0];
+      for (let k = 1; k < j.path.length; k++) L.push(L.at(-1) + Math.hypot(j.path[k][0] - j.path[k - 1][0], j.path[k][1] - j.path[k - 1][1]));
+      return (j._len = L);
+    }
+    // Where a team is at `time`, which way it faces, and what it is doing.
+    // Positions are in plan metres; `view.T` maps them to the canvas.
+    function pose(row, team, time) {
+      const j = row.jobs.filter((k) => k.team === team && k.start <= time).at(-1);
+      if (!j || !j.path.length) return { pt: [24, 24], dir: [0, -1], job: j, moving: false, k: 0 };
+      const path = j.path, L = pathLengths(j), fraction = Math.min(1, (time - j.start) / (j.travel || 1e-6));
+      const target = fraction * L.at(-1);
+      let k = 1;
+      while (k < L.length && L[k] < target) k++;
+      k = Math.min(k, path.length - 1);
+      let pt = path[0], dir = [0, -1];
+      if (k > 0) {
+        const f = (target - L[k - 1]) / (L[k] - L[k - 1] || 1);
+        pt = [path[k - 1][0] + f * (path[k][0] - path[k - 1][0]), path[k - 1][1] + f * (path[k][1] - path[k - 1][1])];
+        const dx = path[k][0] - path[k - 1][0], dy = path[k][1] - path[k - 1][1], n = Math.hypot(dx, dy) || 1;
+        dir = [dx / n, dy / n];
+      }
+      const moving = fraction < 1 && time < j.end;
+      if (!moving && time < j.end && j.action < 8 && geo.rooms[j.action].sweep) {
+        // Searching a room: walk its sweep route from where the corridor route ended.
+        if (!j._sweep) {
+          const pts = [path.at(-1), ...geo.rooms[j.action].sweep], L = [0];
+          for (let i = 1; i < pts.length; i++) L.push(L.at(-1) + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+          j._sweep = { pts, L };
+        }
+        const { pts, L } = j._sweep, arrive = j.start + j.travel;
+        const p = Math.max(0, Math.min(1, (time - arrive) / Math.max(1e-6, j.end - arrive))), d = p * L.at(-1);
+        let i = 1;
+        while (i < L.length && L[i] < d) i++;
+        i = Math.min(i, pts.length - 1);
+        const f = (d - L[i - 1]) / (L[i] - L[i - 1] || 1);
+        pt = [pts[i - 1][0] + f * (pts[i][0] - pts[i - 1][0]), pts[i - 1][1] + f * (pts[i][1] - pts[i - 1][1])];
+        const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1], n = Math.hypot(dx, dy) || 1;
+        const a = Math.atan2(dy / n, dx / n) + Math.sin(time * 1.3) * 0.35;   // glance about while walking
+        dir = [Math.cos(a), Math.sin(a)];
+      }
+      return { pt, dir, job: j, moving, k };
+    }
+    // One entry per person: the team's pose plus a lateral offset in the formation.
+    function people(row, team, time) {
+      const p = pose(row, team, time), n = view.team[team], side = [-p.dir[1], p.dir[0]];
+      const lanes = n === 1 ? [0] : n === 2 ? [-0.55, 0.55] : [-0.9, 0, 0.9];
+      return lanes.map((lane, i) => ({ ...p, pt: [p.pt[0] + side[0] * lane - p.dir[0] * (i % 2) * 0.5, p.pt[1] + side[1] * lane - p.dir[1] * (i % 2) * 0.5] }));
+    }
+
+    const ACCENT = '#18834b', AMBER = '#d97706', RED = '#b72f36';
+    const FOV = 55 * Math.PI / 180, CONE_M = 5 * 0.6;   // as the hub map: the wedge shows direction, not full range
+    const LOOK_FOV = 100 * Math.PI / 180, LOOK_M = 3.6;   // what a walking responder actually takes in
+
+    function angleOf(dir) { const [ax, ay] = view.T(0, 0), [bx, by] = view.T(dir[0], dir[1]); return Math.atan2(by - ay, bx - ax); }
+    function cone(ctx, x, y, ang, r, fill) {
+      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, fill); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.arc(x, y, r, ang - FOV / 2, ang + FOV / 2); ctx.closePath();
+      ctx.fillStyle = g; ctx.fill();
+    }
+    function regionAt(pt) {
+      const c = Math.floor(pt[0] / report.environment.cell), r = Math.floor(pt[1] / report.environment.cell);
+      const id = c < 0 || r < 0 || c >= geo.cols || r >= geo.rows ? -1 : geo.regionOf[r * geo.cols + c];
+      return id >= 0 ? view.regions[id] : null;
+    }
+    function label(ctx, text, x, y, background, foreground = '#fff') {
+      ctx.save();
+      ctx.font = '600 10px Geist, ui-sans-serif, system-ui';
+      const width = ctx.measureText(text).width + 12;
+      x = Math.max(width / 2 + 4, Math.min(960 - width / 2 - 4, x)); y = Math.max(13, y);
+      ctx.fillStyle = background; ctx.fillRect(x - width / 2, y - 9, width, 18);
+      ctx.fillStyle = foreground; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(text, x, y + .5);
+      ctx.restore();
+    }
+    function personGlyph(ctx, x, y, color, dashed = false) {
+      ctx.save(); ctx.translate(x, y);
+      ctx.fillStyle = '#fff'; ctx.strokeStyle = color; ctx.lineWidth = 2;
+      if (dashed) ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(0, -3.5, 2.7, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(-4.5, .5, 9, 5.5, 3); ctx.fill();
+      ctx.restore();
+    }
+
+    // What each team has looked at so far, per floor cell, as on the hub map:
+    // cells inside a person's view cone fill in as the clock advances, and the
+    // layer is rebuilt from zero if the clock is scrubbed back.
+    const looked = {};
+    function lookedLayer(panel, row) {
+      let L = looked[panel];
+      if (!L) {
+        const canvas = document.createElement('canvas'); canvas.width = 960; canvas.height = 500;
+        L = looked[panel] = { canvas, ctx: canvas.getContext('2d'), t: 0, row: null, seed: null, cov: new Float32Array(geo.rows * geo.cols) };
+      }
+      if (L.row !== row || L.seed !== runData?.seed || t < L.t) { L.ctx.clearRect(0, 0, 960, 500); L.cov.fill(0); L.t = 0; L.row = row; L.seed = runData?.seed; }
+      if (!row) return L.canvas;
+      const cell = report.environment.cell, cs = geo.cs, R = Math.ceil(LOOK_M / cell), step = 0.25;
+      for (let s = L.t; s < t; s += step) for (let team = 0; team < 2; team++) {
+        const lead = pose(row, team, s);
+        if (!lead.job || (lead.job.action === 8 && !lead.moving)) continue;
+        for (const m of people(row, team, s)) {
+          const pc = Math.floor(m.pt[0] / cell), pr = Math.floor(m.pt[1] / cell);
+          if (pc < 0 || pr < 0 || pc >= geo.cols || pr >= geo.rows) continue;
+          const region = geo.regionOf[pr * geo.cols + pc], ang = Math.atan2(m.dir[1], m.dir[0]);
+          if (region < 0) continue;
+          for (let r = pr - R; r <= pr + R; r++) for (let c = pc - R; c <= pc + R; c++) {
+            if (r < 0 || c < 0 || r >= geo.rows || c >= geo.cols) continue;
+            const key = r * geo.cols + c;
+            if (geo.regionOf[key] !== region) continue;
+            const dx = (c + .5) * cell - m.pt[0], dy = (r + .5) * cell - m.pt[1], d = Math.hypot(dx, dy);
+            if (d > LOOK_M) continue;
+            let da = Math.atan2(dy, dx) - ang; da = Math.atan2(Math.sin(da), Math.cos(da));
+            if (Math.abs(da) > LOOK_FOV / 2 && d > cell) continue;
+            const v = Math.min(1, L.cov[key] + 0.2);
+            if (v === L.cov[key]) continue;
+            L.cov[key] = v;
+            const [x1, y1] = view.T(c * cs, r * cs), [x2, y2] = view.T((c + 1) * cs, (r + 1) * cs);
+            const x = Math.min(x1, x2), y = Math.min(y1, y2);
+            L.ctx.clearRect(x, y, cs, cs);
+            L.ctx.globalAlpha = v; L.ctx.fillStyle = ACCENT; L.ctx.fillRect(x, y, cs + 0.5, cs + 0.5);
+          }
+        }
+      }
+      L.ctx.globalAlpha = 1; L.t = t;
+      return L.canvas;
+    }
+
+    const STEP_DOING = { 'Collect rescue gear': 'collecting rescue gear', 'Isolate hazard': 'isolating the hazard', 'Clear access route': 'clearing the access route' };
+    const STEP_DONE = ['rescue gear collected', 'hazard isolated', 'access route clear'];
+    function who(team) {
+      const first = (team ? view.team[0] : 0) + 1, n = view.team[team];
+      return n === 1 ? `Responder ${first}` : `Responders ${first}–${first + n - 1}`;
+    }
+    function radio(row) {
+      const lines = [];
+      for (const j of row.jobs) if (j.start <= t) lines.push({ t: j.start, team: j.team, text: j.action < 8 ? `heading to ${view.names[j.action]}` : STEP_DOING[j.name] ?? j.name.toLowerCase() });
+      for (const e of row.events) if (e[4] <= t) {
+        if (e[2] === 'prepared') lines.push({ t: e[4], team: e[1], text: STEP_DONE[e[3] - 1] ?? 'hazard step done' });
+        else if (e[2] === 'clear') lines.push({ t: e[4], team: e[1], text: `${view.names[e[3]]} clear, nobody there` });
+        else if (e[2] === 'rescued') lines.push({ t: e[4], team: e[1], text: `found someone in ${view.names[e[3]]}`, hot: true });
+      }
+      lines.sort((a, b) => a.t - b.t);
+      return lines.slice(-6);
+    }
+
+    function draw(panel, row) {
+      const root = $(panel), ctx = context(root.querySelector('canvas'));
+      const scale = 20, { T } = view;
+      ctx.clearRect(0, 0, 960, 500);
+      ctx.fillStyle = '#f7faf8'; ctx.fillRect(0, 0, 960, 500);
+
+      const completed = row ? row.events.filter((e) => e[4] <= t) : [];
+      const phase = completed.filter((e) => e[2] === 'prepared').length;
+      const belief = row?.actions.filter((a) => a.t <= t).at(-1)?.belief;
+      const outcome = (i) => completed.find((e) => e[3] === i && e[2] !== 'prepared');
+
+      // Room floors: tinted by how likely someone is inside, until the room is searched.
+      view.rooms.forEach((room, i) => {
+        if (belief && !outcome(i)) { ctx.fillStyle = `rgba(24,131,75,${(belief[i] * 0.5).toFixed(3)})`; ctx.fill(room.path); }
+      });
+      // Where the teams have looked.
+      ctx.save(); ctx.globalAlpha = .34; ctx.drawImage(lookedLayer(panel, row), 0, 0); ctx.restore();
+
+      // Hazard zone: hatched until every clearance step is done, then fades out.
+      const lastPrep = completed.filter((e) => e[2] === 'prepared').at(-1);
+      let hazardAlpha = 1 - phase / 3;
+      if (phase >= 3 && lastPrep) hazardAlpha = Math.max(0, 1 - (t - lastPrep[4]) / 2) * (1 / 3);
+      if (hazardAlpha > 0) {
+        const h = view.hazard;
+        ctx.save(); ctx.globalAlpha = hazardAlpha;
+        ctx.fillStyle = geo.hatch; ctx.fillRect(h.x, h.y, h.w, h.h);
+        ctx.strokeStyle = 'rgba(217,119,6,.7)'; ctx.lineWidth = 1.5; ctx.strokeRect(h.x + .5, h.y + .5, h.w, h.h);
+        ctx.restore();
+      }
+
+      ctx.fillStyle = '#c2d6c9'; ctx.fill(view.furniture);
+      ctx.fillStyle = '#466653'; ctx.fill(view.walls);
+      ctx.fillStyle = '#dfe9e3'; ctx.fill(view.doors);
+
+      if (hazardAlpha > 0) {
+        const h = view.hazard;
+        ctx.save(); ctx.globalAlpha = Math.min(1, hazardAlpha * 3);
+        label(ctx, 'HAZARD ZONE', h.x + 58, h.y + 20, '#b45309');
+        ctx.restore();
+      }
+
+      // Room names with a note under them, as on the hub map.
+      view.rooms.forEach((room, i) => {
+        const ev = outcome(i);
+        const note = ev ? (ev[2] === 'rescued' ? 'casualty here' : '✓ searched') : belief ? `${Math.round(belief[i] * 100)}%` : '';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        ctx.font = '500 11px Geist, system-ui'; ctx.fillStyle = '#466653';
+        ctx.fillText(view.names[i], room.cx, room.bottom - (note ? 20 : 10));
+        if (note) {
+          ctx.font = '500 10px Geist, system-ui';
+          ctx.fillStyle = ev ? (ev[2] === 'rescued' ? RED : ACCENT) : '#8fa89a';
+          ctx.fillText(note, room.cx, room.bottom - 8);
+        }
+      });
+      ctx.font = '500 9px "Geist Mono", monospace'; ctx.fillStyle = '#8fa89a'; ctx.textAlign = 'center';
+      { const [ex, ey] = T(24 * scale, 24.1 * scale); ctx.fillText('ENTRY', ex, ey + (ey < 250 ? 8 : 0)); }
+
+      if (!row) return;
+
+      // Casualties: shown to the viewer from the start; the commanders never see them.
+      row.truth.forEach((hidden, i) => {
+        if (!hidden) return;
+        const ev = outcome(i), found = ev && ev[2] === 'rescued';
+        const room = view.rooms[i], x = room.cx, y = room.cy - 8;
+        if (found) {
+          const k = Math.min(1, (t - ev[4]) / 1.5);
+          if (k < 1) { ctx.strokeStyle = `rgba(183,47,54,${(.7 * (1 - k)).toFixed(3)})`; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 13 + k * 26, 0, Math.PI * 2); ctx.stroke(); }
+        }
+        personGlyph(ctx, x, y, found ? RED : '#597562', !found);
+        label(ctx, found ? 'FOUND' : 'CASUALTY', x, y - 23, found ? RED : '#597562');
+      });
+
+      // Teams: a route ahead, a trail behind, a view cone per person, then the people.
+      for (let team = 0; team < 2; team++) {
+        const color = CREW[team], lead = pose(row, team, t), job = lead.job;
+        const busy = job && job.action === 8 && t < job.end;
+        if (job && lead.moving) {
+          ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+          ctx.strokeStyle = color + '66'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 5]); ctx.lineDashOffset = -t * 18;
+          ctx.beginPath(); ctx.moveTo(...T(lead.pt[0] * scale, lead.pt[1] * scale));
+          for (let i = lead.k; i < job.path.length; i++) ctx.lineTo(...T(job.path[i][0] * scale, job.path[i][1] * scale));
+          ctx.stroke(); ctx.restore();
+        }
+        ctx.save(); ctx.lineWidth = 1.5; ctx.lineJoin = 'round'; ctx.strokeStyle = color + '55'; ctx.beginPath();
+        for (let s = Math.max(0, t - 12); s <= t; s += 0.4) { const q = pose(row, team, s).pt, [x, y] = T(q[0] * scale, q[1] * scale); s > Math.max(0, t - 12) ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+        ctx.stroke(); ctx.restore();
+
+        const members = people(row, team, t);
+        if (!busy) for (const m of members) {
+          const [x, y] = T(m.pt[0] * scale, m.pt[1] * scale), clip = regionAt(m.pt);
+          ctx.save(); if (clip) ctx.clip(clip);
+          cone(ctx, x, y, angleOf(m.dir), CONE_M * scale, 'rgba(24,131,75,0.18)');
+          ctx.restore();
+        }
+        const working = job && !lead.moving && t < job.end;
+        members.forEach((m, i) => {
+          const [x, y] = T(m.pt[0] * scale, m.pt[1] * scale), fill = busy ? AMBER : color, ang = angleOf(m.dir);
+          ctx.save(); ctx.translate(x, y);
+          if (working && i === 0) {
+            const p = Math.min(1, (t - job.start - job.travel) / Math.max(1e-6, job.end - job.start - job.travel));
+            ctx.strokeStyle = fill; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.arc(0, 0, 15, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2); ctx.stroke();
+          }
+          ctx.shadowColor = 'rgba(23,55,38,.18)'; ctx.shadowBlur = 7; ctx.shadowOffsetY = 2;
+          ctx.rotate(ang + Math.PI / 2); ctx.fillStyle = fill;
+          ctx.beginPath(); ctx.moveTo(0, -16); ctx.lineTo(5, -8); ctx.lineTo(-5, -8); ctx.closePath(); ctx.fill();
+          ctx.rotate(-(ang + Math.PI / 2));
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+          ctx.shadowColor = 'transparent';
+          ctx.fillStyle = '#fff'; ctx.font = '600 10px "Geist Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.fillText(String((team ? view.team[0] : 0) + i + 1), 0, .5);
+          ctx.restore();
+        });
+      }
+
+      const lines = radio(row);
+      root.querySelector('.log').innerHTML = lines.length
+        ? lines.map((l) => `<div class="ev${l.hot ? ' hot' : ''}"><time>${fmt(l.t)}</time><div><b>${who(l.team)}</b> ${l.text}</div></div>`).join('')
+        : '<div class="empty">Waiting</div>';
+    }
+
+    function render() {
+      if (!report) return;
+      draw('before', runData?.before);
+      draw('trained', runData?.trained);
+      $('time').textContent = `${fmt(t)} / ${fmt(deadline())}`;
+      $('scrub').value = t;
+    }
+
+    async function start() {
+      $('run').disabled = $('random').disabled = true;
+      $('status').textContent = 'Running both policies…';
+      try {
+        const r = await fetch(`/api/simulation/run?seed=${encodeURIComponent($('seed').value)}&baseline=greedy`);
+        const data = await r.json();
+        if (!r.ok) throw Error(data.error);
+        runData = data; t = 0; playing = true;
+        applyVariation(data.seed);
+        $('play').textContent = 'Pause';
+        $('play').disabled = $('scrub').disabled = false;
+        $('scrub').max = deadline();
+        $('status').textContent = '';
+        render();
+      } catch (e) {
+        $('status').textContent = e.message;
+      } finally {
+        $('run').disabled = $('random').disabled = false;
+      }
+    }
+    $('run').onclick = start;
+    $('random').onclick = () => { $('seed').value = Math.floor(Math.random() * 1000000) + 12000000; start(); };
+    $('play').onclick = () => {
+      if (runData && t >= deadline()) t = 0;
+      playing = !playing;
+      $('play').textContent = playing ? 'Pause' : 'Play';
+    };
+    $('scrub').oninput = () => { t = +$('scrub').value; playing = false; $('play').textContent = 'Play'; render(); };
+    $('speed').onchange = () => $('speed').blur();
+
+    function frame(now) {
+      if (playing && runData) {
+        t = Math.min(deadline(), t + ((now - last) / 1000) * +$('speed').value);
+        if (t >= deadline()) { playing = false; $('play').textContent = 'Replay'; }
+        render();
+      }
+      last = now;
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    function drawCurve() {
+      const c = $('curve'), box = c.getBoundingClientRect(), d = devicePixelRatio || 1;
+      const W = Math.round(box.width), H = Math.round(box.height);
+      c.width = W * d; c.height = H * d;
+      const ctx = c.getContext('2d'); ctx.setTransform(d, 0, 0, d, 0, 0);
+      const curve = report.curve, left = 72, right = 20, top = 22, bottom = 46;
+      // Percent of the three people found, averaged over the held-out incidents.
+      const pct = (p) => (p.devMean / 3) * 100;
+      const ys = curve.map(pct), lo = Math.min(...ys), hi = Math.max(...ys);
+      const pad = Math.max(2, (hi - lo) * 0.18);
+      const y0 = Math.floor((lo - pad) / 5) * 5, y1 = Math.ceil((hi + pad) / 5) * 5;
+      const maxU = curve.at(-1).update;
+      // Log-scaled updates: most of the learning happens in the first ten updates.
+      const x = (u) => left + (Math.log10(u) / Math.log10(maxU)) * (W - left - right);
+      const y = (v) => top + (1 - (v - y0) / (y1 - y0)) * (H - top - bottom);
+      const stepY = (y1 - y0) > 30 ? 10 : 5;
+      ctx.font = '11px "Geist Mono", monospace'; ctx.fillStyle = '#597562'; ctx.textBaseline = 'middle';
+      for (let v = y0; v <= y1 + 1e-9; v += stepY) {
+        ctx.strokeStyle = '#d5e5da'; ctx.lineWidth = 1; ctx.beginPath();
+        ctx.moveTo(left, Math.round(y(v)) + .5); ctx.lineTo(W - right, Math.round(y(v)) + .5); ctx.stroke();
+        ctx.textAlign = 'right'; ctx.fillText(`${v}%`, left - 10, y(v));
+      }
+      ctx.textBaseline = 'alphabetic';
+      for (const u of [1, 10, 100, maxU]) {
+        ctx.textAlign = u === 1 ? 'left' : u === maxU ? 'right' : 'center';
+        ctx.fillText(u, x(u), H - bottom + 16);
+        if (u !== 1 && u !== maxU) { ctx.strokeStyle = '#d5e5da'; ctx.beginPath(); ctx.moveTo(Math.round(x(u)) + .5, top); ctx.lineTo(Math.round(x(u)) + .5, H - bottom); ctx.stroke(); }
+      }
+      ctx.font = '12px Geist, system-ui'; ctx.fillStyle = '#466653'; ctx.textAlign = 'center';
+      ctx.fillText('PPO updates (log scale)', left + (W - left - right) / 2, H - 8);
+      ctx.save(); ctx.translate(23, top + (H - top - bottom) / 2); ctx.rotate(-Math.PI / 2);
+      ctx.fillText('People found', 0, 0); ctx.restore();
+      const grad = ctx.createLinearGradient(0, top, 0, H - bottom);
+      grad.addColorStop(0, 'rgba(24,131,75,.22)'); grad.addColorStop(1, 'rgba(24,131,75,0)');
+      ctx.beginPath(); ctx.moveTo(x(curve[0].update), y(pct(curve[0])));
+      curve.forEach((p) => ctx.lineTo(x(p.update), y(pct(p))));
+      ctx.lineTo(x(maxU), y(y0)); ctx.lineTo(x(curve[0].update), y(y0)); ctx.closePath();
+      ctx.fillStyle = grad; ctx.fill();
+      ctx.strokeStyle = '#18834b'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.beginPath();
+      curve.forEach((p, i) => (i ? ctx.lineTo(x(p.update), y(pct(p))) : ctx.moveTo(x(p.update), y(pct(p)))));
+      ctx.stroke();
+      const first = curve[0], end = curve.at(-1);
+      for (const [p, label, align] of [[first, `${pct(first).toFixed(0)}%`, 'left'], [end, `${pct(end).toFixed(0)}%`, 'right']]) {
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x(p.update), y(pct(p)), 5.5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#18834b'; ctx.beginPath(); ctx.arc(x(p.update), y(pct(p)), 3.5, 0, Math.PI * 2); ctx.fill();
+        ctx.font = '500 12px "Geist Mono", monospace'; ctx.fillStyle = '#126b3c'; ctx.textAlign = align;
+        ctx.fillText(label, x(p.update) + (align === 'left' ? 10 : -10), y(pct(p)) - (p === end ? 12 : -18));
+      }
+    }
+
+    fetch('/api/simulation/report').then((r) => r.json()).then((r) => {
+      report = r;
+      $('seed').value = r.exampleSeed;
+      $('status').textContent = '';
+      const pair = r.paired.greedy, rl = r.policies.trained;
+      $('uplift').textContent = `${pair.relativePercent >= 0 ? '+' : ''}${pair.relativePercent.toFixed(0)}%`;
+      $('won').textContent = `${pair.wins} of ${rl.incidents.toLocaleString()}`;
+      $('lost').textContent = `${pair.losses} of ${rl.incidents.toLocaleString()}`;
+      $('latency').textContent = `${rl.decisionMedianMs.toFixed(2)} ms`;
+      $('results').innerHTML = ['greedy', 'prepare-first', 'lookahead-4', 'lookahead-10', 'trained'].map((p) => {
+        const v = r.policies[p];
+        return `<tr class="${p === 'trained' ? 'selected' : ''}"><td>${names[p]}</td><td>${v.rescued} / ${v.targets}</td><td>${v.allFound}</td><td>${v.decisionMedianMs.toFixed(2)} ms</td></tr>`;
+      }).join('');
+      $('training').textContent = `${(r.protocol.updates * r.protocol.batch).toLocaleString()} training scenarios`;
+      buildGeometry(); applyVariation(r.exampleSeed);
+      document.fonts.ready.then(() => { drawCurve(); render(); start(); });
+    }).catch((e) => { $('status').textContent = e.message; $('run').disabled = true; });
+    addEventListener('resize', () => { if (report) drawCurve(); });
+  </script>
+</body>
+</html>

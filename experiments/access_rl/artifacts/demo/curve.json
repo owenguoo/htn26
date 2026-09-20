@@ -1,0 +1,128 @@
+[
+  {
+    "update": 1,
+    "trainMean": 1.37109375,
+    "devMean": 1.517578125,
+    "seconds": 1.6523100808262825
+  },
+  {
+    "update": 10,
+    "trainMean": 1.61328125,
+    "devMean": 1.96875,
+    "seconds": 3.423155814409256
+  },
+  {
+    "update": 20,
+    "trainMean": 1.98828125,
+    "devMean": 2.015625,
+    "seconds": 5.242372132837772
+  },
+  {
+    "update": 30,
+    "trainMean": 1.990234375,
+    "devMean": 2.0185546875,
+    "seconds": 6.995427429676056
+  },
+  {
+    "update": 40,
+    "trainMean": 2.083984375,
+    "devMean": 2.0107421875,
+    "seconds": 8.772231616079807
+  },
+  {
+    "update": 50,
+    "trainMean": 2.048828125,
+    "devMean": 2.0791015625,
+    "seconds": 10.550617218017578
+  },
+  {
+    "update": 60,
+    "trainMean": 2.03125,
+    "devMean": 2.09765625,
+    "seconds": 12.276062063872814
+  },
+  {
+    "update": 70,
+    "trainMean": 2.052734375,
+    "devMean": 2.119140625,
+    "seconds": 14.029325686395168
+  },
+  {
+    "update": 80,
+    "trainMean": 2.087890625,
+    "devMean": 2.13671875,
+    "seconds": 15.936932422220707
+  },
+  {
+    "update": 90,
+    "trainMean": 2.138671875,
+    "devMean": 2.1337890625,
+    "seconds": 17.69172353297472
+  },
+  {
+    "update": 100,
+    "trainMean": 2.1015625,
+    "devMean": 2.15234375,
+    "seconds": 19.475701235234737
+  },
+  {
+    "update": 110,
+    "trainMean": 2.12890625,
+    "devMean": 2.16015625,
+    "seconds": 21.21700105816126
+  },
+  {
+    "update": 120,
+    "trainMean": 2.107421875,
+    "devMean": 2.1591796875,
+    "seconds": 22.959130860865116
+  },
+  {
+    "update": 130,
+    "trainMean": 2.138671875,
+    "devMean": 2.1689453125,
+    "seconds": 24.78903602808714
+  },
+  {
+    "update": 140,
+    "trainMean": 2.115234375,
+    "devMean": 2.173828125,
+    "seconds": 26.679105542600155
+  },
+  {
+    "update": 150,
+    "trainMean": 2.1171875,
+    "devMean": 2.177734375,
+    "seconds": 28.471457734704018
+  },
+  {
+    "update": 160,
+    "trainMean": 2.126953125,
+    "devMean": 2.1923828125,
+    "seconds": 30.22758547961712
+  },
+  {
+    "update": 170,
+    "trainMean": 2.1171875,
+    "devMean": 2.1748046875,
+    "seconds": 31.968781925737858
+  },
+  {
+    "update": 180,
+    "trainMean": 2.169921875,
+    "devMean": 2.1767578125,
+    "seconds": 33.742935456335545
+  },
+  {
+    "update": 190,
+    "trainMean": 2.169921875,
+    "devMean": 2.1845703125,
+    "seconds": 35.59351611882448
+  },
+  {
+    "update": 200,
+    "trainMean": 2.14453125,
+    "devMean": 2.1826171875,
+    "seconds": 37.42317691445351
+  }
+]

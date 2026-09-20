@@ -1,0 +1,105 @@
+{
+  "policies": {
+    "greedy": {
+      "incidents": 1024,
+      "rescued": 1533,
+      "targets": 3072,
+      "meanRescues": 1.4970703125,
+      "allFound": 182,
+      "decisionMedianMs": 0.11985749006271362,
+      "decisionP95Ms": 0.15466883778572083,
+      "wingHotMean": 0.7521008403361344,
+      "openHotMean": 2.144160583941606
+    },
+    "lookahead-10": {
+      "incidents": 1024,
+      "rescued": 2198,
+      "targets": 3072,
+      "meanRescues": 2.146484375,
+      "allFound": 398,
+      "decisionMedianMs": 3.1047314405441284,
+      "decisionP95Ms": 13.972342014312744,
+      "wingHotMean": 1.9621848739495797,
+      "openHotMean": 2.3065693430656933
+    },
+    "lookahead-4": {
+      "incidents": 1024,
+      "rescued": 2182,
+      "targets": 3072,
+      "meanRescues": 2.130859375,
+      "allFound": 395,
+      "decisionMedianMs": 2.1208561956882477,
+      "decisionP95Ms": 6.918355822563171,
+      "wingHotMean": 1.9390756302521008,
+      "openHotMean": 2.2974452554744524
+    },
+    "prepare-first": {
+      "incidents": 1024,
+      "rescued": 2102,
+      "targets": 3072,
+      "meanRescues": 2.052734375,
+      "allFound": 332,
+      "decisionMedianMs": 0.12049823999404907,
+      "decisionP95Ms": 0.1399517059326172,
+      "wingHotMean": 1.9705882352941178,
+      "openHotMean": 2.124087591240876
+    },
+    "trained": {
+      "incidents": 1024,
+      "rescued": 2263,
+      "targets": 3072,
+      "meanRescues": 2.2099609375,
+      "allFound": 404,
+      "decisionMedianMs": 0.1356080174446106,
+      "decisionP95Ms": 0.15639141201972961,
+      "wingHotMean": 2.0840336134453783,
+      "openHotMean": 2.3193430656934306
+    }
+  },
+  "paired": {
+    "greedy": {
+      "additionalPerIncident": 0.712890625,
+      "relativePercent": 47.61904761904762,
+      "bootstrap95": [
+        0.650390625,
+        0.7763671875
+      ],
+      "wins": 473,
+      "losses": 32,
+      "ties": 519
+    },
+    "lookahead-10": {
+      "additionalPerIncident": 0.0634765625,
+      "relativePercent": 2.957233848953594,
+      "bootstrap95": [
+        0.0224609375,
+        0.1064453125
+      ],
+      "wins": 201,
+      "losses": 153,
+      "ties": 670
+    },
+    "lookahead-4": {
+      "additionalPerIncident": 0.0791015625,
+      "relativePercent": 3.712190650779102,
+      "bootstrap95": [
+        0.037109375,
+        0.1201171875
+      ],
+      "wins": 200,
+      "losses": 149,
+      "ties": 675
+    },
+    "prepare-first": {
+      "additionalPerIncident": 0.1572265625,
+      "relativePercent": 7.659372026641294,
+      "bootstrap95": [
+        0.1162109375,
+        0.1982421875
+      ],
+      "wins": 291,
+      "losses": 133,
+      "ties": 600
+    }
+  }
+}

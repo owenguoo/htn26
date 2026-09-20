@@ -1012,7 +1012,7 @@ install_routes(app, hub, auth)
 async def no_stale_pages(request, call_next):
     """Pages and scripts change often during development; make browsers (and phones) revalidate every time."""
     response = await call_next(request)
-    if request.url.path == "/" or request.url.path == "/console" or request.url.path.startswith("/web/"):
+    if request.url.path in ("/", "/console", "/simulation") or request.url.path.startswith("/web/"):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -1334,6 +1334,42 @@ def join_page() -> HTMLResponse:
 @app.get("/console")
 def console_page() -> HTMLResponse:
     return _page("console.html")
+
+
+@app.get("/simulation")
+def simulation_page() -> HTMLResponse:
+    """RL demo: the same incident replayed under a baseline and the trained commander. Separate from the live hub state."""
+    return _page("simulation.html")
+
+
+_simulation = None
+
+
+def _simulation_replay():
+    """Exported weights and the evaluation report, loaded on first use so the hub starts as fast as before."""
+    global _simulation
+    if _simulation is None:
+        from experiments.access_rl.replay import Replay
+        _simulation = Replay()
+    return _simulation
+
+
+@app.get("/api/simulation/report")
+def simulation_report() -> Response:
+    return Response(json.dumps(_simulation_replay().report, allow_nan=False), media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/simulation/run")
+async def simulation_run(seed: int | None = None, baseline: str = "greedy") -> Response:
+    replay = _simulation_replay()
+    try:
+        # A replay is a few hundred ms of numpy; keep it off the event loop that serves the phones.
+        data = await asyncio.to_thread(replay.run, replay.report["exampleSeed"] if seed is None else seed, baseline)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return Response(json.dumps(data, allow_nan=False), media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
 
 
 @app.get("/web/{name}.js")
