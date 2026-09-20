@@ -155,7 +155,14 @@ export const HEAT_RGB = [37, 99, 235];
 /// Alpha of the hottest cell. Everything below it falls off faster than linear
 /// so that a broad "not looked at yet" field stays a wash and a real hotspot
 /// still reads as a hotspot.
-export const HEAT_MAX_ALPHA = 0.38;
+///
+/// The pair below is set by what survives the blur. At 0.38 / gamma 1.8 the
+/// untouched floor sat around alpha 0.13 against a hotspot's 0.38 — a ratio
+/// the crisp Grid view shows perfectly well and the blurred heatmap does not,
+/// which is exactly the complaint that "the grid shows the heatmap and the
+/// heatmap doesn't". A darker top and a steeper curve keep the same ordering
+/// and the same ramp while pulling the wash down and the hotspot up.
+export const HEAT_MAX_ALPHA = 0.48;
 
 /// The ramp as a CSS gradient, left (cleared) to right (likely), for the
 /// legend key. Built from the same constants the map paints with so the swatch
@@ -168,7 +175,7 @@ export function heatGradientCSS(steps = 6) {
   }
   return `linear-gradient(90deg, ${stops.join(', ')})`;
 }
-const HEAT_GAMMA = 1.8;
+const HEAT_GAMMA = 2.6;
 /// `HEAT_LEVELS` in swarm/coverage.py: how many steps `heat` is encoded in.
 const HEAT_STEPS = 36;
 /// Least difference between the coldest and hottest cell worth drawing, as a

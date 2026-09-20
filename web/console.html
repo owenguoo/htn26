@@ -21,7 +21,17 @@
       --red: #b72f36; --red-bg: #fcebed;
       --sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
       --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
-      --r: 10px;
+      /* Corner radius lives in four tokens so the whole console can be
+         squared off (or softened) from one place. The chrome is flat —
+         `--r` and `--r-sm` are 0, so cards, dialogs, inputs and buttons are
+         square. The other two are shapes rather than corners, and stay round
+         on purpose: `--r-pill` for controls whose round outline IS the
+         affordance (the toggle track, the chat composer), and `--r-dot` for
+         the circles — status lights, the spinner, and round icon buttons
+         like the Mission Control launcher. Map legend keys keep their own
+         literal radii further down: those mirror the shapes drawn on the map
+         canvas and must not move with the chrome. */
+      --r: 0px; --r-sm: 0px; --r-pill: 999px; --r-dot: 50%;
     }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
@@ -44,7 +54,7 @@
     .slash { color: var(--line-2); font-weight: 300; font-size: 20px; }
     .spacer { flex: 1; }
 
-    .btn { height: 32px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg);
+    .btn { height: 32px; padding: 0 12px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: var(--bg);
       font-size: 13px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
       transition: background .15s, border-color .15s; }
     .btn:hover { background: var(--bg-2); border-color: var(--accent); }
@@ -56,11 +66,11 @@
     .btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
     .btn.icon-only { padding: 0; width: 28px; justify-content: center; }
     .btn:disabled { opacity: .4; cursor: default; }
-    kbd { font: 11px var(--mono); color: var(--fg-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
+    kbd { font: 11px var(--mono); color: var(--fg-3); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 0 4px; }
 
     .search-panel { margin: 0; }
     .upload-zone { flex-basis: 100%; width: 100%; min-height: 104px; padding: 20px 12px;
-      display: grid; place-content: center; gap: 4px; border: 1px dashed var(--line-2); border-radius: 8px;
+      display: grid; place-content: center; gap: 4px; border: 1px dashed var(--line-2); border-radius: var(--r);
       background: var(--bg-1); text-align: center; transition: background .15s, border-color .15s; }
     .upload-zone strong { font-weight: 500; }
     .upload-zone span { color: var(--fg-2); font-size: 12px; }
@@ -69,7 +79,7 @@
     .upload-zone:hover, .upload-zone.dragging { background: var(--accent-bg); border-color: var(--accent); }
     .upload-zone:disabled { opacity: .5; cursor: wait; }
     .search-tools { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .search-panel input, .search-panel select, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px; }
+    .search-panel input, .search-panel select, .settings input[type="number"] { font: inherit; color: var(--fg); background: var(--bg-1); border: 1px solid var(--line-2); border-radius: var(--r-sm); padding: 7px; }
     #referencePreview { max-width: 100%; max-height: 280px; margin-top: 12px; }
     #personChoices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     #searchMessage:empty { display: none; }
@@ -82,7 +92,7 @@
        ready; the marker-scanned tile says how far off it is. */
     #startBtn { height: 34px; padding: 0 16px; font-weight: 500; }
     .bar-clock { display: inline-flex; align-items: center; height: 34px; padding: 0 12px;
-      border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg-1); }
+      border: 1px solid var(--line-2); border-radius: var(--r-sm); background: var(--bg-1); }
     .timer { font: 500 17px var(--mono); letter-spacing: -0.02em; }
     .bar-sep { flex: none; width: 1px; height: 26px; background: var(--line); margin: 0 2px; }
     .bar .btn svg { flex: none; }
@@ -98,7 +108,7 @@
       display: flex; align-items: center; gap: 14px; font-size: 13px; color: var(--fg-2); }
     .live-lead { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-weight: 500; color: var(--fg); }
     .live-lead b { font-weight: 600; }
-    .live-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    .live-dot { flex: none; width: 8px; height: 8px; border-radius: var(--r-dot); background: var(--accent);
       animation: breathe 1s ease-in-out infinite; }
     .live-aside { white-space: nowrap; }
     .live.warn { background: #fffbeb; border-top-color: #f0d38a; }
@@ -126,12 +136,12 @@
     .mc .cmd b { font-weight: 500; }
     .mc .cmd .ms { margin-left: auto; font: 12px var(--mono); color: var(--fg-3); }
     .mc .acts { display: flex; flex-wrap: wrap; gap: 6px; }
-    .chip { font: 12px var(--mono); padding: 2px 8px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--fg-2); }
+    .chip { font: 12px var(--mono); padding: 2px 8px; border-radius: var(--r-sm); border: 1px solid var(--line-2); color: var(--fg-2); }
     .chip.bad { color: var(--red); border-color: rgba(255,77,77,0.4); }
     .mc .reply { color: var(--fg-2); font-size: 13px; }
     .mc .reply.err { color: var(--red); }
     .spin { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--fg-3); border-top-color: var(--fg);
-      border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -1px; margin-right: 6px; }
+      border-radius: var(--r-dot); animation: spin .7s linear infinite; vertical-align: -1px; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* autonomy */
@@ -142,7 +152,7 @@
     #aiStatus { display: none; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--line);
       font: 12px var(--mono); color: var(--fg-3); }
     #aiStatus.on { display: flex; }
-    .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); flex: none; }
+    .pulse { width: 7px; height: 7px; border-radius: var(--r-dot); background: var(--fg-3); flex: none; }
     .pulse.live { background: var(--accent); animation: breathe 1s ease-in-out infinite; }
     @keyframes breathe { 50% { opacity: .25; } }
     #recs:empty { display: none; }
@@ -151,7 +161,7 @@
       border-bottom: 1px solid var(--line); animation: recIn .25s ease-out; }
     .rec:last-child { border-bottom: 0; }
     @keyframes recIn { from { opacity: 0; transform: translateY(-4px); } }
-    .rec .sev { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--fg-3); }
+    .rec .sev { width: 8px; height: 8px; border-radius: var(--r-dot); margin-top: 6px; background: var(--fg-3); }
     .rec .sev.warn { background: var(--fg); }
     .rec .sev.critical { background: var(--red); box-shadow: 0 0 0 3px rgba(255,77,77,0.18); }
     .rec .t { font-weight: 500; }
@@ -188,20 +198,20 @@
     .card-b { padding: 16px; }
     .stack { display: grid; gap: 16px; align-content: start; }
 
-    .map-modes { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1); }
-    .map-modes button { padding: 5px 10px; font-size: 12px; border-radius: 5px; }
+    .map-modes { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-1); }
+    .map-modes button { padding: 5px 10px; font-size: 12px; border-radius: var(--r-sm); }
     .map-modes button[aria-pressed="true"] { background: var(--accent); color: #fff; }
-    #scene3d { position: absolute; inset: 0; overflow: hidden; border-radius: 0 0 10px 10px; }
+    #scene3d { position: absolute; inset: 0; overflow: hidden; border-radius: 0 0 var(--r) var(--r); }
     .s3d-canvas, .s3d-labels { position: absolute; inset: 0; width: 100%; height: 100%; }
     .s3d-labels { pointer-events: none; }
-    .s3d-tag, .s3d-mark { padding: 3px 7px; background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 6px; color: var(--fg); font-size: 12px; max-width: 180px; }
+    .s3d-tag, .s3d-mark { padding: 3px 7px; background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--fg); font-size: 12px; max-width: 180px; }
     .s3d-say, .s3d-sees { font-size: 11px; color: var(--fg-2); }
     .s3d-tools { position: absolute; top: 10px; left: 10px; right: 10px; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; }
-    .s3d-tools button { background: var(--surface); color: var(--fg); border: 1px solid var(--line); padding: 5px 8px; border-radius: 6px; font-size: 11px; }
+    .s3d-tools button { background: var(--surface); color: var(--fg); border: 1px solid var(--line); padding: 5px 8px; border-radius: var(--r-sm); font-size: 11px; }
     .s3d-tools button[aria-pressed="true"] { background: var(--accent); color: #fff; }
     #mapStatus { margin: 0; padding: 8px 16px; font-size: 12px; color: var(--fg-2); }
     .scan-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
-    .scan-controls button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 7px; font-size: 12px; }
+    .scan-controls button { padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); font-size: 12px; }
     #scanStatus { font-size: 12px; color: var(--fg-2); }
     #mapStatus:empty { display: none; }
     #mapWrap { position: relative; height: 480px; overflow: hidden; background:
@@ -215,6 +225,9 @@
       border-top: 1px solid var(--line); background: var(--bg-1);
       color: var(--fg-2); font-size: 11px; }
     .map-legend span { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    /* The keys below name the shapes drawn on the map canvas, so their radii
+       are written out rather than taken from `--r*`: squaring off the chrome
+       must not turn the legend's disc into something the map never draws. */
     .map-key { position: relative; display: inline-block; flex: 0 0 auto; width: var(--map-marker-size); height: var(--map-marker-size);
       border: var(--map-marker-stroke) solid #fff;
       border-radius: 50%; background: var(--accent); box-shadow: 0 1px 4px rgba(23,55,38,.18); }
@@ -233,7 +246,7 @@
     /* The probability field is a scale, not a category, so its key is a ramp
        with both ends named rather than one swatch. White sits under it because
        the cleared end of the ramp is transparent over the map's white floor. */
-    .heat-scale { flex: 0 0 auto; width: 54px; height: 10px; border-radius: 3px;
+    .heat-scale { flex: 0 0 auto; width: 54px; height: 10px; border-radius: var(--r-sm);
       border: 1px solid var(--line); background-color: #fff; }
     #markerBtn.arming { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     .map-key.sighting::before, .map-key.rescued::before { content: ""; position: absolute; left: 50%; top: 4px;
@@ -248,22 +261,22 @@
     .row + .row { margin-top: 14px; }
     .row .label { font-weight: 500; }
     .row .hint { font-size: 12px; color: var(--fg-3); }
-    .switch { width: 36px; height: 20px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--line-2);
+    .switch { width: 36px; height: 20px; border-radius: var(--r-pill); background: var(--bg-3); border: 1px solid var(--line-2);
       position: relative; transition: background .15s; flex: none; }
-    .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+    .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: var(--r-dot);
       background: var(--fg-3); transition: transform .15s, background .15s; }
     .switch.on { background: var(--accent); border-color: var(--accent); }
     .switch.on::after { transform: translateX(16px); background: #fff; }
-    .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: 6px; height: 28px; }
+    .stepper { display: inline-flex; align-items: center; border: 1px solid var(--line-2); border-radius: var(--r-sm); height: 28px; }
     .stepper button { width: 28px; height: 26px; color: var(--fg-2); }
     .stepper button:hover { color: var(--fg); background: var(--bg-2); }
     .stepper span { min-width: 28px; text-align: center; font-family: var(--mono); }
-    .status { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--bg-1); border: 1px solid var(--line); }
+    .status { font-size: 13px; padding: 10px 12px; border-radius: var(--r); background: var(--bg-1); border: 1px solid var(--line); }
     .status.found { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-hover); }
     .people-roster { display: grid; gap: 4px; margin-top: 10px; }
     .people-roster:empty { display: none; }
     .person-row { display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 6px 8px;
-                  border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1); }
+                  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg-1); }
     .person-row .who { font-weight: 600; color: var(--fg-1); }
     .person-row .spacer { flex: 1; }
     .person-row button { border: 0; background: none; color: var(--fg-3); cursor: pointer;
@@ -281,7 +294,7 @@
     /* Settings: flat sections, no boxes inside boxes. A section is a heading, a
        line of prose and its rows; the only rules are the hairlines between rows. */
     dialog.settings { width: min(720px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 0;
-      border: 0; border-radius: 16px; background: var(--surface); color: var(--fg);
+      border: 0; border-radius: var(--r); background: var(--surface); color: var(--fg);
       box-shadow: 0 24px 80px rgba(23,55,38,.2); overflow-y: auto; }
     .settings::backdrop { background: rgba(15,35,24,.4); backdrop-filter: blur(4px); }
     .settings-header { position: sticky; top: 0; background: var(--surface); z-index: 1; padding: 16px 20px;
@@ -302,7 +315,7 @@
     /* Reset throws away the find, the coverage and every phone's marker lock,
        and there is no undo, so it asks first. Same shell as the settings sheet,
        sized to the question. */
-    dialog.confirm { width: min(420px, calc(100% - 32px)); padding: 20px; border: 0; border-radius: 16px;
+    dialog.confirm { width: min(420px, calc(100% - 32px)); padding: 20px; border: 0; border-radius: var(--r);
       background: var(--surface); color: var(--fg); box-shadow: 0 24px 80px rgba(23,55,38,.2); }
     dialog.confirm::backdrop { background: rgba(15,35,24,.4); backdrop-filter: blur(4px); }
     dialog.confirm h2 { margin: 0; font-size: 16px; }
@@ -318,11 +331,11 @@
       #mcInput { flex-basis: 70%; }
     }
     .chat-launcher { position: fixed; right: 24px; bottom: max(24px, env(safe-area-inset-bottom)); z-index: 12;
-      width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center;
+      width: 56px; height: 56px; border-radius: var(--r-dot); display: grid; place-items: center;
       background: var(--accent); color: #fff; box-shadow: 0 6px 24px rgba(23,55,38,.25); }
     .chat-launcher:hover { background: var(--accent-hover); }
     .chat-state { position: absolute; right: 1px; top: 1px; width: 12px; height: 12px; border: 2px solid #fff;
-      border-radius: 50%; background: #8c9d92; }
+      border-radius: var(--r-dot); background: #8c9d92; }
     .chat-launcher.active .chat-state { background: #57d879; }
     /* Mission Control docks to the right edge; the page gets out of its way
        rather than having the panel float over the map. */
@@ -333,16 +346,16 @@
     .chat-panel .card-h { flex-shrink: 0; background: var(--surface); }
     body.chat-docked { padding-right: min(380px, 100vw); }
     body.chat-docked .chat-launcher { display: none; }
-    .chat-close { flex: none; width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center;
+    .chat-close { flex: none; width: 28px; height: 28px; border-radius: var(--r-sm); display: grid; place-items: center;
       color: var(--fg-2); font-size: 18px; line-height: 1; }
     .chat-close:hover { background: var(--bg-2); color: var(--fg); }
     .chat-intro { margin: 0; padding: 16px; color: var(--fg-2); font-size: 13px; line-height: 1.6; }
     .chat-panel #mcFeed { flex: 1; min-height: 0; overflow-y: auto; border-top: 0; }
-    .chat-panel #mcForm { margin: auto 12px 12px; height: auto; min-height: 46px; padding: 5px 6px 5px 16px; flex-wrap: nowrap; gap: 8px; flex-shrink: 0; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-1); }
+    .chat-panel #mcForm { margin: auto 12px 12px; height: auto; min-height: 46px; padding: 5px 6px 5px 16px; flex-wrap: nowrap; gap: 8px; flex-shrink: 0; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--bg-1); }
     .chat-panel #mcForm:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-bg); }
     .chat-panel #mcInput { flex: 1; padding: 8px 0; }
     .chat-panel #mcInput:focus-visible { outline: none; }
-    .chat-send { flex: 0 0 34px; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #fff; }
+    .chat-send { flex: 0 0 34px; width: 34px; height: 34px; border-radius: var(--r-dot); display: grid; place-items: center; background: var(--accent); color: #fff; }
     .chat-send:hover { background: var(--accent-hover); }
     .system-details { overflow: hidden; }
     .system-details .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -353,13 +366,18 @@
     .system-details .metric .v { font-size: 20px; }
     @media (max-width: 900px) { body.chat-docked { padding-right: 0; } }
     @media (max-width: 640px) { .chat-launcher { right: 16px; } }
-    /* camera carousel */
+    /* camera wall: three to a row, wrapping down the card. Every feed is on the
+       page at once — a horizontal strip with arrows hid the phones that were
+       not first, which is the opposite of what a wall of cameras is for. */
     .map-column { min-width: 0; }
-    .camera-track { display: flex; align-items: flex-start; gap: 16px; overflow-x: auto; padding: 16px;
-      scroll-snap-type: x mandatory; scroll-padding: 16px; }
-    .camera-card { flex: 0 0 min(360px, 85%); min-width: 0; scroll-snap-align: start;
-      border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface); }
+    .camera-track { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+      align-items: start; gap: 16px; padding: 16px; }
+    .camera-card { min-width: 0;
+      border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--surface); }
     .camera-card.off { opacity: .65; }
+    /* Sans, not the mono the rest of the card headers use: this is a sentence
+       about the wall, not a measurement to line up in a column. */
+    #phoneCount { font-size: 13px; }
     .camera-open { display: block; width: 100%; text-align: left; }
     .camera-preview { position: relative; aspect-ratio: 16 / 10; display: grid; place-items: center;
       background: var(--bg-2); overflow: hidden; }
@@ -373,7 +391,7 @@
     .camera-card .st { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; flex-shrink: 0; max-width: 60%; }
     .camera-card .st .badge { margin: 0; }
     .camera-caption:not(:empty) { padding-bottom: 12px; }
-    .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px;
+    .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: var(--r-sm);
       font-size: 11px; border: 1px solid var(--line-2); color: var(--fg-2); margin: 2px 4px 2px 0; }
     .badge.w { color: #fff; background: var(--accent); border-color: var(--accent); }
     .badge.r { color: var(--red); background: var(--red-bg); }
@@ -385,7 +403,6 @@
     .camera-details .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 12px; }
     .system-details { margin-bottom: 16px; }
     .system-details .metrics { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
-    .camera-nav { display: flex; gap: 6px; }
     .empty { padding: 40px 16px; text-align: center; color: var(--fg-3); }
 
     /* expanded feed */
@@ -395,16 +412,16 @@
     .viewer.on { display: grid; }
     /* `.vimg` is `flex: 1 1 0`, so it eats every spare pixel and the children
        always add up to exactly the box height — which left the last row of
-       camera details pinned against the bottom border with the 14px radius
-       clipping its corners. The gutter is on the box rather than on `.vstats`
+       camera details pinned against the bottom border, which the box's
+       corners used to clip. The gutter is on the box rather than on `.vstats`
        so it is there whether the details are open or shut. */
     .vbox { width: min(1040px, 100%); height: min(88dvh, 960px); max-height: 100%; display: flex; flex-direction: column;
       padding-bottom: 16px;
-      background: var(--bg); border: 1px solid var(--line-2); border-radius: 14px; overflow-x: hidden; overflow-y: auto;
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: var(--r); overflow-x: hidden; overflow-y: auto;
       box-shadow: 0 30px 80px rgba(0,0,0,0.6); animation: vIn .18s ease-out; }
     @keyframes vIn { from { opacity: 0; transform: scale(.98); } }
     .vh { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-bottom: 1px solid var(--line); }
-    .vh .num { font: 500 13px var(--mono); padding: 2px 8px; border-radius: 6px; background: var(--bg-3); }
+    .vh .num { font: 500 13px var(--mono); padding: 2px 8px; border-radius: var(--r-sm); background: var(--bg-3); }
     .vh { flex-shrink: 0; }
     .vh b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .vimg { position: relative; background: #050505; display: grid; place-items: center; min-height: 320px; flex: 1 1 0; overflow: hidden; }
@@ -412,12 +429,12 @@
     .vnone { position: absolute; color: #b3cebd; font-size: 13px; }
     #vHudCanvas { position: absolute; left: 0; top: 0; pointer-events: none; }
     .vcap { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80%; display: none;
-      padding: 8px 14px; border-radius: 8px; background: rgba(0,0,0,0.78); color: #fff; font-size: 16px; font-weight: 500;
+      padding: 8px 14px; border-radius: var(--r-sm); background: rgba(0,0,0,0.78); color: #fff; font-size: 16px; font-weight: 500;
       text-align: center; line-height: 1.35; }
     .vcap.on { display: block; }
     td .cap { font-size: 12px; color: var(--fg-2); max-width: 280px; white-space: normal; margin-top: 2px; }
     .vhudnote { position: absolute; top: 12px; right: 12px; font: 500 11px var(--mono); padding: 3px 8px;
-      border-radius: 6px; background: rgba(0,0,0,0.6); color: #e7f8ed; }
+      border-radius: var(--r-sm); background: rgba(0,0,0,0.6); color: #e7f8ed; }
     .vhudnote.warn { color: #ffb703; }
     #vHud.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     #vHud.on kbd { color: #555; border-color: #999; }
@@ -436,10 +453,10 @@
     .analysis, .vstats { flex-shrink: 0; }
     #analysisMeta { overflow-wrap: anywhere; }
     @media (max-width: 640px) {
+      .camera-track { grid-template-columns: minmax(0, 1fr); }
       .viewer { padding: 12px; }
       .vbox { height: calc(100dvh - 24px); }
       .vh { gap: 6px; padding: 0 10px; }
-      .vh #vDevice { display: none; }
       .vstats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .vstats div.wide { grid-column: span 2; }
       .vh #vRemove { display: none; }
@@ -454,6 +471,7 @@
     .ev.hot { color: var(--red); }
 
     @media (max-width: 1100px) {
+      .camera-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid, .grid.bottom { grid-template-columns: 1fr; }
       .metrics { grid-template-columns: repeat(3, 1fr); }
       .metric:nth-child(4) { border-left: 0; }
@@ -467,10 +485,10 @@
     }
     .joinWrap { position: relative; }
     .joinPop { position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; display: none; width: 260px; padding: 14px;
-      background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      background: var(--bg); border: 1px solid var(--line-2); border-radius: var(--r); box-shadow: 0 20px 60px rgba(0,0,0,0.6);
       text-align: center; }
     .joinPop.on { display: block; }
-    .joinPop img { width: 100%; background: #fff; border-radius: 8px; padding: 10px; }
+    .joinPop img { width: 100%; background: #fff; border-radius: var(--r-sm); padding: 10px; }
     .joinPop .mono { font-size: 12px; margin-top: 10px; word-break: break-all; }
     .joinPop .hint { margin-top: 4px; }
   </style>
@@ -542,8 +560,7 @@
 
     <dialog class="confirm" id="resetConfirm" aria-labelledby="resetConfirmTitle">
       <h2 id="resetConfirmTitle">Reset the session?</h2>
-      <p>This clears the find and the coverage map, and sends every phone back to marker
-         scanning. The search has to be started again from scratch. It cannot be undone.</p>
+      <p>Clears the find and the coverage map, and sends every phone back to marker scanning.</p>
       <div class="confirm-acts">
         <button class="btn" id="resetCancel" type="button" autofocus>Cancel</button>
         <button class="btn solid-danger" id="resetGo" type="button">Reset session</button>
@@ -575,12 +592,10 @@
             <span id="scanStatus" role="status">Checking scanner…</span>
           </div>
         </div>
-        <section class="card camera-section" aria-label="Camera feeds">
-          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H3ZM15 4.75a.75.75 0 0 0-1.28-.53l-2 2a.75.75 0 0 0-.22.53v2.5c0 .199.079.39.22.53l2 2a.75.75 0 0 0 1.28-.53v-6.5Z"/></svg>Camera feeds</h2><span class="faint mono" id="phoneCount">0</span><span class="spacer"></span>
-            <div class="camera-nav"><button class="btn sm icon-only" id="cameraPrev" aria-label="Previous cameras" aria-controls="phones"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M17 10a.75.75 0 0 1-.75.75H5.612l4.158 3.96a.75.75 0 1 1-1.04 1.08l-5.5-5.25a.75.75 0 0 1 0-1.08l5.5-5.25a.75.75 0 1 1 1.04 1.08L5.612 9.25H16.25A.75.75 0 0 1 17 10Z" clip-rule="evenodd"/></svg></button>
-              <button class="btn sm icon-only" id="cameraNext" aria-label="Next cameras" aria-controls="phones"><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M3 10a.75.75 0 0 1 .75-.75h10.638L10.23 5.29a.75.75 0 1 1 1.04-1.08l5.5 5.25a.75.75 0 0 1 0 1.08l-5.5 5.25a.75.75 0 1 1-1.04-1.08l4.158-3.96H3.75A.75.75 0 0 1 3 10Z" clip-rule="evenodd"/></svg></button></div>
+        <section class="card camera-section" aria-label="Cameras">
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H3ZM15 4.75a.75.75 0 0 0-1.28-.53l-2 2a.75.75 0 0 0-.22.53v2.5c0 .199.079.39.22.53l2 2a.75.75 0 0 0 1.28-.53v-6.5Z"/></svg>Cameras</h2><span class="faint" id="phoneCount"></span><span class="spacer"></span>
           </div>
-          <div class="camera-track" id="phones" role="region" aria-label="Camera carousel" tabindex="0"></div>
+          <div class="camera-track" id="phones" role="region" aria-label="Camera feeds"></div>
           <div class="empty" id="phonesEmpty">No cameras connected.</div>
         </section>
       </div>
@@ -643,7 +658,7 @@
   <div class="viewer" id="viewer">
     <div class="vbox">
       <div class="vh">
-        <span class="num" id="vNum"></span><b id="vName"></b><span class="faint" id="vDevice"></span>
+        <span class="num" id="vNum"></span><b id="vName"></b>
         <span id="vBadges"></span><span class="spacer"></span>
         <button class="btn sm" id="vHud" title="Show what's on this phone's screen (H)">HUD</button>
         <button class="btn sm danger" id="vRemove" title="End this phone's session and drop it from the swarm">Remove</button>

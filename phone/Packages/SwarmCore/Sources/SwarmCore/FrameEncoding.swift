@@ -5,6 +5,15 @@ import Foundation
 /// Three to five phones means you can afford better than 640 px. Both values are
 /// configuration, not constants, so the resolution/latency trade can be measured
 /// on the day rather than argued about.
+///
+/// 1280 px on the long edge: a 960 px portrait frame is 720 wide, and the
+/// console's expanded viewer is wider than that on a Retina display, so it was
+/// being upscaled — which is what "blurry" looks like. ARKit's capture is
+/// larger again (1440–1920 on the long edge), so this is still a downscale and
+/// never an upscale. It is ~1.8x the pixels of 960 through a software encoder;
+/// if the focused 15 fps feed starts shedding frames (`droppedBusy` climbing
+/// against `submitted` in `FrameEncodePipeline.Stats`), this is the number to
+/// walk back first.
 public struct FrameEncodingConfiguration: Sendable, Equatable {
     /// The long edge of the encoded image, in pixels. The short edge follows the
     /// capture's aspect ratio.
@@ -15,7 +24,12 @@ public struct FrameEncodingConfiguration: Sendable, Equatable {
     /// what a single reused `CIContext` wants.
     public var maxConcurrent: Int
 
-    public init(targetLongEdge: Int = 960, quality: Float = 0.6, maxConcurrent: Int = 1) {
+    /// 0.72 rather than 0.6: JPEG quality is close to free on the encoder (the
+    /// cost is in the pixels, not the quantiser), and 0.6 leaves visible 8x8
+    /// blocking on exactly the small, distant faces the matcher is scored on.
+    /// It costs roughly a third more bytes per frame, which at 2 fps a phone on
+    /// a hall LAN is nothing.
+    public init(targetLongEdge: Int = 1_280, quality: Float = 0.72, maxConcurrent: Int = 1) {
         self.targetLongEdge = max(64, targetLongEdge)
         self.quality = min(1, max(0.05, quality))
         self.maxConcurrent = max(1, maxConcurrent)

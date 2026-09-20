@@ -23,6 +23,9 @@ import UIKit
 // mean encode time at 640, 960 and 1280 px, and pick a resolution from those
 // numbers rather than from this comment; and confirm the drop count under load
 // is non-zero but well below the submit count. DEVICE_CHECKLIST.md item 9.
+// The default is now 1280 (`FrameEncodingConfiguration`) because 960 read as
+// blurry in the console's expanded viewer; the check that matters is whether a
+// phone held at the focus rate still encodes inside its 15 fps interval.
 //
 // DEVICE-VERIFY: the JPEG is rotated to portrait here so the hub's feed wall
 // shows it upright and `/api/detections` boxes (fractions of the frame the hub

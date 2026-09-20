@@ -276,9 +276,11 @@ struct FloorPlanCanvas: View {
         let rect = CGRect(x: topLeft.x, y: topLeft.y,
                           width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y)
         guard rect.width > 1, rect.height > 1 else { return }
-        // Half a cell of blur on top of the scaler's own interpolation: enough
-        // to lose the grid, not enough to smear a hotspot off where it is.
-        let blur: CGFloat = max(showsDetail ? 3 : 1.5, plan.length(coverage.cell) * 0.5)
+        // A third of a cell of blur on top of the scaler's own interpolation:
+        // enough to lose the grid, not enough to smear a hotspot back down
+        // into the wash around it. `console.js` `drawCoverage()` uses the same
+        // fraction over the same field.
+        let blur: CGFloat = max(showsDetail ? 2.5 : 1.5, plan.length(coverage.cell) * 0.34)
         context.drawLayer { layer in
             layer.clip(to: Path(rect))  // heat stops at the walls
             layer.addFilter(.blur(radius: blur))
@@ -363,8 +365,8 @@ struct FloorPlanCanvas: View {
     /// the *full* range, coldest to hottest: a percentile cut meant nothing was
     /// drawn until a good fraction of the floor had been swept, which is
     /// exactly the stretch of a search the operator is watching the map for.
-    static let heatMaxAlpha: Double = 0.38
-    static let heatGamma: Double = 1.8
+    static let heatMaxAlpha: Double = 0.48
+    static let heatGamma: Double = 2.6
     static let heatSteps = 36
     static let heatMinSpread: Double = 0.04
 

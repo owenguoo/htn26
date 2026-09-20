@@ -17,7 +17,6 @@ let snapshotAt = 0;
 let drawReference = null;
 let searchBusy = false;
 let dragPos = null;          // candidate position while dragging
-let markerDrag = null;       // marker position while dragging
 let armingMarker = false;    // next map click drops the marker
 const MARKER_COLOR = '#6b4fbb';
 let lastDragSend = 0;
@@ -433,6 +432,7 @@ function phoneStatus(p) {
   if (job) out.push([`→ ${job.sector}`, job.onTarget ? 'w' : '']);
   if (!p.connected) out.push(['Offline', '']);
   else if (p.stale) out.push(['No signal', 'r']);
+  if (p.sim) out.push(['Simulated', '']);
   if (p.hidden) out.push(['Hidden', '']);
   if (p.speaking) out.push(['🎙 Speaking', 'w']);
   if (p.oldPage && !p.sim && p.connected) out.push(['Old page · reload', 'r']);
@@ -441,11 +441,16 @@ function phoneStatus(p) {
 
 function renderPhones() {
   const list = [...phones.values()].sort((a, b) => a.index - b.index);
-  $('#phoneCount').textContent = list.length;
+  // A bare count says nothing about whether the wall is working. Live is the
+  // number sending video right now; the rest have joined and gone quiet.
+  const liveCount = list.filter(isLive).length;
+  const offline = list.length - liveCount;
+  $('#phoneCount').textContent = !list.length ? ''
+    : `${liveCount} live${offline ? ` · ${offline} offline` : ''}`;
   $('#phonesEmpty').hidden = list.length > 0;
   const body = $('#phones');
   body.hidden = !list.length;
-  // Preserve cards so incoming state retains video elements and expanded details.
+  // Preserve cards so incoming state retains their video elements.
   const existing = new Map([...body.children].map((card) => [card.dataset.id, card]));
   list.forEach((p, i) => {
     let card = existing.get(p.id);
@@ -456,12 +461,7 @@ function renderPhones() {
       card.innerHTML = `<button class="camera-open" data-act="open">
         <div class="camera-preview"><span class="placeholder"></span><img class="thumb" alt="" data-thumb="${escapeHtml(p.id)}"></div>
         <div class="camera-title"><span class="idx mono muted"></span><span class="name"></span><span class="st"></span></div>
-        <div class="camera-caption"></div></button>
-        <details class="camera-details"><summary>Camera details</summary><dl>
-        <dt>Device</dt><dd class="device"></dd><dt>Position</dt><dd class="pos"></dd>
-        <dt>Facing</dt><dd class="hd"></dd><dt>Frames / second</dt><dd class="fps"></dd>
-        <dt>Latency</dt><dd class="lat"></dd></dl>
-        <div class="actions"><button class="btn sm danger" data-act="remove" title="End this phone's session and drop it from the swarm">Remove</button></div></details>`;
+        <div class="camera-caption"></div></button>`;
       if (thumbs.has(p.id)) card.querySelector('img').src = thumbs.get(p.id);
     }
     existing.delete(p.id);
@@ -474,41 +474,16 @@ function renderPhones() {
     card.querySelector('.name').textContent = p.name || 'Phone';
     card.querySelector('.camera-open').setAttribute('aria-label', `Open camera ${p.index}: ${p.name || 'Phone'}`);
     card.querySelector('.camera-caption').textContent = p.caption?.text || '';
-    card.querySelector('.device').textContent = p.device || 'Unknown';
-    const pose = p.pose;
-    card.querySelector('.pos').textContent = fmtPosition(pose);
-    card.querySelector('.pos').title = poseHint(pose);
-    card.querySelector('.hd').textContent = fmtHeading(pose);
-    card.querySelector('.fps').textContent = p.fps.toFixed(1);
-    card.querySelector('.lat').textContent = p.latencyMs != null ? `${p.latencyMs} ms` : '–';
+    // Position, facing, fps, latency and Remove all live in the expanded feed,
+    // one click away; a tile in the wall is the picture and who it belongs to.
     card.querySelector('.st').innerHTML = statusBadges(p);
   });
   for (const card of existing.values()) card.remove();
-  updateCameraNavigation();
 }
-
-function updateCameraNavigation() {
-  const track = $('#phones');
-  $('#cameraPrev').disabled = track.scrollLeft <= 1;
-  $('#cameraNext').disabled = track.scrollLeft + track.clientWidth >= track.scrollWidth - 1;
-}
-
-function scrollCameras(direction) {
-  const track = $('#phones');
-  const card = track.firstElementChild;
-  track.scrollBy({ left: direction * (card ? card.offsetWidth + 16 : track.clientWidth), behavior: 'smooth' });
-}
-$('#cameraPrev').addEventListener('click', () => scrollCameras(-1));
-$('#cameraNext').addEventListener('click', () => scrollCameras(1));
-$('#phones').addEventListener('scroll', updateCameraNavigation, { passive: true });
-window.addEventListener('resize', updateCameraNavigation);
 $('#phones').addEventListener('click', (e) => {
-  const action = e.target.closest('[data-act]');
   const card = e.target.closest('.camera-card');
   const p = card && phones.get(card.dataset.id);
-  if (!p || !action) return;
-  if (action.dataset.act === 'remove') removePhone(p);
-  else openViewer(p.id);
+  if (p && e.target.closest('[data-act]')) openViewer(p.id);
 });
 
 // ---------------------------------------------------------------- expanded feed
@@ -550,7 +525,6 @@ function renderViewer() {
   cap.textContent = p.caption ? p.caption.text : p.speaking ? '…' : '';
   cap.classList.toggle('on', !!(p.caption || p.speaking));
   $('#vName').textContent = p.name || 'Phone';
-  $('#vDevice').textContent = p.device || '';
   $('#vBadges').innerHTML = statusBadges(p);
   const pose = p.pose;
   const job = st.planner?.assignments?.[p.id];
@@ -1196,7 +1170,10 @@ function drawCoverage(cov) {
       layer.clip();
       layer.imageSmoothingEnabled = true;
       layer.imageSmoothingQuality = 'high';
-      layer.filter = `blur(${Math.max(3, cov.cell * view.scale * 0.5).toFixed(1)}px)`;
+      // A third of a cell, on top of the scaler's own interpolation: enough to
+      // lose the cell edges, not so much that a hotspot a few cells wide is
+      // smeared back down into the wash around it.
+      layer.filter = `blur(${Math.max(2.5, cov.cell * view.scale * 0.34).toFixed(1)}px)`;
       layer.drawImage(heatCanvas(cov, levels, undefined, heatTile), ax, ay, bx - ax, by - ay);
       layer.filter = 'none';
       layer.restore();
@@ -1349,7 +1326,7 @@ function draw() {
 // No text label: the legend strip under the map already names the purple tag,
 // and a word floating on the floor only crowds the searchers around it.
 function drawMarker() {
-  const m = markerDrag || st.marker;
+  const m = st.marker;
   if (!m) return;
   const [x, y] = view.toPx(m.x, m.y);
   ctx.save();
@@ -1600,13 +1577,6 @@ function sendCandidate(pos) {
   // snapshot, one target, no ids — reads this as moving the one it has.
   if (st?.target && !st.target.candidates) send({ type: 'target', x: pos.x, y: pos.y });
 }
-function nearMarker(e) {
-  if (!st?.marker || !view) return false;
-  const r = canvas.getBoundingClientRect();
-  const [mx, my] = view.toPx(st.marker.x, st.marker.y);
-  return Math.hypot(mx - (e.clientX - r.left), my - (e.clientY - r.top)) <= 14;
-}
-
 canvas.addEventListener('mousedown', (e) => {
   if (e.altKey && view) { send({ type: 'ping', ...roomPoint(e) }); return; } // alt-click pings too
   if (armingMarker && view) {
@@ -1616,7 +1586,6 @@ canvas.addEventListener('mousedown', (e) => {
     e.preventDefault();
     return;
   }
-  if (nearMarker(e)) { markerDrag = roomPoint(e); e.preventDefault(); return; }
   const grabbed = nearCandidate(e);
   if (grabbed) { dragPos = { id: grabbed.id, ...roomPoint(e) }; e.preventDefault(); return; }
   const p = phoneAt(e);
@@ -1641,31 +1610,41 @@ canvas.addEventListener('contextmenu', (e) => { // right-click: ping, like Valor
 });
 canvas.addEventListener('mousemove', (e) => {
   canvas.style.cursor = armingMarker ? 'crosshair'
-    : dragPos || markerDrag ? 'grabbing'
-    : nearMarker(e) || nearCandidate(e) ? 'grab'
+    : dragPos ? 'grabbing'
+    : nearCandidate(e) ? 'grab'
     : phoneAt(e) ? 'pointer' : 'default';
 });
 window.addEventListener('mousemove', (e) => {
-  if (markerDrag) {
-    markerDrag = roomPoint(e);
-    const now = performance.now();
-    if (now - lastDragSend > 80) { lastDragSend = now; send({ type: 'marker', ...markerDrag }); }
-    return;
-  }
   if (!dragPos) return;
   dragPos = { id: dragPos.id, ...roomPoint(e) };
   const now = performance.now();
   if (now - lastDragSend > 80) { lastDragSend = now; sendCandidate(dragPos); }
 });
 window.addEventListener('mouseup', () => {
-  if (markerDrag) { send({ type: 'marker', ...markerDrag }); markerDrag = null; return; }
   if (!dragPos) return;
   sendCandidate(dragPos);
   dragPos = null;
 });
 
-// phase timer ticks between hub updates
-setInterval(() => { if (st) $('#timer').textContent = fmtClock(Date.now() - st.phaseStartedAt); }, 250);
+// The clock in the top bar is the *search* clock, not the phase clock: it sits
+// at 00:00 through lobby and calibrate, starts when the search does, keeps
+// running across search → found, and freezes on how long the search took.
+// The hub only timestamps the phase it is in, so the console holds the start.
+let searchClock = { start: null, stop: null };
+
+setInterval(() => {
+  if (!st) return;
+  const on = running();
+  if (on && searchClock.start == null) searchClock = { start: st.phaseStartedAt, stop: null };
+  else if (!on && searchClock.start != null) {
+    // Back in the lobby or recalibrating is a fresh session; 'end' keeps the
+    // finishing time on screen.
+    if (st.phase === 'lobby' || st.phase === IDLE_PHASE) searchClock = { start: null, stop: null };
+    else searchClock.stop ??= Date.now();
+  }
+  const ms = searchClock.start == null ? 0 : (searchClock.stop ?? Date.now()) - searchClock.start;
+  $('#timer').textContent = fmtClock(ms);
+}, 250);
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
