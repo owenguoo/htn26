@@ -68,6 +68,10 @@ Evidence about where the candidate is ("last seen near the stage", "we already c
 the probability map with ONE adjust_likelihood_at or adjust_likelihood_sectors call per piece of evidence;
 the search planner then steers phones by itself.
 
+A search can turn up more than one person. Each one found keeps their own find team, and the search
+carries on for whoever is still missing — finding somebody is never a reason to stop or to stand
+everyone else down.
+
 After acting, reply with one short sentence (under 20 words) saying what you did."""
 
 _int_list = {"type": "array", "items": {"type": "integer"},
@@ -364,7 +368,7 @@ class MissionControl:
                            hub.task_of(p.id), p.tilted_since is not None))
         cov = round(hub.coverage.snapshot()["searched"] * 20)  # 5% steps
         t = hub.target
-        return (hub.phase, cov, tuple(phones), bool(t.found_by),
+        return (hub.phase, cov, tuple(phones), len(t.victims),
                 tuple(sorted((pid, r["arrived"]) for pid, r in t.responders.items())),
                 len(hub.active_pings(now)), hub.planner.enabled)
 
@@ -425,7 +429,9 @@ class MissionControl:
             if p:
                 speech.append({"index": p.index, "text": cap["text"],
                                "x": pose["x"] if pose else None, "y": pose["y"] if pose else None})
-        best = hub.sightings.best() if hub.search.mode == "rehearsal" and not hub.target.found_by else None
+        open_sightings = [sg for sg in hub.sightings.items if not hub.target.at(sg["x"], sg["y"])]
+        best = (max(open_sightings, key=hub.sightings.confidence, default=None)
+                if hub.search.mode == "rehearsal" else None)
         sighting = ({"x": best["x"], "y": best["y"], "confidence": round(hub.sightings.confidence(best), 2)}
                     if best and hub.sightings.confidence(best) >= 0.4 else None)
         return {"tool": a["name"], "point": point, "sector": sector, "phones": phones, "speech": speech,
@@ -561,14 +567,15 @@ class MissionControl:
         likely = hub.likely_sectors(4)
         out.append("- most likely sectors (share of probability): "
                    + ", ".join(f"{s['sector']} {round(s['share'] * 100)}%" for s in likely))
-        if hub.search.mode == "rehearsal" and not hub.target.found_by:
+        if hub.search.mode == "rehearsal" and not hub.target.complete():
             for sg in sorted(hub.sightings.items, key=hub.sightings.confidence, reverse=True)[:3]:
                 conf = hub.sightings.confidence(sg)
-                if conf < 0.4:
+                if conf < 0.4 or hub.target.at(sg["x"], sg["y"]):
                     continue
-                seen_by = ", ".join(f"#{hub.phones[pid].index}" for pid in sg["phones"] if pid in hub.phones)
+                looking = hub.sightings.weights(sg)
+                seen_by = ", ".join(f"#{hub.phones[pid].index}" for pid in looking if pid in hub.phones)
                 near = min((p for p in live if p.pose(now) and p.index not in self.busy_phones()
-                            and p.id not in sg["phones"]),
+                            and p.id not in looking),
                            key=lambda p: math.hypot(p.pose(now)["x"] - sg["x"], p.pose(now)["y"] - sg["y"]),
                            default=None)
                 hint = ""
@@ -591,13 +598,14 @@ class MissionControl:
         if left and max(left.values()) <= 0.15:
             out.append("- the whole room has been searched: don't recommend more coverage moves")
         t = hub.target
-        if hub.search.mode == "rehearsal" and t.found_by and t.found_at:
-            late = [f"#{hub.phones[pid].index}" for pid, r in t.responders.items()
-                    if not r["arrived"] and pid in hub.phones]
-            since = round((now - t.found_at) / 1000)
-            team = ", ".join(f"#{hub.phones[pid].index}" for pid in t.responders if pid in hub.phones)
-            out.append(f"- candidate found {since}s ago; the find team ({team}) stays with it: "
-                       "never steer, message-redirect or reassign them")
+        if hub.search.mode == "rehearsal" and t.victims:
+            for v in t.victims:
+                since = round((now - v.found_at) / 1000)
+                team = ", ".join(f"#{hub.phones[pid].index}" for pid in v.responders if pid in hub.phones)
+                out.append(f"- person {v.id} found {since}s ago; their find team ({team}) stays with them: "
+                           "never steer, message-redirect or reassign them")
+            if t.unfound():
+                out.append(f"- {len(t.unfound())} more still missing: keep everyone else searching")
             if late:
                 out.append(f"- responders still en route: {', '.join(late)}")
         busy_now = self.busy_phones()
@@ -635,7 +643,7 @@ class MissionControl:
             hub.new_search()
             return "candidate removed"
         if name == "set_responders":
-            hub.target.responders_wanted = max(0, min(10, int(a["count"])))
+            hub.target.set_responders_wanted(min(10, int(a["count"])))
             return f"{hub.target.responders_wanted} responders"
         if name == "send_phones_to_sector":
             done = hub.assign(a["phones"], a["sector"])
@@ -683,7 +691,7 @@ class MissionControl:
             hub.planner.note(f"🧭 {a['change']}: {where} · {a['reason']}")
             return f"{a['change']} at {where}"
         if name == "reset_coverage":
-            hub.coverage.reset()
+            hub.reset_coverage()
             hub.sightings.reset()
             hub.planner.reset()
             return "coverage reset"
@@ -731,8 +739,14 @@ class MissionControl:
         t = hub.target
         for p in phones:
             pose = p.pose(now)
+            # Where the position came from, because it changes what the position is worth: "slam"
+            # is tracked by the phone, "seat" is the spot its operator claimed and has not moved
+            # from since, "sim" is made up. Everything downstream — area searched, where a sighting
+            # lands on the map, who gets dispatched — inherits that difference, so the model that
+            # reasons over this (and anyone training on it later) has to see it.
             where = (f"at ({pose['x']:.1f}, {pose['y']:.1f})"
                      + (f" facing {round(pose['heading'])}°" if pose["heading"] is not None else "")
+                     + f" [{pose.get('source') or 'unknown'}]"
                      ) if pose else "not placed"
             tags = []
             if not p.connected:
@@ -740,10 +754,12 @@ class MissionControl:
             job = pl.assignments.get(p.id)
             if job:
                 tags.append(f"searching {job['sector']}")
-            if hub.search.mode == "rehearsal" and t.found_by == p.id:
-                tags.append("found the candidate")
-            if hub.search.mode == "rehearsal" and p.id in t.responders:
-                tags.append("arrived" if t.responders[p.id]["arrived"] else "responding")
+            if hub.search.mode == "rehearsal":
+                for v in t.victims:
+                    if v.found_by == p.id:
+                        tags.append(f"found person {v.id}")
+                    if p.id in v.responders:
+                        tags.append(f"{'with' if v.responders[p.id]['arrived'] else 'heading to'} person {v.id}")
             name = f" {p.name}" if p.name else ""
             lines.append(f"  #{p.index}{name} {where}" + (f" [{', '.join(tags)}]" if tags else ""))
             recent = [c for c in p.captions if now - c["t"] < 60_000]
@@ -752,18 +768,23 @@ class MissionControl:
 
         if hub.search.mode == "real":
             lines.append("candidate: visual evidence only; target location unknown; no responder team")
-        elif t.found_by:
-            finder = hub.phones.get(t.found_by)
-            lines.append(f"candidate: FOUND at ({t.fix[0]:.1f}, {t.fix[1]:.1f}) by #{finder.index if finder else '?'} "
-                         f"({round((t.confidence or 0) * 100)}% sure)")
-        elif t.pos is None:
-            lines.append("candidate: no mock candidate placed" if reveal_candidate
-                         else "candidate: location unknown (not found yet)")
-        elif not reveal_candidate and not t.found_by:
-            lines.append("candidate: somewhere in the room, location unknown (not found yet)")
         else:
-            lines.append(f"candidate: hidden at ({t.pos[0]:.1f}, {t.pos[1]:.1f}), not found yet; "
-                         f"{t.responders_wanted} responders will be sent")
+            for v in t.victims:
+                finder = hub.phones.get(v.found_by)
+                lines.append(f"person {v.id}: FOUND at ({v.fix[0]:.1f}, {v.fix[1]:.1f}) by "
+                             f"#{finder.index if finder else '?'} ({round(v.confidence * 100)}% sure)")
+            missing = t.unfound()
+            if not t.candidates and not t.victims:
+                lines.append("candidates: no mock candidate placed" if reveal_candidate
+                             else "candidates: location unknown (nobody found yet)")
+            elif not missing:
+                lines.append(f"everyone hidden has been found ({len(t.victims)} in total)")
+            elif not reveal_candidate:
+                lines.append(f"still missing: {len(missing)}, somewhere in the room, location unknown")
+            else:
+                spots = ", ".join(f"({x:.1f}, {y:.1f})" for x, y in missing)
+                lines.append(f"still missing: {len(missing)} hidden at {spots}; "
+                             f"{t.responders_wanted} responders will be sent to each")
         pings = hub.active_pings(now)
         if pings:
             lines.append("active pings: " + "; ".join(f"“{pg['label']}” at ({pg['x']:.1f}, {pg['y']:.1f})"

@@ -109,6 +109,18 @@ public enum PhaseCardText {
         default: "You can lower your phone."
         }
     }
+
+    /// Shown in the calibrate card's place for a couple of seconds once this
+    /// phone locks on, before the card gets out of the way.
+    ///
+    /// `covers(_:alignment:)` drops the prompt the instant alignment arrives,
+    /// which is correct — there is nothing left to do — but it meant the
+    /// operator's reward for finally getting the marker to lock was a
+    /// full-screen card silently disappearing. They could not tell whether it
+    /// had worked or whether the app had moved on for some other reason. The
+    /// prompt asked for something; this is the card answering.
+    public static let confirmedTitle = "Calibrated"
+    public static let confirmedDetail = "You're located. The operator starts the search."
 }
 
 public enum HUDMirror {
@@ -121,6 +133,20 @@ public enum HUDMirror {
     static let turnColor = "#ffb703"
     static let pingColor = "#ffd166"
     public static let soundColor = "#ff3b30"
+    /// `MARKER_COLOR` in `web/console.js`, which is what the map — both the
+    /// console's and the phone's — fills the alignment marker with. Before the
+    /// search starts the hub pushes that marker down the ping channel
+    /// (`hub.py` `marker_cue`), and drawn in `pingColor` it was one more yellow
+    /// ping chip among the operator's own. It is the one thing on the tape that
+    /// is a fixed piece of the room rather than a temporary cue, so it wears
+    /// the colour the map already gives it.
+    static let markerColor = "#6b4fbb"
+
+    /// The chip colour for a ping cue: the alignment marker keeps its map
+    /// colour, everything else is a ping.
+    static func cueColor(_ cue: PingCue) -> String {
+        cue.label == "MARKER" ? markerColor : pingColor
+    }
 
     /// - Parameters:
     ///   - captureWidth/captureHeight: the sensor-orientation capture the
@@ -146,7 +172,7 @@ public enum HUDMirror {
                 : (kind == "look" || kind == "go") ? directedColor : turnColor
             markers.append(.init(off: off, label: label, color: color, big: true))
         }
-        let targets = overlay.pings.map { ($0, "◆ " + $0.label, pingColor) }
+        let targets = overlay.pings.map { ($0, "◆ " + $0.label, cueColor($0)) }
             + (responding ? [] : (overlay.candidate.map { [($0, "FIND", alertColor)] } ?? []))
         for (cue, label, color) in targets {
             guard let bearing = cue.bearingRadians else { continue }
@@ -181,7 +207,7 @@ public enum HUDMirror {
                 : nil
         }
 
-        let floating = overlay.pings.map { ($0, $0.label, pingColor) }
+        let floating = overlay.pings.map { ($0, $0.label, cueColor($0)) }
             + (overlay.candidate.map { [($0, "FIND", alertColor)] } ?? [])
         let ar: [HubHUDMirror.ARMarker] = floating.compactMap { cue, label, color in
             guard let point = cue.imagePoint,

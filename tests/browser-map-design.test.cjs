@@ -40,7 +40,7 @@ test('map gives searchers, possible sightings, and the found person distinct mar
   assert.match(code, /function drawPhone\(/);
   assert.match(code, /function drawPersonGlyph\(/);
   assert.match(code, /POSSIBLE ·/);
-  assert.match(code, /rescued \? 'RESCUED' : 'FOUND PERSON'/);
+  assert.match(code, /teamFull\(v\) \? 'RESCUED' : 'FOUND PERSON'/);
 });
 
 test('badges at the same map coordinate reserve non-overlapping slots', () => {

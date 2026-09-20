@@ -195,6 +195,11 @@
     .map-key.sighting { color: #d97706; border-color: #d97706; }
     .map-key.rescued { color: var(--red); border-color: var(--red); }
     .map-key.marker { border-radius: 5px; background: #6b4fbb; }
+    /* The probability field is a scale, not a category, so its key is a ramp
+       with both ends named rather than one swatch. White sits under it because
+       the cleared end of the ramp is transparent over the map's white floor. */
+    .heat-scale { flex: 0 0 auto; width: 54px; height: 10px; border-radius: 3px;
+      border: 1px solid var(--line); background-color: #fff; }
     #markerBtn.arming { background: var(--accent); color: var(--bg); border-color: var(--accent); }
     .map-key.sighting::before, .map-key.rescued::before { content: ""; position: absolute; left: 50%; top: 4px;
       width: 5px; height: 5px; border-radius: 50%; background: currentColor; transform: translateX(-50%); }
@@ -202,11 +207,10 @@
       width: 9px; height: 6px; border-radius: 4px; background: currentColor; transform: translateX(-50%); }
     .map-scale { position: absolute; right: 14px; bottom: 14px; display: flex; align-items: flex-end; gap: 6px;
       color: var(--fg-3); font: 10px var(--mono); pointer-events: none; }
-    .map-scale i { display: block; width: 56px; height: 6px; border: solid var(--fg-3); border-width: 0 1px 1px; }
+    .map-scale i { display: block; width: 0; height: 6px; border: solid var(--fg-3); border-width: 0 1px 1px; }
 
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .row + .row { margin-top: 14px; }
-    .settings-body .row + .row { margin-top: 0; }
     .row .label { font-weight: 500; }
     .row .hint { font-size: 12px; color: var(--fg-3); }
     .switch { width: 36px; height: 20px; border-radius: 999px; background: var(--bg-3); border: 1px solid var(--line-2);
@@ -221,26 +225,45 @@
     .stepper span { min-width: 28px; text-align: center; font-family: var(--mono); }
     .status { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--bg-1); border: 1px solid var(--line); }
     .status.found { background: var(--accent-bg); border-color: var(--accent); color: var(--accent-hover); }
+    .people-roster { display: grid; gap: 4px; margin-top: 10px; }
+    .people-roster:empty { display: none; }
+    .person-row { display: flex; gap: 8px; align-items: center; font-size: 12px; padding: 6px 8px;
+                  border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1); }
+    .person-row .who { font-weight: 600; color: var(--fg-1); }
+    .person-row .spacer { flex: 1; }
+    .person-row button { border: 0; background: none; color: var(--fg-3); cursor: pointer;
+                         font: inherit; padding: 0 2px; }
+    .person-row button:hover { color: var(--fg-1); text-decoration: underline; }
+    .found-list { display: grid; gap: 4px; margin-top: 8px; }
+    .found-list:empty { display: none; }
+    .found-row { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--fg-3); }
+    .found-row .who { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--fg-1); white-space: nowrap; }
     .divider { height: 1px; background: var(--line); margin: 16px -16px; }
 
     .overview { padding: 24px 0 4px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
     .overview h1 { margin: 0; font-size: 24px; letter-spacing: -.03em; }
     .overview p { margin: 6px 0 0; color: var(--fg-2); }
-    dialog.settings { width: min(760px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 0;
-      border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--fg);
+    /* Settings: flat sections, no boxes inside boxes. A section is a heading, a
+       line of prose and its rows; the only rules are the hairlines between rows. */
+    dialog.settings { width: min(720px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 0;
+      border: 0; border-radius: 16px; background: var(--surface); color: var(--fg);
       box-shadow: 0 24px 80px rgba(23,55,38,.2); overflow-y: auto; }
     .settings::backdrop { background: rgba(15,35,24,.4); backdrop-filter: blur(4px); }
     .settings-header { position: sticky; top: 0; background: var(--surface); z-index: 1; padding: 16px 20px;
       display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .settings-header h2 { margin: 0; font-size: 18px; }
     body:has(#settings[open]) { overflow: hidden; }
-    .settings-body { padding: 16px; border-top: 1px solid var(--line); }
-    .settings-body h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
-    .settings-body > .card { margin-bottom: 16px; }
-    .settings-body > .card:last-child { margin-bottom: 0; }
-    .settings-body .card-b { display: grid; gap: 16px; }
+    /* One type scale throughout: 14px headings and labels, 12px prose. The
+       sections are told apart by space and a hairline, not by size. */
+    .settings-body { padding: 4px 20px 20px; display: grid; gap: 24px; }
+    .set-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    .set-head p { margin: 2px 0 0; font-size: 12px; color: var(--fg-3); }
+    .set-rows { margin-top: 6px; }
+    .set-rows .row { padding: 12px 0; }
+    .set-rows .row + .row { margin-top: 0; border-top: 1px solid var(--line); }
     .row-control { display: flex; align-items: center; gap: 8px; }
     .settings input[type="number"] { width: 76px; }
+    @media (max-width: 560px) { .settings-body { padding: 4px 16px 18px; } }
     .map-column > .card > .card-h { height: auto; min-height: 48px; flex-wrap: wrap; padding: 12px 16px; }
     .map-legend { font-size: 12px; }
     #recs:not(:empty) { margin-bottom: 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
@@ -420,26 +443,30 @@
     <dialog class="settings" id="settings" aria-labelledby="settingsTitle">
       <div class="settings-header"><h2 id="settingsTitle">Settings</h2><button class="btn sm" id="settingsClose" autofocus>Close</button></div>
       <div class="settings-body">
-        <div class="card">
-          <div class="card-h"><h2>Search</h2></div>
-          <div class="card-b">
+        <section>
+          <div class="set-head">
+            <h2>Search</h2>
+            <p>How sure a match has to be, and who decides where to look next.</p>
+          </div>
+          <div class="set-rows">
             <div class="row"><div><div class="label"><label for="threshold">Match sensitivity</label></div><div class="hint">Higher values require a closer visual match</div></div>
               <div class="row-control"><input id="threshold" type="number" min="-1" max="1" step="0.01" value="0.70"><button class="btn sm" id="saveThreshold">Apply</button></div></div>
             <div class="row"><div><div class="label">Planner</div><div class="hint">Bayesian search: each phone goes where it's most likely to find them</div></div>
               <button class="switch" id="plannerSw" aria-label="Planner"></button></div>
-            <div class="row"><div><div class="label">Coverage</div><div class="hint">Mark the whole room unsearched</div></div>
-              <button class="btn sm" id="resetCov">Reset</button></div>
           </div>
-        </div>
-        <div class="card">
-          <div class="card-h"><h2>Response</h2></div>
-          <div class="card-b">
+        </section>
+        <section>
+          <div class="set-head">
+            <h2>Response</h2>
+            <p>What the swarm does the moment someone is found.</p>
+          </div>
+          <div class="set-rows">
             <div class="row"><div><div class="label">Responders</div><div class="hint">Nearest phones sent when found</div></div>
               <div class="stepper"><button id="respMinus" aria-label="Fewer">&minus;</button><span id="respN">3</span><button id="respPlus" aria-label="More">+</button></div></div>
-            <div class="row"><div><div class="label">Test candidate</div><div class="hint">Drop a mock person on the map to rehearse a find</div></div>
-              <button class="btn sm primary" id="candBtn">Place candidate</button></div>
+            <div class="row"><div><div class="label">Test candidates</div><div class="hint">Drop mock people on the map to rehearse finding more than one</div></div>
+              <div class="row-control"><button class="btn sm" id="candClear" hidden>Clear</button><button class="btn sm primary" id="candBtn">Place candidate</button></div></div>
           </div>
-        </div>
+        </section>
       </div>
     </dialog>
 
@@ -465,9 +492,9 @@
             </div>
 </div>
           <div id="mapWrap"><canvas id="map" aria-label="Live search map"></canvas>
-            <div class="map-scale" aria-hidden="true"><i></i><span>5 m</span></div>
+            <div class="map-scale" aria-hidden="true"><i></i><span></span></div>
             <div id="scene3d" aria-label="Interactive 3D room map" hidden></div></div>
-          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span></div>
+          <div class="map-legend" aria-label="Map legend"><span><i class="map-key"></i>Searcher</span><span><i class="map-key sighting"></i>Possible sighting</span><span><i class="map-key rescued"></i>Found person</span><span><i class="map-key marker"></i>Marker</span><span id="heatLegend">Cleared<i class="heat-scale"></i>Likely here</span></div>
           <p id="mapStatus" role="status"></p>
           <div class="scan-controls">
             <button type="button" id="scanToggle" aria-pressed="false">Start scan</button>
@@ -487,14 +514,15 @@
       </div>
       <div class="stack">
         <section class="card search-panel" aria-label="Person search">
-          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12.735 14c.618 0 1.093-.561.872-1.139a6.002 6.002 0 0 0-11.215 0c-.22.578.254 1.139.872 1.139h9.47Z"/></svg>Person to find</h2><span class="spacer"></span></div>
+          <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12.735 14c.618 0 1.093-.561.872-1.139a6.002 6.002 0 0 0-11.215 0c-.22.578.254 1.139.872 1.139h9.47Z"/></svg>People to find</h2><span class="spacer"></span></div>
           <div class="card-b">
             <fieldset id="searchTools" style="border:0;padding:0;margin:0">
-              <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" aria-label="Upload photo" hidden>
-              <button class="upload-zone" type="button" id="uploadPhoto"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg><strong>Drop a photo here</strong><span>or click to choose</span></button>
+              <div class="search-tools"><input id="referenceFile" type="file" accept="image/*" multiple aria-label="Upload photos" hidden>
+              <button class="upload-zone" type="button" id="uploadPhoto"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg><strong id="uploadTitle">Drop photos here</strong><span id="uploadHint">one per person &middot; or click to choose</span></button>
               <button class="btn" id="clearReference" type="button" hidden>Clear</button>
 </div>
               <canvas id="referencePreview" hidden aria-label="Numbered people in reference photo"></canvas><div id="personChoices"></div>
+              <div class="people-roster" id="peopleRoster"></div>
             </fieldset>
             <div id="searchMessage" role="status"></div>
           </div>
@@ -503,6 +531,7 @@
           <div class="card-h"><h2><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M9 8a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/> <path fill-rule="evenodd" d="M9.68 5.26a.75.75 0 0 1 1.06 0 3.875 3.875 0 0 1 0 5.48.75.75 0 1 1-1.06-1.06 2.375 2.375 0 0 0 0-3.36.75.75 0 0 1 0-1.06Zm-3.36 0a.75.75 0 0 1 0 1.06 2.375 2.375 0 0 0 0 3.36.75.75 0 1 1-1.06 1.06 3.875 3.875 0 0 1 0-5.48.75.75 0 0 1 1.06 0Z" clip-rule="evenodd"/> <path fill-rule="evenodd" d="M11.89 3.05a.75.75 0 0 1 1.06 0 7 7 0 0 1 0 9.9.75.75 0 1 1-1.06-1.06 5.5 5.5 0 0 0 0-7.78.75.75 0 0 1 0-1.06Zm-7.78 0a.75.75 0 0 1 0 1.06 5.5 5.5 0 0 0 0 7.78.75.75 0 1 1-1.06 1.06 7 7 0 0 1 0-9.9.75.75 0 0 1 1.06 0Z" clip-rule="evenodd"/></svg>Search status</h2></div>
           <div class="card-b">
             <div class="status" id="candStatus">No candidate placed</div>
+            <div class="found-list" id="foundList"></div>
             <div class="hint" id="lookingFor" style="margin-top:10px;font-size:12px;color:var(--fg-3)"></div>
           </div>
         </div>

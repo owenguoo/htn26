@@ -93,12 +93,19 @@ enum MapInk {
     static let stage = hex(0xde, 0xee, 0xe3)             // '#deeee3'
     static let stageLabel = hex(0x46, 0x66, 0x53)        // '#466653'
 
-    /// `drawCoverage` / `drawCone` both paint in the accent, at their own alpha.
-    static let heat = hex(0x18, 0x83, 0x4b)              // 'rgba(24,131,75,·)'
+    /// `HEAT_RGB` in `web/room.js`. **Deliberately not the accent.** The
+    /// probability field used to be painted in the same green as the searcher
+    /// dots, their view cones and the chrome, so the one layer on the map that
+    /// is data looked like more furniture. Blue, and not the amber or red that
+    /// belong to sightings and the found person: a likely area is somewhere to
+    /// look, not an alarm.
+    static let heatField = hex(0x25, 0x63, 0xeb)         // '#2563eb'
+    /// `drawCone` and the ping ring paint in the accent, at their own alpha.
     static let searcher = hex(0x18, 0x83, 0x4b)          // `--accent`
     static let sighting = hex(0xd9, 0x77, 0x06)          // '#d97706'
     static let found = hex(0xb7, 0x2f, 0x36)             // `--red`
     static let ping = hex(0x17, 0x37, 0x26)              // '#173726', = `--fg`
+    static let marker = hex(0x6b, 0x4f, 0xbb)           // `MARKER_COLOR`
 
     static let markerBorder = Color.white
     static let markerShadow = hex(0x17, 0x37, 0x26).opacity(0.16)
@@ -166,6 +173,44 @@ enum Surface {
     /// material is what makes `.secondary` body text legible over arbitrary
     /// video instead of merely usually legible.
     static let card: Material = .regularMaterial
+}
+
+// MARK: - Motion
+
+/// Durations and curves, in one place for the same reason the gaps are.
+enum Motion {
+    /// The map coming out of the mini-map and going back into it. Slightly
+    /// under-damped on purpose: the card should read as having been pulled out
+    /// of the thumbnail, not as having faded up over it.
+    static let genie: Animation = .spring(response: 0.42, dampingFraction: 0.78)
+    /// The mini-map settling after a drag.
+    static let settle: Animation = .spring(response: 0.3, dampingFraction: 0.86)
+    /// A small piece of chrome picking itself up or putting itself down.
+    static let lift: Animation = .easeOut(duration: 0.15)
+}
+
+/// macOS's genie, near enough for a phone: the card is drawn down into the
+/// mini-map, narrowing to a sliver on the way, and comes back out of it.
+///
+/// The anchor is the mini-map's own centre as a fraction of the screen —
+/// recomputed after every drag — so the map always collapses back into
+/// wherever the operator has parked the thumbnail rather than into the corner
+/// it started in.
+///
+/// The blur is what makes the squeeze read as suction rather than as a shrink:
+/// without it the eye tracks the sliver and sees a rectangle getting small. It
+/// is kept small — this is a full-screen blur on a phone that is also running
+/// ARKit, an encoder and a socket, for the third of a second it is on screen.
+struct GenieTransition: Transition {
+    var anchor: UnitPoint
+
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content
+            .scaleEffect(x: phase.isIdentity ? 1 : 0.16, y: phase.isIdentity ? 1 : 0.04,
+                         anchor: anchor)
+            .opacity(phase.isIdentity ? 1 : 0)
+            .blur(radius: phase.isIdentity ? 0 : 6)
+    }
 }
 
 // MARK: - Type

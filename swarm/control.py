@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 
+from .detection import MAX_PEOPLE
+
+# Detection keeps running after the first person is found, because there may be others.
+# Mirrors hub.SEARCH_PHASES, which cannot be imported here (hub imports this module).
+SEARCHING = ('search', 'found')
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -102,7 +108,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
             available = 'unavailable'
         return {'searchRevision': hub.search.revision, 'targetVersion': hub.search.target_version,
                 'threshold': hub.search.threshold, 'phase': hub.phase,
-                'active': auth.settings.enabled and hub.phase == 'search' and bool(hub.search.target_version),
+                'active': auth.settings.enabled and hub.phase in SEARCHING and bool(hub.search.target_version),
                 'status': available, 'enabled': auth.settings.enabled,
                 'referenceAvailable': bool(hub.search.target_version),
                 **hub.search.visual_context(time.time() * 1000)}
@@ -153,6 +159,9 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
 
     @app.put('/api/search/reference')
     async def reference(request: Request):
+        """Register a reference photo. `add=1` puts another person on the roster and every frame
+        is then matched against all of them; without it this replaces the roster, which also
+        starts the search over with a clean probability map."""
         nonlocal status_value, status_at
         auth.require_same_origin(request)
         boxes = request.query_params.getlist('box')
@@ -163,43 +172,81 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
                 raise ValueError()
         except ValueError:
             raise HTTPException(422, 'box requires four finite pixel coordinates')
+        adding = request.query_params.get('add') in ('1', 'true') and bool(hub.search.people)
+        label = request.query_params.get('label')
+        if adding and len(hub.search.people) >= MAX_PEOPLE:
+            raise HTTPException(409, f'at most {MAX_PEOPLE} people can be searched for at once')
         if gate.locked():
             raise HTTPException(429, 'reference control busy')
         async with gate:
-            hub.search.set_reference(None)
+            if not adding:
+                hub.search.set_reference(None)
             revision = hub.search.revision
-            await hub.enter_real_search()
-            status_value = 'unavailable' if auth.settings.enabled else 'disabled'
+            if not adding:
+                # A fresh roster starts a fresh search; adding somebody must keep the map and
+                # everything the swarm has already learned about the people on it.
+                await hub.enter_real_search()
+                status_value = 'unavailable' if auth.settings.enabled else 'disabled'
             await hub.clear_detection_overlays()
             data = await upload(request)
             if hub.search.revision != revision:
                 raise HTTPException(409, 'search changed during upload')
-            result = await worker('PUT', '/v1/targets/active', data=data, params=[('box', x) for x in boxes])
-            if hub.search.revision != revision:
+            person_id = hub.search.next_person_id
+            result = await worker('PUT', f'/v1/targets/{person_id}', data=data,
+                                  params=[('box', x) for x in boxes])
+            if hub.search.revision != revision or hub.search.next_person_id != person_id:
                 raise HTTPException(409, 'search changed during upload')
             version = result.get('target_version')
             if not isinstance(version, str) or not 1 <= len(version) <= 128:
                 raise HTTPException(502, 'invalid target version')
-            hub.search.set_reference(version)
+            if adding:
+                try:
+                    hub.search.add_person(version, label)
+                except ValueError as error:
+                    raise HTTPException(409, str(error)) from error
+            else:
+                hub.search.set_reference(version)
+                if label:
+                    hub.search.people[0]['label'] = label.strip()[:60] or hub.search.people[0]['label']
             status_value, status_at = 'available', time.monotonic()
             await hub.clear_detection_overlays()
             return state()
+
+    async def forget(person_ids: list[str]) -> None:
+        """Drop references from the worker. A reference that is already gone is not an error."""
+        if not auth.settings.enabled:
+            return
+        for person_id in person_ids:
+            try:
+                await worker('DELETE', f'/v1/targets/{person_id}')
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+
+    @app.delete('/api/search/reference/{person_id}')
+    async def drop_person(person_id: str, request: Request):
+        """Stop looking for one person; everybody else on the roster carries on."""
+        auth.require_same_origin(request)
+        if gate.locked():
+            raise HTTPException(429, 'reference control busy')
+        async with gate:
+            if not hub.search.remove_person(person_id):
+                raise HTTPException(404, 'no such person on the roster')
+            await hub.clear_detection_overlays()
+            await forget([person_id])
+        return state()
 
     @app.delete('/api/search/reference')
     async def clear(request: Request):
         nonlocal status_value
         auth.require_same_origin(request)
+        person_ids = [p['id'] for p in hub.search.people] or ['person-1']
         hub.search.set_reference(None)
         status_value = 'unavailable' if auth.settings.enabled else 'disabled'
         # Take the gate before awaiting overlays so registration cannot overtake deletion.
         async with gate:
             await hub.clear_detection_overlays()
-            if auth.settings.enabled:
-                try:
-                    await worker('DELETE', '/v1/targets/active')
-                except HTTPException as error:
-                    if error.status_code != 404:
-                        raise
+            await forget(person_ids)
         return state()
 
     @app.put('/api/search/threshold')
@@ -230,7 +277,9 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
             body = Confirmation.model_validate(await request.json())
         except (ValidationError, ValueError):
             raise HTTPException(422, 'invalid sighting identity')
-        if hub.phase != 'search' or not hub.search.confirm(body.phoneId, body.streamId, body.seq, body.searchRevision):
+        # Confirming from 'found' too: the operator confirms each person separately, and the
+        # first confirmation already moved the phase on.
+        if hub.phase not in SEARCHING or not hub.search.confirm(body.phoneId, body.streamId, body.seq, body.searchRevision):
             raise HTTPException(409, 'sighting expired or search changed')
         hub.target.remove()
         hub.mission_complete = False
@@ -238,7 +287,9 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
         published = await hub.set_phase('found', confirmed_visual=True)
         if not published or hub.search.confirmation is not confirmation:
             raise HTTPException(409, 'confirmation superseded by newer search state')
-        hub.planner.note('Operator confirmed visual sighting; target location unknown', body.phoneId)
+        nth = len(hub.search.confirmations)
+        hub.planner.note(f'Operator confirmed visual sighting {nth}; target location unknown' if nth > 1
+                         else 'Operator confirmed visual sighting; target location unknown', body.phoneId)
         return state()
 
     @app.post('/api/search/rehearsal')

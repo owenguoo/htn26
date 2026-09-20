@@ -123,44 +123,69 @@ class Bridge:
             await asyncio.sleep(delay)
             delay = min(10, delay * 2)
 
-    async def process(self, header: dict, jpeg: bytes) -> None:
-        state = self.state.copy()
-        revision = state.get('searchRevision', '')
-        if not state.get('active') or header.get('searchRevision') != revision:
-            return
-        if not 0 <= now_ms() - header['t'] <= 1500:
-            return
-        params = dict(target_id='active', phone_id=header['streamId'], frame_id=str(header['seq']),
-                      captured_at=captured_at_seconds(header['t']), similarity_threshold=state['threshold'])
+    async def unavailable(self, revision: str) -> None:
+        """A reference the worker no longer holds: stop offering frames until the hub re-registers."""
+        await self.status(revision, 'reference_unavailable')
+        self.state = {}
+        self.clear()
+
+    async def match(self, person: dict, header: dict, jpeg: bytes, threshold: float,
+                    revision: str) -> tuple[list[dict], dict] | None:
+        """Match one frame against one person on the roster. None means give up on this frame."""
+        params = dict(target_id=person['id'], phone_id=header['streamId'], frame_id=str(header['seq']),
+                      captured_at=captured_at_seconds(header['t']), similarity_threshold=threshold)
         response = await self.client.post(self.settings.inference_url + '/v1/match', params=params, content=jpeg,
                                          headers={**self.settings.inference_headers, 'Content-Type': 'image/jpeg'})
         if response.status_code in (409, 504):
-            return
+            return None
         if response.status_code == 429:
             self.backoff_until = asyncio.get_running_loop().time() + 1
-            return
+            return None
         if response.status_code == 404:
-            await self.status(revision, 'reference_unavailable')
-            self.state = {}
-            self.clear()
-            return
+            await self.unavailable(revision)
+            return None
         response.raise_for_status()
         result = response.json()
-        if result['target_version'] != state['targetVersion']:
-            await self.status(revision, 'reference_unavailable')
-            self.state = {}
-            self.clear()
-            return
-        if (result['target_id'] != 'active' or result['phone_id'] != params['phone_id']
+        if result['target_version'] != person['version']:
+            await self.unavailable(revision)
+            return None
+        if (result['target_id'] != person['id'] or result['phone_id'] != params['phone_id']
                 or result['frame_id'] != params['frame_id'] or result['captured_at'] != params['captured_at']
                 or (result['width'], result['height']) != (header['width'], header['height'])):
             raise ValueError('worker identity or dimensions mismatch')
         boxes = [normalize_box(tuple(c['box']), header['width'], header['height']) |
-                 {'label': 'person', 'detectionScore': c['detection_score'], 'similarity': c['similarity']}
+                 {'label': 'person', 'detectionScore': c['detection_score'], 'similarity': c['similarity'],
+                  'targetId': person['id']}
                  for c in result['candidates']]
+        return boxes, result
+
+    async def process(self, header: dict, jpeg: bytes) -> None:
+        """One frame, matched against everybody on the reference roster. The boxes come back
+        tagged with the person they matched, so a frame holding two of them says so."""
+        state = self.state.copy()
+        revision = state.get('searchRevision', '')
+        people = state.get('people') or []
+        if not state.get('active') or header.get('searchRevision') != revision or not people:
+            return
+        if not 0 <= now_ms() - header['t'] <= 1500:
+            return
+        boxes: list[dict] = []
+        queue_ms = inference_ms = matching_ms = 0.0
+        for person in people:
+            matched = await self.match(person, header, jpeg, state['threshold'], revision)
+            if matched is None:
+                return
+            found, result = matched
+            boxes += found
+            queue_ms = max(queue_ms, result['queue_ms'])   # one queue wait, not one per person
+            inference_ms += result['inference_ms']
+            matching_ms += result['matching_ms']
+            if self.state.get('searchRevision') != revision or not self.state.get('active'):
+                return
+        boxes.sort(key=lambda b: -b['similarity'])
         body = DetectionResult.model_validate({k: header[k] for k in ('phoneId', 'streamId', 'seq', 't', 'width', 'height', 'searchRevision')} |
-                dict(targetVersion=state['targetVersion'], boxes=boxes, queueMs=result['queue_ms'],
-                     inferenceMs=result['inference_ms'], matchingMs=result['matching_ms']))
+                dict(targetVersion=state['targetVersion'], boxes=boxes[:100], queueMs=queue_ms,
+                     inferenceMs=inference_ms, matchingMs=matching_ms))
         if self.state.get('searchRevision') != revision or not self.state.get('active') or now_ms() - body.t > 1500:
             return
         callback = await self.client.post(self.settings.hub_url + '/api/detections', headers=self.headers, json=body.model_dump())

@@ -66,7 +66,9 @@ uv run python -m swarm.hub
 uv run python -m swarm.inference
 ```
 
-Open `/console`, authenticate, upload a reference and select one person.
+Open `/console`, authenticate, then upload a reference photo for each person to find (up to eight)
+and select one person in each. Every frame is matched against all of them, so a search can look for
+several people at once and each one found keeps their own responder team.
 Likely matches carry separate detection scores and appearance similarities.
 Operator confirmation establishes a visual sighting with unknown target position, without responder dispatch.
 Use the explicit rehearsal control for simulated targets.

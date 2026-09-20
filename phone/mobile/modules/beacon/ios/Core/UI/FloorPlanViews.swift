@@ -65,11 +65,19 @@ struct FloorPlanGeometry {
         CGRect(origin: origin, size: CGSize(width: room.width * scale, height: room.depth * scale))
     }
 
-    /// The stage block, above the room's top edge.
+    /// `STAGE_GAP_PX` in `web/room.js`. Keep the two in step.
+    static let stageGap: CGFloat = 3
+
+    /// The stage block, above the room's top edge and lifted clear of it by
+    /// `stageGap` so that both rectangles are closed and neither borrows the
+    /// other's edge. Presentation only: the room's coordinates are unchanged,
+    /// and everything placed in the room is still placed against the real
+    /// stage line at y = 0.
     var stageRect: CGRect? {
         guard let stage = room.stage else { return nil }
         let topLeft = point(x: -stage.width / 2, y: -stage.depth)
-        return CGRect(x: topLeft.x, y: topLeft.y, width: length(stage.width), height: length(stage.depth))
+        return CGRect(x: topLeft.x, y: topLeft.y - Self.stageGap,
+                      width: length(stage.width), height: length(stage.depth))
     }
 }
 
@@ -116,6 +124,9 @@ struct FloorPlanCanvas: View {
             context.stroke(Path(plan.bounds), with: .color(MapInk.wall), lineWidth: 2)
             if let stage = plan.stageRect {
                 context.fill(Path(stage), with: .color(MapInk.stage))
+                // The stage carries the same 2-point wall the room does, all
+                // the way around — see `drawRoom()` in `web/room.js`.
+                context.stroke(Path(stage), with: .color(MapInk.wall), lineWidth: 2)
                 if showsDetail {
                     // `600 ${Math.max(10, view.scale * 0.6)}px` — the STAGE word
                     // grows with the room, not with the operator's text size.
@@ -131,7 +142,10 @@ struct FloorPlanCanvas: View {
                 cone(&context, plan: plan, x: who.x, y: who.y, heading: heading)
             }
 
+            // `draw()`: marker, then pings, then the found person, then the
+            // phone pins over all of it.
             var labels: [CGRect] = []
+            drawMarker(&context, plan: plan, labels: &labels, size: size)
             drawPings(&context, plan: plan)
             drawCandidate(&context, plan: plan, labels: &labels, size: size)
             for who in people {
@@ -202,8 +216,11 @@ struct FloorPlanCanvas: View {
         context.drawLayer { layer in
             layer.clip(to: Path(rect))  // heat stops at the walls
             layer.addFilter(.blur(radius: blur))
-            layer.interpolation = .high
-            layer.draw(Image(decorative: field, scale: 1, orientation: .up), in: rect)
+            // Interpolation is a property of the image, not of the context:
+            // `GraphicsContext` has no `interpolation`. Without `.high` the
+            // 40 x 30 field would nearest-neighbour up into visible cells.
+            layer.draw(Image(decorative: field, scale: 1, orientation: .up).interpolation(.high),
+                       in: rect)
         }
     }
 
@@ -231,10 +248,17 @@ struct FloorPlanCanvas: View {
             guard looked.count == n else { return nil }
             bins = looked.map { min(top, max(0, Int((min(1, max(0, 1 - $0)) * Double(top)).rounded()))) }
         }
-        let sorted = bins.sorted()
-        let spread = Double(sorted[n - 1] - sorted[Int(Double(n) * heatLowPercentile)]) / Double(top)
-        guard spread > heatMinSpread else { return nil }
-        return heatEqualise(bins)
+        guard let low = bins.min(), let high = bins.max(),
+              Double(high - low) / Double(top) > heatMinSpread else { return nil }
+        var levels = heatEqualise(bins)
+        // Normalise to the hottest cell. Ranking alone leaves the plateau of
+        // never-looked-at cells at its *midpoint* rank, which early in a search
+        // is about 0.5 for the whole map — a flat, near-invisible tint. See
+        // `heatLevels()` in `web/room.js`.
+        if let peak = levels.max(), peak > 0 {
+            for i in levels.indices { levels[i] /= peak }
+        }
+        return levels
     }
 
     /// One base-36 digit, the way `parseInt(c, 36)` reads it. Anything else is 0.
@@ -268,24 +292,36 @@ struct FloorPlanCanvas: View {
         return bins.map { $0 >= 0 && $0 < heatSteps ? level[$0] : 0 }
     }
 
-    /// `HEAT_MAX_ALPHA` / `HEAT_GAMMA` / `HEAT_STEPS` / `HEAT_MIN_SPREAD` /
-    /// `HEAT_LOW_PERCENTILE` in `web/room.js`. Keep the five in step with it.
-    static let heatMaxAlpha: Double = 0.34
+    /// `HEAT_MAX_ALPHA` / `HEAT_GAMMA` / `HEAT_STEPS` / `HEAT_MIN_SPREAD` in
+    /// `web/room.js`. Keep the four in step with it. `heatMinSpread` is over
+    /// the *full* range, coldest to hottest: a percentile cut meant nothing was
+    /// drawn until a good fraction of the floor had been swept, which is
+    /// exactly the stretch of a search the operator is watching the map for.
+    static let heatMaxAlpha: Double = 0.38
     static let heatGamma: Double = 1.8
     static let heatSteps = 36
     static let heatMinSpread: Double = 0.04
-    static let heatLowPercentile: Double = 0.05
 
     static func heatAlpha(_ level: Double) -> Double {
         heatMaxAlpha * pow(min(1, max(0, level)), heatGamma)
     }
 
-    /// The field as a cols×rows bitmap in `MapInk.heat`, one pixel per cell,
+    /// `heatGradientCSS()` in `web/room.js`: the ramp as gradient stops for the
+    /// legend key, off the same numbers the field is painted with, so the
+    /// swatch cannot drift away from the thing it explains.
+    static var heatStops: [Gradient.Stop] {
+        (0..<6).map { step in
+            let level = Double(step) / 5
+            return Gradient.Stop(color: MapInk.heatField.opacity(heatAlpha(level)), location: level)
+        }
+    }
+
+    /// The field as a cols×rows bitmap in `MapInk.heatField`, one pixel per cell,
     /// drawn scaled up with interpolation. `heatCanvas()` in `web/room.js`.
     static func heatImage(_ levels: [Double], cols: Int, rows: Int) -> CGImage? {
         guard cols > 0, rows > 0, levels.count >= cols * rows else { return nil }
-        // `MapInk.heat` = rgb(24, 131, 75), premultiplied by the cell's alpha.
-        let ink = (r: 24.0, g: 131.0, b: 75.0)
+        // `MapInk.heatField` = rgb(37, 99, 235), premultiplied by the cell's alpha.
+        let ink = (r: 37.0, g: 99.0, b: 235.0)
         var bytes = [UInt8](repeating: 0, count: cols * rows * 4)
         for i in 0..<(cols * rows) {
             let a = heatAlpha(levels[i])
@@ -343,7 +379,7 @@ struct FloorPlanCanvas: View {
         wedge.addArc(center: p, radius: length, startAngle: mid - half, endAngle: mid + half, clockwise: false)
         wedge.closeSubpath()
         context.fill(wedge, with: .radialGradient(
-            Gradient(colors: [MapInk.heat.opacity(0.12), MapInk.heat.opacity(0)]),
+            Gradient(colors: [MapInk.searcher.opacity(0.12), MapInk.searcher.opacity(0)]),
             center: p, startRadius: 0, endRadius: length))
     }
 
@@ -392,15 +428,55 @@ struct FloorPlanCanvas: View {
                           cornerRadius: 3), with: .color(color))
     }
 
+    /// `drawMarker()`: the printed alignment marker, wherever the operator put
+    /// it on the console.
+    ///
+    /// The console draws it as a tag rather than a dot, "so it reads as a thing
+    /// on a wall, not another searcher" — 16 points square with a 4-point
+    /// radius, filled in `MARKER_COLOR`, a 2-point white border and the same
+    /// drop shadow the phone pins carry, with the MARKER label 19 points above.
+    /// The phone used to show it as an ordinary ping instead: a dark diamond
+    /// with an expanding ring, which is the shape the map uses for "go here
+    /// now" and reads as a completely different thing.
+    private func drawMarker(_ context: inout GraphicsContext, plan: FloorPlanGeometry,
+                            labels: inout [CGRect], size: CGSize) {
+        guard let marker = world?.marker else { return }
+        let p = plan.point(x: marker.x, y: marker.y)
+        let tag = Path(roundedRect: CGRect(x: p.x - 8, y: p.y - 8, width: 16, height: 16),
+                       cornerRadius: 4)
+        context.drawLayer { layer in
+            layer.addFilter(.shadow(color: MapInk.markerShadow, radius: 7, x: 0, y: 2))
+            layer.fill(tag, with: .color(MapInk.marker))
+            layer.stroke(tag, with: .color(MapInk.markerBorder), lineWidth: MapMarker.stroke)
+        }
+        guard showsDetail else { return }
+        mapLabel(&context, "MARKER", at: CGPoint(x: p.x, y: p.y - 19),
+                 background: MapInk.marker, labels: &labels, size: size)
+    }
+
+    /// Before the search starts the hub also pushes the marker down the ping
+    /// channel (`hub.py` `marker_cue`), because the compass and the camera view
+    /// have no other way to hear about it. The map does, so it drops that cue
+    /// rather than drawing a ping diamond underneath the marker tag.
+    ///
+    /// Static: the views that host the map gate their animation clock on the
+    /// same list. A marker cue that is no longer drawn must not keep a map with
+    /// nothing moving on it repainting at 30 Hz.
+    static func drawablePings(_ pings: [PingCue], world: HubWorld?) -> [PingCue] {
+        world?.marker == nil ? pings : pings.filter { $0.label != "MARKER" }
+    }
+
+    private var mapPings: [PingCue] { Self.drawablePings(pings, world: world) }
+
     /// `drawPings()`: an expanding ring, a dark diamond, and the label above it.
     private func drawPings(_ context: inout GraphicsContext, plan: FloorPlanGeometry) {
-        for ping in pings {
+        for ping in mapPings {
             let p = plan.point(x: ping.x, y: ping.y)
             let k = time.truncatingRemainder(dividingBy: 1)
             let radius = CGFloat(6 + k * 18)
             context.stroke(Path(ellipseIn: CGRect(x: p.x - radius, y: p.y - radius,
                                                   width: radius * 2, height: radius * 2)),
-                           with: .color(MapInk.heat.opacity(0.8 * (1 - k))), lineWidth: 1)
+                           with: .color(MapInk.searcher.opacity(0.8 * (1 - k))), lineWidth: 1)
             var diamond = Path()
             diamond.move(to: CGPoint(x: p.x, y: p.y - 7))
             diamond.addLine(to: CGPoint(x: p.x + 7, y: p.y))
@@ -440,7 +516,7 @@ struct FloorPlanCanvas: View {
                           background: Color, labels: inout [CGRect], size: CGSize) {
         let resolved = context.resolve(Text(text).font(.system(size: 10, weight: .semibold))
             .foregroundStyle(MapInk.markerBorder))
-        let width = resolved.measure(in: CGSize(width: .infinity, height: .infinity)).width + 12
+        let width = resolved.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity)).width + 12
         let half = width / 2
         let x = max(half + 4, min(size.width - half - 4, point.x))
         var rect = CGRect(x: x - half, y: point.y - 9, width: width, height: MapMarker.labelHeight)
@@ -503,7 +579,8 @@ struct MiniMapView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PulsingFloorPlan(isAnimating: !pings.isEmpty || world?.candidate != nil) { time in
+            PulsingFloorPlan(isAnimating: !FloorPlanCanvas.drawablePings(pings, world: world).isEmpty
+                                 || world?.candidate != nil) { time in
                 FloorPlanCanvas(room: room, world: world, me: me, pings: pings,
                                 followsMe: true, showsDetail: false, time: time)
             }
@@ -578,7 +655,8 @@ struct RoomMapView: View {
             }
 
             VStack(spacing: 0) {
-                PulsingFloorPlan(isAnimating: !pings.isEmpty || world?.candidate != nil) { time in
+                PulsingFloorPlan(isAnimating: !FloorPlanCanvas.drawablePings(pings, world: world).isEmpty
+                                 || world?.candidate != nil) { time in
                     FloorPlanCanvas(room: room, world: world, me: me, pings: pings, time: time)
                 }
                 .aspectRatio(room.width / max(1, room.depth + (room.stage?.depth ?? 0)), contentMode: .fit)
@@ -586,12 +664,33 @@ struct RoomMapView: View {
 
                 // `.map-legend`: a full-width strip under the map, not a card
                 // floating over the floor.
-                HStack(spacing: Space.l) {
-                    MapLegendKey(label: "Searcher", fill: MapInk.searcher, ring: MapInk.markerBorder)
-                    MapLegendKey(label: "Possible", fill: MapInk.markerBorder, ring: MapInk.sighting)
-                    MapLegendKey(label: "Found", fill: MapInk.markerBorder, ring: MapInk.found)
-                    Spacer(minLength: 0)
+                // Four keys and the ramp, the same five the console's legend
+                // carries. `.map-legend` is a wrapping flex; an HStack cannot
+                // wrap, so the second line is explicit and the gap is a notch
+                // tighter than the console's 18px.
+                VStack(alignment: .leading, spacing: Space.s) {
+                    HStack(spacing: Space.m) {
+                        MapLegendKey(label: "Searcher", fill: MapInk.searcher, ring: MapInk.markerBorder)
+                        MapLegendKey(label: "Possible", fill: MapInk.markerBorder, ring: MapInk.sighting)
+                        MapLegendKey(label: "Found", fill: MapInk.markerBorder, ring: MapInk.found)
+                        MapLegendKey(label: "Marker", fill: MapInk.marker, ring: MapInk.markerBorder,
+                                     rounded: true)
+                        Spacer(minLength: 0)
+                    }
+                    // The field is a scale, not a category, so its key names
+                    // both ends instead of showing one swatch.
+                    HStack(spacing: 7) {
+                        Text("Cleared")
+                        HeatScaleBar()
+                        Text("Likely here")
+                        Spacer(minLength: 0)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Shading: pale where the area is cleared, "
+                                        + "strong where the person is likely to be.")
                 }
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .font(.system(size: 11))
                 .foregroundStyle(MapInk.labelSecondary)
                 .padding(.horizontal, Space.m)
@@ -611,19 +710,42 @@ struct RoomMapView: View {
     }
 }
 
+/// `.heat-scale`: the probability ramp, white underneath because the cleared
+/// end of it is transparent over the map's white floor.
+private struct HeatScaleBar: View {
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 3, style: .continuous) }
+
+    var body: some View {
+        shape.fill(.white)
+            .overlay(shape.fill(LinearGradient(stops: FloorPlanCanvas.heatStops,
+                                               startPoint: .leading, endPoint: .trailing)))
+            .overlay(shape.strokeBorder(MapInk.line, lineWidth: 1))
+            .frame(width: 54, height: 10)
+    }
+}
+
 /// `.map-key`: a 20-point disc with a 2-point border, filled for a searcher and
 /// hollow for a person.
 private struct MapLegendKey: View {
     let label: String
     let fill: Color
     let ring: Color
+    /// `.map-key.marker { border-radius: 5px }`: the alignment marker is the
+    /// one thing on the map that is not a person, so it is the one key that is
+    /// not a disc — the same distinction the map itself draws.
+    var rounded = false
 
     var body: some View {
         HStack(spacing: 7) {
-            Circle()
-                .fill(fill)
-                .frame(width: 16, height: 16)
-                .overlay(Circle().strokeBorder(ring, lineWidth: 2))
+            Group {
+                if rounded {
+                    let shape = RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    shape.fill(fill).overlay(shape.strokeBorder(ring, lineWidth: 2))
+                } else {
+                    Circle().fill(fill).overlay(Circle().strokeBorder(ring, lineWidth: 2))
+                }
+            }
+            .frame(width: 16, height: 16)
             Text(label)
         }
         .accessibilityElement(children: .combine)

@@ -8,10 +8,15 @@ import Testing
 struct OperatorStatusTests {
     private func pill(_ state: SessionState = .tracking, alignment: RoomAligner.Source = .marker,
                       connection: StatusPill.ConnectionState = .online, stale: Bool = false,
-                      thermal: ThermalState = .nominal, correction: Double? = 2) -> StatusPill {
+                      thermal: ThermalState = .nominal, correction: Double? = 2,
+                      disconnected: Double? = nil) -> StatusPill {
         StatusPill(sessionState: state, confidence: 1, isStale: stale, connection: connection,
-                   thermalState: thermal, secondsSinceCorrection: correction, alignment: alignment)
+                   thermalState: thermal, secondsSinceCorrection: correction,
+                   secondsDisconnected: disconnected, alignment: alignment)
     }
+
+    /// Longer than `connectingGraceSeconds`: the connection is genuinely down.
+    private let givenUp: Double = 60
 
     @Test func healthyIsOneWord() {
         let status = OperatorStatus(pill())
@@ -47,13 +52,33 @@ struct OperatorStatusTests {
     /// A phone that cannot reach the hub has no use for tracking advice.
     @Test func theConnectionOutranksEverything() {
         for state in SessionState.allCases {
-            let status = OperatorStatus(pill(state, connection: .reconnecting, stale: true, thermal: .critical))
+            let status = OperatorStatus(pill(state, connection: .reconnecting, stale: true,
+                                             thermal: .critical, disconnected: givenUp))
             #expect(status.title == "Reconnecting…", "\(state) hid the dropped connection")
             #expect(status.level == .problem)
         }
-        let connecting = OperatorStatus(pill(connection: .connecting))
+        let connecting = OperatorStatus(pill(connection: .connecting, disconnected: givenUp))
         #expect(connecting.title == "Connecting…")
         #expect(connecting.hint == "Check the venue Wi-Fi")
+    }
+
+    /// Opening the app used to begin with a red warning triangle and "Check
+    /// the venue Wi-Fi", for a phone that was doing nothing worse than dialling
+    /// the hub. It says the same thing, quietly, until it has been trying long
+    /// enough for that to be news.
+    @Test func dialTheHubQuietlyBeforeCallingItAProblem() {
+        for connection in [StatusPill.ConnectionState.offline, .connecting, .reconnecting] {
+            let fresh = OperatorStatus(pill(connection: connection, disconnected: 2))
+            #expect(fresh.level == .attention, "\(connection) went red while it was still dialling")
+            #expect(fresh.hint == nil, "\(connection) told the operator to fix a working connection")
+
+            let stuck = OperatorStatus(pill(connection: connection,
+                                            disconnected: OperatorStatus.connectingGraceSeconds + 1))
+            #expect(stuck.level == .problem, "\(connection) never escalated")
+            #expect(stuck.hint == "Check the venue Wi-Fi")
+        }
+        // A pill nobody is timing is treated as fresh, not as forever.
+        #expect(OperatorStatus(pill(connection: .connecting)).level == .attention)
     }
 
     @Test func secondaryConditionsOnlySurfaceWhenNothingWorseIsWrong() {

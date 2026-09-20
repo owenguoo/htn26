@@ -15,6 +15,13 @@ public struct StatusPill: Sendable, Equatable {
     /// Seconds since the last accepted marker correction. nil means never, which
     /// means nothing this phone reports can be fused.
     public var secondsSinceCorrection: Double?
+    /// How long this phone has been unable to reach the hub — measured from
+    /// the moment the transport last left `.online`, or from the first attempt
+    /// if it has never been online. nil while connected.
+    ///
+    /// Only `OperatorStatus` reads it, and only to decide how loud to be:
+    /// dialling the hub is not a fault until it has been going on a while.
+    public var secondsDisconnected: Double?
     /// How this phone knows where it is in the room. Decides what "never
     /// corrected" means: alarming for a marker-locked phone, normal for one
     /// located from a seat tap, which has no marker corrections by definition.
@@ -40,6 +47,7 @@ public struct StatusPill: Sendable, Equatable {
                 confidence: Double = 0, isStale: Bool = true,
                 connection: ConnectionState = .offline, inFlight: Int = 0, dropped: Int = 0,
                 thermalState: ThermalState = .nominal, secondsSinceCorrection: Double? = nil,
+                secondsDisconnected: Double? = nil,
                 alignment: RoomAligner.Source = .marker) {
         self.alignment = alignment
         self.sessionState = sessionState
@@ -51,6 +59,7 @@ public struct StatusPill: Sendable, Equatable {
         self.dropped = dropped
         self.thermalState = thermalState
         self.secondsSinceCorrection = secondsSinceCorrection
+        self.secondsDisconnected = secondsDisconnected
     }
 
     /// True when the operator should be told something is wrong rather than
@@ -133,15 +142,42 @@ public struct OperatorStatus: Sendable, Equatable {
     /// operator really has not looked at a marker for a while.
     static let driftHintSeconds: Double = 120
 
+    /// How long the phone has to be out of touch with the hub before the
+    /// status goes red.
+    ///
+    /// Joining a room is a websocket handshake over venue Wi-Fi, and a phone
+    /// that has just been unlocked may also be waiting on the radio to wake.
+    /// Both take a moment, and both are completely normal — but the pill went
+    /// straight to a red warning triangle and "Check the venue Wi-Fi" the
+    /// instant the app opened, so every single launch began by telling the
+    /// operator something was broken. It is the same crying-wolf problem as
+    /// `driftHintSeconds`: a warning that is usually wrong gets ignored when
+    /// it is right.
+    ///
+    /// Under this, the same words are amber with no instruction attached —
+    /// "Connecting…", which is true and not alarming. Over it, the connection
+    /// really has not come up and the operator needs to do something about it.
+    ///
+    /// Measured from when the transport last left `.online`, not from the
+    /// current state, deliberately: the first attempt is `.connecting` and
+    /// every retry after it is `.reconnecting`, so keying off the state name
+    /// would go red on the second attempt, a second or two in.
+    public static let connectingGraceSeconds: Double = 15
+
     /// Most important first: a phone that cannot reach the hub has no use for
     /// being told its tracking is shaky.
     public init(_ pill: StatusPill) {
+        // nil means the caller does not track it: treat that as "just started"
+        // rather than "forever", so a pill built by hand is never alarming.
+        let settling = (pill.secondsDisconnected ?? 0) < Self.connectingGraceSeconds
         switch pill.connection {
         case .offline, .connecting:
-            self.init(level: .problem, title: "Connecting…", hint: "Check the venue Wi-Fi")
+            self.init(level: settling ? .attention : .problem, title: "Connecting…",
+                      hint: settling ? nil : "Check the venue Wi-Fi")
             return
         case .reconnecting:
-            self.init(level: .problem, title: "Reconnecting…")
+            self.init(level: settling ? .attention : .problem, title: "Reconnecting…",
+                      hint: settling ? nil : "Check the venue Wi-Fi")
             return
         case .online:
             break
@@ -523,6 +559,12 @@ public struct OverlayModel: Sendable {
         }
     }
 
+    /// When the transport last left `.online` — or, before it has ever been
+    /// online, when this phone started trying. Drives
+    /// `OperatorStatus.connectingGraceSeconds`, which is why it is measured
+    /// here rather than derived from the transport state: the state alone
+    /// cannot tell a fresh attempt from one that has been failing for a minute.
+    private var offlineSince: Double?
     private var guide: Guide?
     private var cueSerial: UInt64 = 0
     private var wasOnTarget = false
@@ -677,15 +719,18 @@ public struct OverlayModel: Sendable {
                                 intrinsics: CameraIntrinsics?, diagnostics: SessionDiagnostics,
                                 transport: Transport.Stats, transportState: TransportState,
                                 now: Double) {
+        let connection = StatusPill.ConnectionState(transportState)
+        if connection == .online { offlineSince = nil } else if offlineSince == nil { offlineSince = now }
         state.pill = StatusPill(sessionState: diagnostics.state,
                                 trackingState: diagnostics.quality.wireValue,
                                 confidence: diagnostics.confidence,
                                 isStale: diagnostics.isStale,
-                                connection: StatusPill.ConnectionState(transportState),
+                                connection: connection,
                                 inFlight: transport.inFlight,
                                 dropped: transport.dropped,
                                 thermalState: diagnostics.thermalState,
                                 secondsSinceCorrection: diagnostics.lastCorrectionAge,
+                                secondsDisconnected: offlineSince.map { now - $0 },
                                 alignment: source)
         state.alignment = source
 

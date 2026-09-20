@@ -30,7 +30,8 @@ def test_latest_pending_fairness_and_bound():
     async def run():
         async with httpx.AsyncClient() as client:
             bridge = Bridge(Settings(max_phones=2), client)
-            bridge.state = {'active': True, 'searchRevision': 'r', 'targetVersion': 'v'}
+            bridge.state = {'active': True, 'searchRevision': 'r', 'targetVersion': 'v',
+                            'people': [{'id': 'person-1', 'label': 'Person 1', 'version': 'v'}]}
             def frame(phone, seq):
                 return pack({'phoneId': phone, 'seq': seq, 'searchRevision': 'r'}, b'jpg')
             bridge.offer(frame('a', 1))
@@ -77,13 +78,13 @@ def test_slow_inference_keeps_latest_and_discards_transition():
             if request.url.path == '/v1/match':
                 started.set()
                 await release.wait()
-                return httpx.Response(200, json=dict(target_id='active', target_version='v', phone_id='stream', frame_id='1',
+                return httpx.Response(200, json=dict(target_id=request.url.params['target_id'], target_version='v', phone_id='stream', frame_id='1',
                     captured_at=timestamp / 1000, width=100, height=100, candidates=[], queue_ms=1., inference_ms=1., matching_ms=1.))
             callbacks.append(request.url.path)
             return httpx.Response(200, json={'ok': True})
         async with httpx.AsyncClient(transport=httpx.MockTransport(boundary)) as client:
             bridge = Bridge(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge'), client)
-            bridge.state = dict(active=True, searchRevision='r', targetVersion='v', threshold=.7)
+            bridge.state = dict(active=True, searchRevision='r', targetVersion='v', threshold=.7, people=[dict(id='person-1', label='Person 1', version='v')])
             timestamp = now_ms()
             def packet(seq):
                 return pack(dict(phoneId='phone', streamId='stream', seq=seq, t=timestamp,
@@ -118,7 +119,7 @@ def test_reference_restart_and_backoff():
             return httpx.Response(200)
         async with httpx.AsyncClient(transport=httpx.MockTransport(boundary)) as client:
             bridge = Bridge(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge'), client)
-            bridge.state = dict(active=True, searchRevision='r', targetVersion='v', threshold=.7)
+            bridge.state = dict(active=True, searchRevision='r', targetVersion='v', threshold=.7, people=[dict(id='person-1', label='Person 1', version='v')])
             header = dict(phoneId='phone', streamId='s', seq=1, t=now_ms(), width=10, height=10, searchRevision='r')
             await bridge.process(header, b'jpg')
             assert 0 < bridge.backoff_until - asyncio.get_running_loop().time() <= 1
@@ -260,7 +261,7 @@ def test_bridge_normalizes_valid_response_and_rejects_wrong_identity():
             if request.url.path == '/v1/match':
                 assert request.url.params['phone_id'] == 's'
                 assert request.url.params['frame_id'] == '1'
-                return httpx.Response(200, json=dict(target_id='active', target_version='v', phone_id='wrong' if wrong else 's',
+                return httpx.Response(200, json=dict(target_id=request.url.params['target_id'], target_version='v', phone_id='wrong' if wrong else 's',
                     frame_id='1', captured_at=timestamp / 1000, width=100, height=100,
                     candidates=[dict(box=[10., 20., 50., 80.], detection_score=.9, similarity=.8)],
                     queue_ms=0., inference_ms=5., matching_ms=1.))
@@ -269,7 +270,7 @@ def test_bridge_normalizes_valid_response_and_rejects_wrong_identity():
             return httpx.Response(200, json={})
         async with httpx.AsyncClient(transport=httpx.MockTransport(boundary)) as client:
             bridge = Bridge(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge'), client)
-            bridge.state = dict(active=True, searchRevision='r', targetVersion='v', threshold=.7)
+            bridge.state = dict(active=True, searchRevision='r', targetVersion='v', threshold=.7, people=[dict(id='person-1', label='Person 1', version='v')])
             header = dict(phoneId='p', streamId='s', seq=1, t=timestamp, width=100, height=100, searchRevision='r')
             await bridge.process(header, b'jpg')
             assert posted[0]['boxes'][0] == dict(x=.1, y=.2, w=.4, h=.6, label='person', detectionScore=.9, similarity=.8)
@@ -389,7 +390,7 @@ def test_idle_health_checks_authenticated_reference_and_generation():
         code = 200
         version = 'v'
         async def boundary(request):
-            if request.url.path == '/v1/targets/active':
+            if request.url.path.startswith('/v1/targets/'):
                 assert request.headers['authorization'] == 'Bearer secret'
                 return httpx.Response(code, json={'target_version': version})
             if request.url.path == '/readyz':

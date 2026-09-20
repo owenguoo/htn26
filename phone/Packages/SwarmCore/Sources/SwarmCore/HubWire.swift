@@ -468,6 +468,15 @@ public struct HubWorld: Sendable, Equatable, Decodable {
     public var lookingFor: String?
     public var missionComplete: Bool?
     public var candidate: Point?
+    /// The printed alignment marker, wherever the operator dropped it on the
+    /// console. `hub.py`'s `world_loop` has always sent it; nothing decoded it,
+    /// so the phone's map had no marker on it while the console's did.
+    ///
+    /// It also rides the ping channel as a cue labelled "MARKER" before the
+    /// search starts, which is how it reaches the compass and the camera view.
+    /// The map ignores that cue and draws this instead, the way the console
+    /// does — otherwise the two would stack on the same spot.
+    public var marker: Point?
     public var me: String?
     public var pings: [Ping]?
     public var stats: Stats?

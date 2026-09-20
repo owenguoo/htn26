@@ -50,7 +50,9 @@ uv run python -m swarm.inference
 ```
 
 Wait for `curl --fail http://127.0.0.1:8001/readyz` to succeed.
-Open `http://localhost:8000/console`, upload a reference, select exactly one detected person, and register it.
+Open `http://localhost:8000/console`, upload one or more reference photos, and select exactly one detected person in each.
+The first photo starts the roster; each later one adds somebody else to look for, up to eight.
+Every sampled frame is matched against each person on the roster, so worker cost per frame scales with roster size.
 Join phones through the dashboard QR code over HTTPS, with camera permission.
 The bridge samples each phone at one FPS; focused console video can run at fifteen FPS.
 The bridge permits four global requests, at most one in flight and one latest pending frame per phone, with a default 64-phone admission bound (`SWARM_MAX_PHONES`, maximum 256).
@@ -109,7 +111,21 @@ Boxes use normalized image coordinates; detector score and appearance similarity
 An empty `boxes` array clears the current overlay.
 `POST /api/pose` retains `{phoneId, x, y, heading?, confidence?, source?}` for independently estimated phone position.
 This does not estimate the target person's position.
-The read-only worker `GET /v1/targets/active` requires its worker bearer and returns only target ID/version, or 404 when lost, 503 when matching/worker unavailable, and 401 for incorrect credentials.
+The hub registers each reference person under its own worker target, `person-1`, `person-2`, and so on.
+The read-only worker `GET /v1/targets/{id}` requires its worker bearer and returns only target ID/version, or 404 when lost, 503 when matching/worker unavailable, and 401 for incorrect credentials.
+
+Hub-side reference control, all same-origin:
+
+| Endpoint | Effect |
+|---|---|
+| `PUT /api/search/reference?box=x1,y1,x2,y2` | Replace the roster with this one person and restart the search with a clean probability map |
+| `PUT /api/search/reference?box=...&add=1&label=Name` | Add another person to the roster, keeping the map and everybody already on it |
+| `DELETE /api/search/reference/{personId}` | Stop looking for one person; the rest of the roster carries on |
+| `DELETE /api/search/reference` | Clear the roster |
+
+`GET /api/search` reports the roster as `people: [{id, label, version}]`.
+`targetVersion` is that person's version for a single-person roster, and a fingerprint of the whole roster otherwise, so adding or removing anybody invalidates results still in flight.
+Each box in `POST /api/detections` carries `targetId`, naming which reference person it matched.
 
 ## Reproducible checks
 
@@ -134,7 +150,7 @@ uv run python -m swarm.sim --n 1 --fps 2 --image /absolute/target-present.jpg --
 ```
 
 For a real pretrained worker replay, start only the worker with the documented configuration.
-The test launches an isolated hub and bridge and deletes its temporary `active` reference afterward, so use a dedicated worker with no operator search in progress.
+The test launches an isolated hub and bridge and deletes its temporary `person-1` reference afterward, so use a dedicated worker with no operator search in progress.
 Supply a reference, a target-present frame, a target-absent frame, and the reference person's pixel crop:
 
 ```bash

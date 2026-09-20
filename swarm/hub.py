@@ -55,6 +55,10 @@ EVICT_MS = 300000        # an operator-removed phone is refused for this long, t
 PHASES = ("lobby", "calibrate", "search", "found", "end")  # show flow, driven from /console
 SEARCH_PHASES = ("search", "found")  # coverage and candidate detection only run in these
 REAL_NEAR_MISS = 0.15   # similarity this far below the match threshold still hints (heatmap only)
+# Where the printed marker sits until the operator says otherwise: dead centre
+# on the stage wall (x = 0 is the stage centre line, y = 0 is the wall itself).
+# That is where a venue tapes it and the one spot the whole room can see.
+MARKER_HOME = {"x": 0.0, "y": 0.0}
 PING_TTL_MS = 12000
 MESSAGE_TTL_MS = 8000
 WORLD_HZ = 2             # how often phones get the shared picture (mini-map, progress)
@@ -186,7 +190,11 @@ class Hub:
         self._phase_generation = 0
         self.phase_started = now_ms()
         self.looking_for = ""               # what searchers should look for, shown on phones
-        self.marker: dict | None = None     # where the printed alignment marker is, placed by the operator
+        # Where the printed alignment marker is. It starts at MARKER_HOME rather
+        # than nowhere: a marker is needed before anyone can calibrate, and the
+        # operator dragging it into roughly the middle of the stage wall was a
+        # step every run began with. The console can still move it or clear it.
+        self.marker: dict | None = dict(MARKER_HOME)
         self.pings: list[dict] = []         # {id, x, y, label, t, phones: set | None}
         self.ping_ids = itertools.count(1)
         self.consoles: set = set()          # dashboard/console subscribers, for pushed events
@@ -436,11 +444,12 @@ class Hub:
             if searching:
                 for pid, n in self.coverage.update(viewers).items():
                     self.phones[pid].searched_cells += n
-                if self.search.mode == "rehearsal" and self.target.pos and not self.target.found_by:  # rehearsal: mock model sees the mock candidate
+                unfound = self.target.unfound() if self.search.mode == "rehearsal" else []
+                if unfound:  # rehearsal: the mock model sees whichever candidates are still missing
                     for pid, (x, y, heading, pitch) in viewers.items():
-                        if self.search.mode != "rehearsal" or not self.target.pos or self.phase not in SEARCH_PHASES:
+                        if self.search.mode != "rehearsal" or self.phase not in SEARCH_PHASES:
                             break
-                        boxes = self.mock_detector.detect(x, y, heading, pitch, self.target.pos)
+                        boxes = self.mock_detector.detect_many(x, y, heading, pitch, unfound)
                         if boxes:
                             await self.ingest_detections(self.phones[pid], boxes)
             # responders and phones with an operator "look" direction are not the planner's to steer
@@ -467,11 +476,14 @@ class Hub:
                 if p.audio and now - p.audio_at > VOICE_QUIET_MS:
                     self.end_utterance(p)
             done = self.target.complete()
-            if done and not self.mission_complete:  # the whole team is on target: stop searching
+            if done and not self.mission_complete:  # everyone found and reached: stop searching
                 self.planner.enabled = False
                 released = self.clear_look(None)  # cancel walk/look orders still underway
-                self.planner.note("All responders on target: search complete"
-                                  + (f", released {', '.join(f'#{n}' for n in released)}" if released else ""))
+                n = len(self.target.victims)
+                headline = (f"All {n} people found and reached: search complete" if n > 1
+                            else "All responders on target: search complete")
+                self.planner.note(headline
+                                  + (f", released {', '.join(f'#{i}' for i in released)}" if released else ""))
             self.mission_complete = done
             await asyncio.sleep(1 / hz)
 
@@ -491,12 +503,13 @@ class Hub:
                                               "ttlMs": 1500})
                 except (RuntimeError, WebSocketDisconnect):
                     pass
-        if self.search.mode != "rehearsal" or self.phase not in SEARCH_PHASES or self.target.found_by:
+        if self.search.mode != "rehearsal" or self.phase not in SEARCH_PHASES:
             return
         pose = phone.pose(now_ms())
         if not pose:
             return
-        for x, y, score in self.sightings.ingest(phone.id, pose, boxes, now_ms() / 1000):
+        for x, y, score in self.sightings.ingest(phone.id, pose, boxes, now_ms() / 1000,
+                                                 found=self.target.found_positions()):
             self.coverage.boost(x, y, score)
 
     def end_utterance(self, phone: Phone) -> None:
@@ -524,26 +537,35 @@ class Hub:
             self.mission.trigger()  # speech can be a request ("I need help here"): look right away
 
     def check_sightings(self, viewers: dict, now: float) -> list[tuple[str, dict]]:
-        """Announce new possible sightings; in rehearsals, confirm the find once one is confident enough.
+        """Announce new possible sightings; in rehearsals, confirm each one that gets confident
+        enough. Finding somebody doesn't end the search: every confident sighting that isn't
+        somebody we already have is another person, with a find team of their own, and the
+        probability map is emptied where they are so the swarm goes after the next one.
         A real search never finds on its own: the operator confirms (see /api/search/confirm)."""
-        if self.target.found_by:
-            return []
         for s in self.sightings.items:
             conf = self.sightings.confidence(s)
-            if conf >= POSSIBLE_CONF and not s["announced"]:
+            if conf >= POSSIBLE_CONF and not s["announced"] and not self.target.at(s["x"], s["y"]):
                 s["announced"] = True
-                first = self.phones.get(next(iter(s["phones"])))
-                self.planner.note(f"Possible sighting ({round(conf * 100)}%) near ({s['x']:.1f}, {s['y']:.1f})",
+                first = self.phones.get(self.sightings.looking(s) or next(iter(s["phones"])))
+                who = self.sightings.who(s)
+                subject = f"Possible sighting of {who}" if who else "Possible sighting"
+                self.planner.note(f"{subject} ({round(conf * 100)}%) near ({s['x']:.1f}, {s['y']:.1f})",
                                   first.id if first else None)
                 if self.mission:
                     self.mission.trigger()  # a sighting to double-check is exactly what autonomy is for
         if self.search.mode != "rehearsal":
             return []
-        best = self.sightings.best()
-        if not best or self.sightings.confidence(best) < FOUND_CONF:
-            return []
-        finder = max(best["phones"], key=best["phones"].get)
-        return self.target.confirm(finder, best["x"], best["y"], self.sightings.confidence(best), viewers, now)
+        out: list[tuple[str, dict]] = []
+        for s in self.sightings.confident(FOUND_CONF):
+            if self.target.at(s["x"], s["y"]):
+                continue  # somebody we've already found, still in view
+            finder = self.sightings.looking(s)
+            if finder is None:
+                continue  # nobody is looking at it any more: not something to dispatch a team to
+            out += self.target.confirm(finder, s["x"], s["y"], self.sightings.confidence(s), viewers, now,
+                                       label=self.sightings.who(s))
+            self.coverage.clear_around(s["x"], s["y"])
+        return out
 
     def likely_sectors(self, n: int = 3) -> list[dict]:
         """Where the candidate most probably is: sectors by share of the probability map."""
@@ -557,9 +579,10 @@ class Hub:
         (worth another look); everyone else is someone else. Placed from the pose the phone had when the
         frame was taken. Evidence only: it never confirms a find or claims a position (the operator does)."""
         pose = accepted.pose
-        if self.search.mode != "real" or self.phase != "search" or not pose or pose.get("heading") is None:
+        if self.search.mode != "real" or self.phase not in SEARCH_PHASES or not pose or pose.get("heading") is None:
             return 0
         threshold = self.search.threshold
+        names = {p["id"]: p["label"] for p in self.search.people}   # which reference person matched
         boxes = []
         for b in accepted.result.boxes:
             if b.similarity >= threshold:  # a match: 0.55 at the threshold, up to 0.95
@@ -569,13 +592,26 @@ class Hub:
             else:
                 continue
             score *= 0.6 + 0.4 * b.detectionScore  # a shaky detection counts for less
-            boxes.append({"x": b.x, "y": b.y, "w": b.w, "h": b.h, "score": round(score, 3), "heightM": PERSON_HEIGHT_M})
-        placed = self.sightings.ingest(accepted.result.phoneId, pose, boxes, now_ms() / 1000)
+            boxes.append({"x": b.x, "y": b.y, "w": b.w, "h": b.h, "score": round(score, 3),
+                           "heightM": PERSON_HEIGHT_M, "person": names.get(b.targetId)})
+        placed = self.sightings.ingest(accepted.result.phoneId, pose, boxes, now_ms() / 1000,
+                                       found=self.target.found_positions())
         for x, y, score in placed:
             self.coverage.boost(x, y, score)
         if placed and self.mission:
             self.mission.trigger()
         return len(placed)
+
+    def reset_coverage(self) -> None:
+        """Mark the room unsearched again — including every phone's running total.
+
+        The per-phone "area searched" is the other half of the same map: leaving it standing
+        while `looked` goes back to zero makes a phone claim more floor than the whole swarm
+        has covered, so the two have to clear together.
+        """
+        self.coverage.reset()
+        for phone in self.phones.values():
+            phone.searched_cells = 0
 
     def new_search(self) -> None:
         self.sightings.reset()
@@ -815,7 +851,10 @@ class Hub:
             cov = self.coverage.snapshot()
             cell_m2 = self.coverage.cell ** 2
             ranked = sorted(live, key=lambda p: -p.searched_cells)
-            found = self.target.fix if self.search.mode == "rehearsal" and self.target.found_by else None
+            rehearsing = self.search.mode == "rehearsal"
+            found = self.target.fix if rehearsing and self.target.found_by else None
+            everyone = [{"x": round(v.fix[0], 2), "y": round(v.fix[1], 2)}
+                        for v in (self.target.victims if rehearsing else [])]
             pings = self.active_pings(now)
             base = {
                 "type": "world", "phase": self.phase, "phones": others,
@@ -825,6 +864,7 @@ class Hub:
                 "lookingFor": self.looking_for, "missionComplete": self.mission_complete,
                 "marker": self.marker,
                 "candidate": None if found is None else {"x": found[0], "y": found[1]},
+                "candidates": everyone,   # every person found so far; `candidate` is the first
             }
             # Before the search starts, the marker rides the ping channel phones already
             # draw on their compass, map and camera view — no client change needed.
@@ -1037,7 +1077,7 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
             if msg.get("type") == "command":
                 await hub.command(str(msg.get("target", "all")), msg.get("cmd") or {})
             elif msg.get("type") == "reset_coverage":
-                hub.coverage.reset()
+                hub.reset_coverage()
                 hub.planner.reset()
                 hub.sightings.reset()
             elif msg.get("type") == "planner":
@@ -1046,14 +1086,17 @@ async def _serve_subscriber(ws: WebSocket, fps: float, with_state: bool, hello: 
                 if hub.search.mode != "rehearsal":
                     await sub.send_json({"error": "mock target requires explicit rehearsal mode"})
                     continue
+                raw = msg.get("id")
+                cid = int(raw) if isinstance(raw, int) and not isinstance(raw, bool) else None
                 if msg.get("remove"):
-                    hub.target.remove()
-                    hub.new_search()
+                    hub.target.remove(cid)   # no id: clear every candidate and every find
+                    if cid is None:
+                        hub.new_search()
                 else:
-                    if "x" in msg and "y" in msg and hub.target.place(float(msg["x"]), float(msg["y"])):
+                    if "x" in msg and "y" in msg and hub.target.place(float(msg["x"]), float(msg["y"]), cid):
                         hub.new_search()
                     if "responders" in msg:
-                        hub.target.responders_wanted = max(0, int(msg["responders"]))
+                        hub.target.set_responders_wanted(int(msg["responders"]))
             elif msg.get("type") == "marker":
                 hub.set_marker(msg)
             elif msg.get("type") == "phase":

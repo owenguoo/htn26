@@ -57,10 +57,10 @@ class FakeWorker:
         self.maximum = 0
         self.calls = []
         self.app = FastAPI()
-        self.app.add_api_route('/v1/targets/active', self.target, methods=['GET', 'PUT', 'DELETE'])
+        self.app.add_api_route('/v1/targets/{target_id}', self.target, methods=['GET', 'PUT', 'DELETE'])
         self.app.add_api_route('/v1/match', self.match, methods=['POST'])
 
-    async def target(self, request: Request):
+    async def target(self, target_id: str, request: Request):
         if request.headers.get('authorization') != f'Bearer {self.key}':
             raise HTTPException(401)
         if request.method == 'PUT':
@@ -70,7 +70,7 @@ class FakeWorker:
             return Response(status_code=204)
         if self.version is None:
             raise HTTPException(404)
-        return {'target_id': 'active', 'target_version': self.version}
+        return {'target_id': target_id, 'target_version': self.version}
 
     async def match(self, request: Request):
         params = request.query_params
@@ -81,7 +81,7 @@ class FakeWorker:
         self.calls.append((params['phone_id'], int(params['frame_id'])))
         try:
             await asyncio.sleep(self.delay)
-            return dict(target_id='active', target_version=self.version, phone_id=params['phone_id'],
+            return dict(target_id=params['target_id'], target_version=self.version, phone_id=params['phone_id'],
                 frame_id=params['frame_id'], captured_at=float(params['captured_at']),
                 width=image.width, height=image.height, candidates=[dict(box=[10, 10, 80, 90],
                 detection_score=.9, similarity=.95)] if present else [],
@@ -278,7 +278,7 @@ def test_idle_paused_bridge_failure_and_reference_recovery(monkeypatch):
             assert (await client.get('/api/search')).json()['status'] == 'available'
             await listeners.aclose()
             with pytest.raises(httpx.ConnectError):
-                await client.get(worker_url + '/v1/targets/active')
+                await client.get(worker_url + '/v1/targets/person-1')
             await status('unavailable')
             restarted_url = await listeners.enter_async_context(server(worker.app, httpx.URL(worker_url).port))
             assert restarted_url == worker_url

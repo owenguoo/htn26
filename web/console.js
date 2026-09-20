@@ -1,5 +1,5 @@
 import { frameKey, freshSighting, scoreLabel } from '/web/inference-ui.js';
-import { makeView, drawRoom, drawCone, heatLevels, heatCanvas } from '/web/room.js';
+import { makeView, drawRoom, drawCone, heatLevels, heatCanvas, heatGradientCSS } from '/web/room.js';
 
 const $ = (s) => document.querySelector(s);
 // Before a search the show sits in "calibrate": every phone is scanning the
@@ -52,6 +52,7 @@ function onJson(msg) {
     onMission(msg);
   } else if (msg.type === 'state') {
     st = msg;
+    if (dragPos && !hiddenCandidates().some((c) => c.id === dragPos.id)) dragPos = null;
     snapshotAt = performance.now();
     phones.clear();
     for (const p of msg.phones) phones.set(p.id, p);
@@ -193,31 +194,91 @@ function renderControls() {
   $('#plannerSw').classList.toggle('on', !!st.planner?.enabled);
   const t = st.target;
   const s = $('#candStatus');
-  s.classList.toggle('found', !!t?.foundBy);
+  const victims = t?.victims || [];
+  const hidden = t?.candidates || [];
+  s.classList.toggle('found', victims.length > 0);
   if (st.search?.mode === 'real') {
-    s.textContent = st.search.confirmation ? `Visual sighting confirmed · Phone ${st.search.confirmation.phoneId} · target location unknown` : 'No confirmed sighting';
+    const confirmed = st.search.confirmations || (st.search.confirmation ? [st.search.confirmation] : []);
+    s.textContent = !confirmed.length ? 'No confirmed sighting'
+      : confirmed.length === 1 ? `Visual sighting confirmed · Phone ${confirmed[0].phoneId} · target location unknown`
+      : `${confirmed.length} visual sightings confirmed · target locations unknown`;
   } else if (!t) {
     s.textContent = 'No candidate placed';
-  } else if (t.foundBy) {
-    const f = phones.get(t.foundBy);
-    const arrived = Object.values(t.responders).filter(Boolean).length;
-    const total = Object.keys(t.responders).length;
-    const sure = t.confidence != null ? ` (${Math.round(t.confidence * 100)}% sure)` : '';
-    s.textContent = `Found by #${f?.index ?? '?'}${sure} in ${(t.searchMs / 1000).toFixed(1)}s · ${arrived}/${total} responders arrived`;
+  } else if (victims.length) {
+    const reached = victims.filter(teamFull).length;
+    const missing = t.stillMissing || 0;
+    s.textContent = `${plural(victims.length, 'person', 'people')} found · ${reached}/${victims.length} reached`
+      + (missing ? ` · still looking for ${missing}` : '');
   } else {
     const top = (st.sightings || []).reduce((a, b) => (b.confidence > (a?.confidence ?? 0) ? b : a), null);
-    s.textContent = `Hidden at (${t.x.toFixed(1)}, ${t.y.toFixed(1)}) · `
-      + (top && top.confidence >= 0.4 ? `possible sighting ${Math.round(top.confidence * 100)}%` : 'searching');
+    const where = hidden.length === 1 ? `Hidden at (${hidden[0].x.toFixed(1)}, ${hidden[0].y.toFixed(1)})`
+      : `${plural(hidden.length, 'person', 'people')} hidden`;
+    s.textContent = `${where} · `
+      + (top && top.confidence >= 0.4 ? `possible sighting · ${sightingEvidence(top)}` : 'searching');
   }
+  renderFoundList(victims);
+  renderPeople(st.search?.people);
   $('#respN').textContent = t ? t.respondersWanted : respondersPref;
   $('#lookingFor').textContent = st.lookingFor ? `Looking for: ${st.lookingFor}` : '';
+  // Before anyone has searched, every sector holds the same share and the "most
+  // likely" one is whichever way the rounding fell. Say nothing until the map has
+  // actually picked a favourite.
   const top = st.likely?.[0];
-  $('#likely').textContent = top ? `Most likely: ${top.sector} · ${Math.round(top.share * 100)}%` : '';
+  const sectors = (st.planner?.cols || 0) * (st.planner?.rows || 0);
+  const even = sectors ? 1 / sectors : 0;
+  $('#likely').textContent = top && even && top.share >= even * 1.5
+    ? `Most likely: ${top.sector} · ${Math.round(top.share * 100)}%` : '';
   const m = st.mission || {};
   renderAutonomy(m);
   $('#candBtn').disabled = st.search?.mode === 'real';
-  $('#candBtn').textContent = t ? 'Remove candidate' : 'Place candidate';
-  $('#candBtn').classList.toggle('primary', !t);
+  $('#candBtn').textContent = hidden.length ? 'Add another' : 'Place candidate';
+  $('#candBtn').classList.toggle('primary', !hidden.length);
+  $('#candClear').hidden = !t || st.search?.mode === 'real';
+}
+
+// A sighting's `confidence` is several phones' scores combined under an
+// independence assumption they don't really satisfy — three phones pointed at the
+// same person from the same side are one look, not three. The number is still
+// what the thresholds use, but what an operator is shown is the evidence it came
+// from: the best single match, and how many phones are currently looking.
+function sightingEvidence(sg) {
+  const best = `best match ${Math.round((sg.bestScore ?? sg.confidence) * 100)}%`;
+  return sg.agree > 1 ? `${best} · ${sg.agree} phones agree` : best;
+}
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+// `attended` means "everyone we managed to dispatch has arrived", which is true
+// the instant somebody is found — the finder counts as arrived and is often the
+// only responder there is. Saying RESCUED on the strength of that claims a team
+// showed up when nobody did, so the console asks the harder question: are as many
+// people with them as the operator asked for?
+function teamArrived(v) {
+  return Object.values(v.responders || {}).filter(Boolean).length;
+}
+function teamFull(v) {
+  const wanted = v.respondersWanted ?? 0;
+  return wanted > 0 && teamArrived(v) >= wanted;
+}
+
+// Both lists are rebuilt from innerHTML, and state arrives ten times a second, so they only
+// redraw when something in them actually changed.
+const listMemo = {found: null, people: null};
+
+// Everyone found so far, in the order they were found.
+function renderFoundList(victims) {
+  const key = JSON.stringify(victims);
+  if (key === listMemo.found) return;
+  listMemo.found = key;
+  $('#foundList').innerHTML = victims.map((v) => {
+    const finder = phones.get(v.foundBy);
+    const detail = `found by #${finder?.index ?? '?'} · ${(v.foundMs / 1000).toFixed(1)}s ago · `
+      + `${teamArrived(v)}/${v.respondersWanted ?? 0} with them`;
+    return `<div class="found-row"><span class="who">${teamFull(v) ? '✓' : '→'} Person ${v.id}</span>`
+      + `<span>${escapeHtml(detail)}</span></div>`;
+  }).join('');
 }
 
 // Room coordinates are meters with the stage at the top of the map: x = 0 at
@@ -386,14 +447,19 @@ function renderViewer() {
   pill.querySelector('span').textContent = !p.connected ? 'OFFLINE' : p.stale ? 'NO SIGNAL' : 'LIVE';
   const pose = p.pose;
   const job = st.planner?.assignments?.[p.id];
-  $('#vTask').textContent = p.task || (job ? `searching ${job.sector}${job.gain ? ` · ${(job.gain * 100).toFixed(1)}% find chance` : ''}` : 'idle');
+  // `gain` is the chance THIS look finds them, not the phone's odds overall —
+  // "1.9% find chance" reads like the phone is useless.
+  $('#vTask').textContent = p.task
+    || (job ? `searching ${job.sector}${job.gain ? ` · ${(job.gain * 100).toFixed(1)}% chance this look finds them` : ''}` : 'idle');
   $('#vPos').textContent = fmtPosition(pose);
   $('#vPos').title = poseHint(pose);
   $('#vHd').textContent = fmtHeading(pose);
   $('#vPitch').textContent = fmtTilt(p.pitch);
   $('#vFps').textContent = `${p.fps.toFixed(1)} / s`;
   $('#vLat').textContent = p.latencyMs != null ? `${p.latencyMs} ms` : 'Unknown';
-  $('#vM2').textContent = `${p.searchedM2 ?? 0} m²`;
+  // A bare area means nothing on its own — say what share of the floor it is.
+  const m2 = p.searchedM2 ?? 0, floor = room ? room.width * room.depth : 0;
+  $('#vM2').textContent = floor ? `${m2} m² · ${Math.round(100 * m2 / floor)}% of the floor` : `${m2} m²`;
 }
 
 $('#vClose').addEventListener('click', closeViewer);
@@ -694,7 +760,7 @@ function drawExplain() {
     ctx.beginPath(); ctx.arc(sx, sy, 15, 0, Math.PI * 2); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle = '#ff4d4d';
-    ctx.fillText(`sighting ${Math.round(ev.sighting.confidence * 100)}%`, sx, sy - 24);
+    ctx.fillText('sighting', sx, sy - 24);
   }
   // who was sent, from where they were at the time, to where
   let tx = null, ty = null;
@@ -753,21 +819,27 @@ $('#autoSw').addEventListener('click', () => send({ type: 'autonomy', enabled: !
 // ---------------------------------------------------------------- controls
 let respondersPref = 3;
 $('#plannerSw').addEventListener('click', () => send({ type: 'planner', enabled: !st?.planner?.enabled }));
-$('#resetCov').addEventListener('click', () => send({ type: 'reset_coverage' }));
 $('#resetSession').addEventListener('click', () => {
   if (st?.search?.mode === 'rehearsal') send({ type: 'target', remove: true });
   send({ type: 'reset_coverage' });
   send({ type: 'phase', phase: IDLE_PHASE, restart: true });
   $('#searchMessage').textContent = '';
 });
-$('#candBtn').addEventListener('click', toggleCandidate);
+$('#candBtn').addEventListener('click', addCandidate);
+$('#candClear').addEventListener('click', () => send({ type: 'target', remove: true }));
 $('#respMinus').addEventListener('click', () => setResponders(-1));
 $('#respPlus').addEventListener('click', () => setResponders(+1));
 
 
-function toggleCandidate() {
-  if (st?.target) send({ type: 'target', remove: true });
-  else send({ type: 'target', x: 0, y: room.depth / 2, responders: respondersPref });
+function addCandidate() {
+  // The first one goes in the middle of the floor; the rest spiral out around it on the golden
+  // angle, so a second and third candidate never land underneath the first.
+  const n = hiddenCandidates().length;
+  const reach = 2.5 * Math.sqrt(n), angle = n * 2.399;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  send({ type: 'target', responders: respondersPref,
+         x: clamp(Math.cos(angle) * reach, -room.width / 2 + .5, room.width / 2 - .5),
+         y: clamp(room.depth / 2 + Math.sin(angle) * reach, .5, room.depth - .5) });
 }
 
 function setResponders(d) {
@@ -872,6 +944,10 @@ $('#mapModes').addEventListener('click', (event) => {
 });
 window.addEventListener('pagehide', () => scene3d?.hide());
 
+// The legend's ramp is painted from the same constants the map is, so the
+// swatch cannot drift away from the field it explains.
+$('#heatLegend i').style.backgroundImage = heatGradientCSS();
+
 const canvas = $('#map');
 const ctx = canvas.getContext('2d');
 let view = null;
@@ -886,6 +962,19 @@ const MAP_MARKER_STROKE = 2;
 const MAP_LABEL_HEIGHT = 18;
 const MAP_LABEL_GAP = 4;
 
+// The scale bar states a distance, so it has to be a distance: pick the roundest
+// length that lands near 90 px at the current zoom and label the bar with that,
+// rather than drawing a fixed 5 m that goes stubby on a small map and spans a
+// quarter of the floor on a big one.
+const SCALE_STEPS = [0.5, 1, 2, 5, 10, 20, 50];
+function setScaleBar(pxPerM) {
+  const target = 90;
+  const metres = SCALE_STEPS.reduce((best, m) =>
+    Math.abs(m * pxPerM - target) < Math.abs(best * pxPerM - target) ? m : best, SCALE_STEPS[0]);
+  $('.map-scale i').style.width = `${Math.round(metres * pxPerM)}px`;
+  $('.map-scale span').textContent = `${metres} m`;
+}
+
 function resizeMap() {
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (!w || !room) return;
@@ -894,7 +983,7 @@ function resizeMap() {
   canvas.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   view = makeView(room, w, h, 28);
-  $('.map-scale i').style.width = `${Math.round(5 * view.scale)}px`;
+  setScaleBar(view.scale);
   coverageKey = '';
 }
 new ResizeObserver(resizeMap).observe($('#mapWrap'));
@@ -1114,10 +1203,14 @@ function drawPings() {
   }
 }
 
+// Somebody already found, with responders on them: their detections aren't news any more.
+function alreadyFound(x, y, radius = 2) {
+  return (st.target?.victims || []).some(v => Math.hypot(v.x - x, v.y - y) <= radius);
+}
+
 function drawSightings() {
-  if (st.target?.foundBy) return;
   for (const sg of st.sightings || []) {
-    if (sg.confidence < 0.4) continue;
+    if (sg.confidence < 0.4 || alreadyFound(sg.x, sg.y)) continue;
     const [x, y] = view.toPx(sg.x, sg.y);
     const k = (performance.now() / 1000) % 1;
     ctx.save();
@@ -1126,26 +1219,45 @@ function drawSightings() {
     ctx.beginPath(); ctx.arc(x, y, MAP_MARKER_RADIUS + MAP_MARKER_STROKE + 1 + k * 15, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
     drawPersonGlyph(x, y, '#d97706');
-    drawMapLabel(`POSSIBLE · ${Math.round(sg.confidence * 100)}%`, x, personLabelY(y), '#d97706');
+    drawMapLabel(sg.agree > 1 ? `POSSIBLE · ${sg.agree} PHONES` : 'POSSIBLE', x, personLabelY(y), '#d97706');
   }
+}
+
+// Every hidden mock candidate, and everyone the swarm has actually found.
+function hiddenCandidates() {
+  const t = st?.target;
+  if (!t) return [];
+  if (t.candidates) return t.candidates;
+  return t.x == null ? [] : [{ id: null, x: t.x, y: t.y, found: !!t.foundBy }];  // older hub
 }
 
 function drawCandidate() {
   const t = st.target;
   if (!t) return;
-  // the mock candidate (rehearsals): where it really is, draggable
-  if (t.x != null || dragPos) {
-    const [mx, my] = view.toPx((dragPos || t).x, (dragPos || t).y);
-    ctx.strokeStyle = t.foundBy ? 'rgba(23,55,38,0.24)' : '#597562';
+  const hidden = hiddenCandidates();
+  // Past a handful, a column of "TEST TARGET n" pills is one grey smear over the
+  // floor: the dashed ring already says test target, so the number alone will do.
+  const terse = hidden.filter((c) => !c.found).length > 3;
+  for (const c of hidden) {
+    const at = dragPos && dragPos.id === c.id ? dragPos : c;
+    const [mx, my] = view.toPx(at.x, at.y);
+    ctx.strokeStyle = c.found ? 'rgba(23,55,38,0.24)' : '#597562';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([3, 3]);
     ctx.beginPath(); ctx.arc(mx, my, 8, 0, Math.PI * 2); ctx.stroke();
     ctx.setLineDash([]);
-    if (!t.foundBy) drawMapLabel('TEST TARGET', mx, my - 19, '#597562');
+    if (!c.found) drawMapLabel(c.id == null ? 'TEST TARGET' : terse ? `#${c.id}` : `TEST TARGET ${c.id}`,
+                               mx, my - 19, '#597562');
   }
-  if (!t.foundBy || !t.fix) return;
-  const [cx, cy] = view.toPx(t.fix[0], t.fix[1]); // where the confirmed sighting is
-  for (const [pid, arrived] of Object.entries(t.responders || {})) {
+  const victims = t.victims || (t.foundBy && t.fix
+    ? [{ id: 1, x: t.fix[0], y: t.fix[1], responders: t.responders,
+         respondersWanted: t.respondersWanted }] : []);
+  for (const v of victims) drawFoundPerson(v, victims.length > 1);
+}
+
+function drawFoundPerson(v, numbered) {
+  const [cx, cy] = view.toPx(v.x, v.y);
+  for (const [pid, arrived] of Object.entries(v.responders || {})) {
     const p = phones.get(pid);
     if (!p?.pose) continue;
     const [px, py] = view.toPx(p.pose.x, p.pose.y);
@@ -1155,26 +1267,40 @@ function drawCandidate() {
     ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(cx, cy); ctx.stroke();
     ctx.setLineDash([]);
   }
-  const rescued = Object.keys(t.responders || {}).length > 0 && Object.values(t.responders).every(Boolean);
   const k = (performance.now() / 1100) % 1;
   ctx.strokeStyle = `rgba(183,47,54,${.7 * (1 - k)})`;
   ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(cx, cy, MAP_MARKER_RADIUS + MAP_MARKER_STROKE + 1 + k * 24, 0, Math.PI * 2); ctx.stroke();
   drawPersonGlyph(cx, cy, '#b72f36');
-  drawMapLabel(rescued ? 'RESCUED' : 'FOUND PERSON', cx, personLabelY(cy), '#b72f36');
+  const label = teamFull(v) ? 'RESCUED' : 'FOUND PERSON';
+  drawMapLabel(numbered ? `${label} ${v.id}` : label, cx, personLabelY(cy), '#b72f36');
 }
 
-// drag the candidate
+// drag a candidate
 function roomPoint(e) {
   const r = canvas.getBoundingClientRect();
   const [x, y] = view.toRoom(e.clientX - r.left, e.clientY - r.top);
   return { x: Math.max(-room.width / 2, Math.min(room.width / 2, x)), y: Math.max(0, Math.min(room.depth, y)) };
 }
 function nearCandidate(e) {
-  if (!st?.target || st.target.x == null || !view) return false;
+  if (!view) return null;
   const r = canvas.getBoundingClientRect();
-  const [cx, cy] = view.toPx(st.target.x, st.target.y);
-  return Math.hypot(cx - (e.clientX - r.left), cy - (e.clientY - r.top)) <= 14;
+  let best = null, bestD = 14;
+  for (const c of hiddenCandidates()) {
+    const [cx, cy] = view.toPx(c.x, c.y);
+    const d = Math.hypot(cx - (e.clientX - r.left), cy - (e.clientY - r.top));
+    if (d <= bestD) { best = c; bestD = d; }
+  }
+  return best;
+}
+
+function sendCandidate(pos) {
+  if (pos.id != null) { send({ type: 'target', id: pos.id, x: pos.x, y: pos.y }); return; }
+  // An id-less `target` message *places* a candidate (swarm/target.py, `Target.place`),
+  // so against a hub that numbers its candidates a drag without one strews a fresh
+  // candidate across the floor every 80 ms. Only an older hub — no `candidates` in its
+  // snapshot, one target, no ids — reads this as moving the one it has.
+  if (st?.target && !st.target.candidates) send({ type: 'target', x: pos.x, y: pos.y });
 }
 function nearMarker(e) {
   if (!st?.marker || !view) return false;
@@ -1193,7 +1319,8 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
   if (nearMarker(e)) { markerDrag = roomPoint(e); e.preventDefault(); return; }
-  if (nearCandidate(e)) { dragPos = roomPoint(e); e.preventDefault(); return; }
+  const grabbed = nearCandidate(e);
+  if (grabbed) { dragPos = { id: grabbed.id, ...roomPoint(e) }; e.preventDefault(); return; }
   const p = phoneAt(e);
   if (p) openViewer(p.id);
 });
@@ -1228,14 +1355,14 @@ window.addEventListener('mousemove', (e) => {
     return;
   }
   if (!dragPos) return;
-  dragPos = roomPoint(e);
+  dragPos = { id: dragPos.id, ...roomPoint(e) };
   const now = performance.now();
-  if (now - lastDragSend > 80) { lastDragSend = now; send({ type: 'target', ...dragPos }); }
+  if (now - lastDragSend > 80) { lastDragSend = now; sendCandidate(dragPos); }
 });
 window.addEventListener('mouseup', () => {
   if (markerDrag) { send({ type: 'marker', ...markerDrag }); markerDrag = null; return; }
   if (!dragPos) return;
-  send({ type: 'target', ...dragPos });
+  sendCandidate(dragPos);
   dragPos = null;
 });
 
@@ -1277,10 +1404,36 @@ async function searchAction(action) {
 
 function clearReferencePreview() {
   drawReference = null;
+  pendingPhotos = [];
   $('#referencePreview').hidden = true;
   $('#personChoices').replaceChildren();
   $('#referenceFile').value = '';
 }
+
+// Everybody the search is looking for, one row per uploaded photo.
+function renderPeople(people = []) {
+  const key = JSON.stringify(people);
+  if (key === listMemo.people) return;
+  listMemo.people = key;
+  $('#peopleRoster').innerHTML = people.map((person) =>
+    `<div class="person-row"><span class="who">${escapeHtml(person.label)}</span><span class="spacer"></span>`
+    + `<button type="button" data-person="${escapeHtml(person.id)}">Remove</button></div>`).join('');
+  $('#uploadTitle').textContent = people.length ? 'Drop another photo here' : 'Drop photos here';
+  $('#uploadHint').textContent = people.length
+    ? `${people.length} being searched for · or click to choose`
+    : 'one per person · or click to choose';
+}
+
+$('#peopleRoster').addEventListener('click', (event) => {
+  const id = event.target.closest('[data-person]')?.dataset.person;
+  if (!id) return;
+  searchAction(async () => {
+    await searchApi(`/api/search/reference/${encodeURIComponent(id)}`, {method: 'DELETE'});
+    if (st?.search) st.search.sightings = [];
+    clearSourceFrames();
+    $('#searchMessage').textContent = 'Removed from the people to find.';
+  });
+});
 
 $('#clearReference').addEventListener('click', () => searchAction(async () => {
   await searchApi('/api/search/reference', {method: 'DELETE'});
@@ -1343,9 +1496,28 @@ function paintPeople(canvas, detections, selected = -1) {
 }
 $('#uploadPhoto').addEventListener('click', () => $('#referenceFile').click());
 $('#referenceFile').addEventListener('change', () => {
-  uploadReferencePhoto($('#referenceFile').files[0]);
+  queuePhotos($('#referenceFile').files);
   $('#referenceFile').value = '';
 });
+
+// One photo per person. They're worked through one at a time, because each one needs the operator
+// to say which person in it to search for.
+let pendingPhotos = [];
+
+function queuePhotos(files) {
+  const photos = [...files].filter((f) => !f.type || f.type.startsWith('image/'));
+  if (!photos.length) {
+    $('#searchMessage').textContent = 'Choose image files.';
+    return;
+  }
+  pendingPhotos = photos.slice(1);
+  uploadReferencePhoto(photos[0]);
+}
+
+function nextQueuedPhoto() {
+  const next = pendingPhotos.shift();
+  if (next) uploadReferencePhoto(next);
+}
 const uploadZone = $('#uploadPhoto');
 for (const eventName of ['dragenter', 'dragover']) {
   uploadZone.addEventListener(eventName, (event) => {
@@ -1362,12 +1534,7 @@ uploadZone.addEventListener('drop', (event) => {
   event.preventDefault();
   uploadZone.classList.remove('dragging');
   if (searchBusy) return;
-  const files = event.dataTransfer.files;
-  if (files.length !== 1) {
-    $('#searchMessage').textContent = 'Choose one photo at a time.';
-    return;
-  }
-  uploadReferencePhoto(files[0]);
+  queuePhotos(event.dataTransfer.files);
 });
 
 function uploadReferencePhoto(file) {
@@ -1397,18 +1564,26 @@ function uploadReferencePhoto(file) {
       paintPeople(preview, result.detections, selected);
     };
     drawReference();
-    $('#searchMessage').textContent = result.detections.length ? 'Choose the numbered person to search for.' : 'No people detected. Try another photo.';
+    const queued = pendingPhotos.length ? ` · ${pendingPhotos.length} more photo${pendingPhotos.length === 1 ? '' : 's'} to go` : '';
+    $('#searchMessage').textContent = result.detections.length
+      ? `Choose the person to search for in this photo.${queued}`
+      : `No people detected. Try another photo.${queued}`;
     result.detections.forEach((person, index) => {
       const button = document.createElement('button');
       button.className = 'btn'; button.textContent = `Person ${index + 1}`;
       button.addEventListener('click', () => searchAction(async () => {
-        await searchApi(`/api/search/reference?${new URLSearchParams({box: person.box.join(',')})}`, {method: 'PUT', headers: {'Content-Type': 'image/jpeg'}, body: blob});
+        // The first photo starts the roster (and a fresh search); the rest add to it, so every
+        // frame gets matched against all of them.
+        const roster = st?.search?.people || [];
+        const params = new URLSearchParams({box: person.box.join(','), label: `Person ${roster.length + 1}`});
+        if (roster.length) params.set('add', '1');
+        await searchApi(`/api/search/reference?${params}`, {method: 'PUT', headers: {'Content-Type': 'image/jpeg'}, body: blob});
         if (st?.search) st.search.sightings = [];
         clearSourceFrames();
         selected = index;
         drawReference();
-        $('#searchMessage').textContent = `Person ${index + 1} selected.`;
-      }));
+        $('#searchMessage').textContent = pendingPhotos.length ? 'Added. Next photo…' : 'Added to the people to find.';
+      }).then(nextQueuedPhoto));
       $('#personChoices').append(button);
     });
   });

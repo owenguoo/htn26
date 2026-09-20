@@ -1,16 +1,19 @@
 """Coverage and probability over the floor plan.
 
 - looked: which cells any camera has looked at (drives "area searched" and the planner).
-- prob: where the candidate probably is (a Bayesian search map). It starts even. Every look
-  lowers the cells it covered by how good the look was (close and centered counts more), and
+- prob: where somebody still missing probably is (a Bayesian search map). It starts even. Every
+  look lowers the cells it covered by how good the look was (close and centered counts more), and
   detections raise the cells around where they point. It's renormalized every update, so
-  probability flows toward places nobody has checked properly.
+  probability flows toward places nobody has checked properly. Finding somebody empties the map
+  where they are (clear_around), which is what sends the swarm after the next person instead of
+  leaving everybody staring at the one they just found.
 """
 from __future__ import annotations
 
 import math
 
 MAX_PITCH = 65        # ignore cameras pointed at the floor or ceiling
+LOOK_MIN = 0.25       # a cell only counts as searched once a camera had this good a look at it
 POD_MAX = 0.2         # chance per update (5/s) of spotting the target dead-center, right in front
 POD_FALLOFF_M = 4.0   # looks get less reliable with distance
 BOOST_SIGMA_M = 0.8   # how far a detection's evidence spreads around where it points
@@ -78,11 +81,15 @@ class Coverage:
             if pitch is not None and abs(pitch) > MAX_PITCH:
                 continue
             for c, d, off in self.cone(x, y, heading):
-                if not self.looked[c]:
+                q = look_quality(d, off, half)
+                # Being inside the cone isn't a search. The far edge of a 5 m cone is a smear the
+                # detector can't work with, so only a look good enough to have caught somebody
+                # marks the cell — otherwise a single spin "searches" the whole disc around you.
+                if q >= LOOK_MIN and not self.looked[c]:
                     self.looked[c] = True
                     fresh[pid] = fresh.get(pid, 0) + 1
                 # "if it were here, this look would have caught it with chance POD": it wasn't caught
-                self.prob[c] *= 1 - POD_MAX * look_quality(d, off, half)
+                self.prob[c] *= 1 - POD_MAX * q
         self._normalize()
         return fresh
 
@@ -118,6 +125,11 @@ class Coverage:
         floor = 1e-6 / len(self.prob)  # never exactly zero: "ruled out" can be wrong
         self.prob = [max(p, floor) for p in self.prob]
         self._normalize()
+
+    def clear_around(self, x: float, y: float, radius: float = 2.0) -> None:
+        """Somebody has been found here and has responders coming: take the probability out of this
+        spot so the rest of the swarm goes looking for whoever else is missing."""
+        self.adjust(0.02, x, y, radius=radius)
 
     def _normalize(self) -> None:
         total = sum(self.prob)

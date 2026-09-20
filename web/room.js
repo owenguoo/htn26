@@ -30,6 +30,13 @@ export function headingVector(deg) {
   return [Math.sin(r), -Math.cos(r)];
 }
 
+/// Pixels the stage block is lifted clear of the room's top wall, so that both
+/// rectangles are closed and neither borrows the other's edge. Presentation
+/// only — the room's coordinates are unchanged, and everything placed in the
+/// room is still placed against the real stage line at y = 0. `stageGap` in
+/// `FloorPlanViews.swift` mirrors it.
+export const STAGE_GAP_PX = 3;
+
 export function drawRoom(ctx, room, view, { grid = true, colors = {} } = {}) {
   const c = {
     floor: colors.floor || 'rgba(255,255,255,0.03)',
@@ -62,15 +69,25 @@ export function drawRoom(ctx, room, view, { grid = true, colors = {} } = {}) {
   ctx.lineWidth = 2;
   ctx.strokeRect(ax, ay, bx - ax, by - ay);
 
+  // The stage is a block *beside* the room, not a tab welded onto it. Drawn on
+  // its true coordinates its bottom edge lands exactly on the room's top wall,
+  // so the two lines fused: the stage came out as an unoutlined lump hanging
+  // off the top and the wall it sat on looked thinner than the other three.
+  // Lifting it clear by `STAGE_GAP_PX` lets it carry its own border all the way
+  // round, bottom side included, and leaves the room a closed rectangle.
   const [sx, sy] = view.toPx(-room.stage.width / 2, -room.stage.depth);
   const [ex, ey] = view.toPx(room.stage.width / 2, 0);
+  const top = sy - STAGE_GAP_PX, bottom = ey - STAGE_GAP_PX;
   ctx.fillStyle = c.stage;
-  ctx.fillRect(sx, sy, ex - sx, ey - sy);
+  ctx.fillRect(sx, top, ex - sx, bottom - top);
+  ctx.strokeStyle = c.wall;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(sx, top, ex - sx, bottom - top);
   ctx.fillStyle = c.text;
   ctx.font = `600 ${Math.max(10, view.scale * 0.6)}px ui-sans-serif, system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('STAGE', (sx + ex) / 2, (sy + ey) / 2);
+  ctx.fillText('STAGE', (sx + ex) / 2, (top + bottom) / 2);
 }
 
 // Filled view wedge from (x, y) along `heading`.
@@ -99,7 +116,7 @@ export function drawCone(ctx, view, x, y, heading, fovDeg, length, fill, stroke)
 // ---------------------------------------------------------------- search heat
 // The hub's `heat` (swarm/coverage.py `Coverage.snapshot`) is one base-36
 // character per floor cell: that cell's probability relative to the hottest
-// cell. Two things have to happen to it before it is worth looking at.
+// cell. Three things have to happen to it before it is worth looking at.
 //
 // 1. Equalisation, not a min/max stretch. The probability field has a shape
 //    that defeats a linear ramp from both ends. Cells nobody has looked at yet
@@ -111,26 +128,59 @@ export function drawCone(ctx, view, x, y, heading, fovDeg, length, fill, stroke)
 //    plateau collapses into one or two of the 36 steps — a linear ramp now
 //    paints it at nothing and the map goes blank apart from one dot. Ranking
 //    the cells instead (a 36-bin histogram equalisation, ties sharing the
-//    midpoint of their span) survives both: the plateau lands mid-tone, swept
-//    floor fades out under it, and a boosted cell still tops the ramp.
-// 2. One alpha per cell, applied once. The 2D map used to stamp a blurred disc
+//    midpoint of their span) survives both.
+// 2. Normalise the ranks to the hottest cell. Ranking alone has one bad case:
+//    early in a search, one phone has swept 5% of the floor, so 95% of the
+//    cells are tied in one plateau whose *midpoint* rank is about 0.5 — the
+//    whole map came out at a flat alpha .11, a uniform tint with no structure
+//    in it, which is indistinguishable from the heatmap being broken. Dividing
+//    through by the top rank puts that plateau at full strength, where it
+//    belongs ("nothing is ruled out yet"), and the swept trail reads as the
+//    cleared path it is. It costs nothing later on: once a detection or a real
+//    sweep puts something at the top of the ranking the divisor is already 1.
+// 3. One alpha per cell, applied once. The 2D map used to stamp a blurred disc
 //    per cell at a radius of 1.8 cells, so about ten discs piled up on every
 //    pixel and alpha .18 compounded to alpha .9 — a solid green sheet with
 //    holes worn in it where the search had already been, which reads as the
 //    exact inverse of what it means. Painting the grid once, at cell
 //    resolution, and letting the scaler interpolate keeps the ramp honest.
-export const HEAT_RGB = [24, 131, 75];
+/// **Not the accent.** The field used to be painted in `--accent`, the same
+/// green as the searcher dots, their view cones, the planner's sector boxes
+/// and the console's own chrome — so the one layer on the map that is *data*
+/// looked like more furniture, and "why is the floor green" had no answer on
+/// screen. A hue nothing else on the map uses makes it read as a measurement.
+/// Blue and not amber or red, which belong to sightings and the found person:
+/// a likely area is somewhere to look, not an alarm.
+export const HEAT_RGB = [37, 99, 235];
 /// Alpha of the hottest cell. Everything below it falls off faster than linear
 /// so that a broad "not looked at yet" field stays a wash and a real hotspot
 /// still reads as a hotspot.
-export const HEAT_MAX_ALPHA = 0.34;
+export const HEAT_MAX_ALPHA = 0.38;
+
+/// The ramp as a CSS gradient, left (cleared) to right (likely), for the
+/// legend key. Built from the same constants the map paints with so the swatch
+/// cannot drift away from the thing it explains.
+export function heatGradientCSS(steps = 6) {
+  const stops = [];
+  for (let i = 0; i < steps; i++) {
+    const level = i / (steps - 1);
+    stops.push(`rgba(${HEAT_RGB.join(',')},${heatAlpha(level).toFixed(3)}) ${(level * 100).toFixed(0)}%`);
+  }
+  return `linear-gradient(90deg, ${stops.join(', ')})`;
+}
 const HEAT_GAMMA = 1.8;
 /// `HEAT_LEVELS` in swarm/coverage.py: how many steps `heat` is encoded in.
 const HEAT_STEPS = 36;
-/// Below this much spread between the low percentile and the peak there is no
-/// story to tell — an untouched map, or one that has been swept flat.
+/// Least difference between the coldest and hottest cell worth drawing, as a
+/// fraction of the encoded range — about one and a half steps. Under it the
+/// field is flat: an untouched map, or one swept so evenly that ranking it
+/// would be amplifying rounding noise into a picture.
+///
+/// **This is deliberately the full range and not a percentile.** It used to
+/// cut at the 5th percentile, which meant nothing was drawn at all until more
+/// than 5% of the floor had been swept — so the map stayed empty through
+/// exactly the part of a search where the operator is watching it most.
 const HEAT_MIN_SPREAD = 0.04;
-const HEAT_LOW_PERCENTILE = 0.05;
 
 export function heatAlpha(level) {
   return HEAT_MAX_ALPHA * Math.pow(Math.min(1, Math.max(0, level)), HEAT_GAMMA);
@@ -160,14 +210,20 @@ export function heatLevels(cov) {
   const n = (cov?.cols || 0) * (cov?.rows || 0);
   if (!cov?.heat || !n || cov.heat.length < n) return null;
   const bins = new Int32Array(n);
+  let low = HEAT_STEPS - 1, high = 0;
   for (let i = 0; i < n; i++) {
     const v = parseInt(cov.heat[i], 36);
-    bins[i] = Number.isFinite(v) ? Math.min(HEAT_STEPS - 1, Math.max(0, v)) : 0;
+    const bin = Number.isFinite(v) ? Math.min(HEAT_STEPS - 1, Math.max(0, v)) : 0;
+    bins[i] = bin;
+    if (bin < low) low = bin;
+    if (bin > high) high = bin;
   }
-  const sorted = Int32Array.from(bins).sort();
-  const spread = (sorted[n - 1] - sorted[Math.floor(n * HEAT_LOW_PERCENTILE)]) / (HEAT_STEPS - 1);
-  if (!(spread > HEAT_MIN_SPREAD)) return null;
-  return heatEqualise(bins);
+  if (!((high - low) / (HEAT_STEPS - 1) > HEAT_MIN_SPREAD)) return null;
+  const levels = heatEqualise(bins);
+  let top = 0;
+  for (let i = 0; i < n; i++) if (levels[i] > top) top = levels[i];
+  if (top > 0) for (let i = 0; i < n; i++) levels[i] /= top;
+  return levels;
 }
 
 /// The field as a cols×rows RGBA canvas, one pixel per cell. Draw it scaled up

@@ -119,6 +119,20 @@ struct HUDMirrorTests {
         #expect(marker.color == HUDMirror.pingColor)
     }
 
+    /// The alignment marker rides the ping channel (`hub.py` `marker_cue`) but
+    /// it is not one of the operator's pings: it is the fixed thing in the room
+    /// the map already draws in `MARKER_COLOR`, so the compass chip and the AR
+    /// diamond wear that colour too rather than ping yellow.
+    @Test func theAlignmentMarkerKeepsItsMapColourOnTheCompass() throws {
+        let state = overlay({ $0.apply(.ping(id: 0, x: 3, y: 5, label: "MARKER", ttlMs: 12_000),
+                                       heading: nil, now: 0) }, heading: 90)
+        let hud = mirror(state)
+        let chip = try #require(hud.compass?.markers.first { $0.label.hasPrefix("◆ MARKER") })
+        #expect(chip.color == HUDMirror.markerColor)
+        #expect(hud.ar.first?.color == HUDMirror.markerColor)
+        #expect(HUDMirror.markerColor != HUDMirror.pingColor)
+    }
+
     @Test func aPingBehindIsOnTheCompassButNotInTheARLayer() {
         let state = overlay({ $0.apply(.ping(id: 1, x: -3, y: 5, label: "Back", ttlMs: 12_000),
                                        heading: nil, now: 0) }, heading: 90)

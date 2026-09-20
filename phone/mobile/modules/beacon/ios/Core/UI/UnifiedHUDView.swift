@@ -20,6 +20,19 @@ enum HUDStyle {
     static let detection = Color(hex: "#ff5d73") ?? .red
     /// The ink on a compass marker chip and on the toast.
     static let deepInk = Color(hex: "#05070f") ?? .black
+
+    /// The ink for a compass chip, read against the fill the hub named.
+    ///
+    /// Every chip used to be near-black, which was fine while the whole palette
+    /// was the console's pale yellows, greens and cyans. The alignment marker's
+    /// `MARKER_COLOR` purple is dark enough that black-on-purple is barely a
+    /// chip at all, so the ink follows the fill's luminance instead of assuming
+    /// the fill is light.
+    static func chipInk(on fill: String?) -> Color {
+        guard let (r, g, b) = HexColor.parse(fill) else { return deepInk }
+        let luminance = 0.2126 * Double(r) + 0.7152 * Double(g) + 0.0722 * Double(b)
+        return luminance < 0.55 ? .white : deepInk
+    }
     /// "Looking for" text on the light tape plate.
     static let lookingForInk = Color.black.opacity(0.72)
     /// console.js `rgba(255,255,255,0.95)`.
@@ -215,7 +228,7 @@ struct HUDStackView: View {
                     continue
                 }
                 let text = layer.resolve(Text(label).font(.system(size: (marker.big ? 10 : 9) * k, weight: .heavy))
-                    .foregroundStyle(HUDStyle.deepInk))
+                    .foregroundStyle(HUDStyle.chipInk(on: marker.color)))
                 let textWidth = text.measure(in: CGSize(width: CGFloat.infinity, height: .infinity)).width + 10 * k
                 let boxX = max(x0 + 2, min(x0 + width - textWidth - 2, x - textWidth / 2))
                 // Top of the tape, clear of the degree row which sits near the ticks.
