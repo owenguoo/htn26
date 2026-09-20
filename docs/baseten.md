@@ -7,10 +7,10 @@ Model weights are downloaded when the image builds, and the worker uses its own 
 ## Deploy with the Baseten CLI
 
 From the repository root, authenticate with `baseten auth login` if needed.
-Store the worker's existing `SWARM_INFERENCE_API_KEY` as the Baseten secret `beacon_worker_key` using the interactive prompt:
+Store the worker's existing `SWARM_INFERENCE_API_KEY` as the Baseten secret `swarm_sight_worker_key` using the interactive prompt:
 
 ```sh
-baseten org secret set --name beacon_worker_key
+baseten org secret set --name swarm_sight_worker_key
 baseten model push --dir services/inference --region us --environment production
 ```
 
@@ -65,9 +65,9 @@ Use `baseten model deployment activate` with the same IDs to resume, then upload
 
 Deployed with the Baseten CLI on 2026-09-19 in the Hack the North workspace:
 
-- Model: `wgvz266w` (`beacon-yoloe-osnet`).
-- Production deployment: `qe9xrz1`, one `L4:4x16` replica in `us`.
-- [Deployment dashboard](https://app.baseten.co/models/wgvz266w/deployments/qe9xrz1).
+- Model: `wgvz266w` (`swarm-sight-yoloe-osnet`).
+- Production deployment: `qzrl1mk`, one `L4:4x16` replica in `us`.
+- [Deployment dashboard](https://app.baseten.co/models/wgvz266w/deployments/qzrl1mk).
 - Hub endpoint: `https://model-wgvz266w-region-us.api.baseten.co/environments/production/sync`.
 
 Real-image validation passed detection, reference registration/read/deletion, positive matching, and a blank-frame negative check.
@@ -80,3 +80,7 @@ These are functional smoke checks, not accuracy or multi-phone capacity benchmar
 The local hub and bridge use the cloud worker through the ignored root `.env`.
 Upload a fresh reference after restarting or redeploying.
 The local CPU worker and superseded GPU deployment are stopped.
+
+The detection worker reuses an active class set for requests that ask for a subset, avoiding repeated YOLOE prompt and predictor initialization.
+A warm blank-image check alternating person and chair/person prompts on deployment `qzrl1mk` took 146–183 ms round trip and 19–21 ms of inference.
+The initial request took 3.35 seconds to warm up; these measurements do not establish live tracking accuracy.

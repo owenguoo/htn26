@@ -26,6 +26,7 @@ class Bridge:
         self.busy: set[str] = set()
         self.wake = asyncio.Event()
         self.backoff_until = 0.0
+        self.objects_checked: dict[str, float] = {}
 
     @property
     def headers(self) -> dict[str, str]:
@@ -34,11 +35,12 @@ class Bridge:
     def clear(self) -> None:
         self.pending.clear()
         self.ready.clear()
+        self.objects_checked.clear()
 
     def offer(self, packet: bytes) -> None:
         header, jpeg = unpack(packet)
         phone = header.get('phoneId')
-        if (not isinstance(phone, str) or not self.state.get('active')
+        if (not isinstance(phone, str) or not (self.state.get('active') or self.state.get('hazardsActive'))
                 or header.get('searchRevision') != self.state.get('searchRevision')):
             return
         if phone not in self.pending and len(set(self.pending) | self.busy) >= self.settings.max_phones and phone not in self.busy:
@@ -75,17 +77,21 @@ class Bridge:
             return
         value = 'unavailable'
         try:
-            response = await self.client.get(
-                self.settings.inference_url + '/v1/targets/active', timeout=2,
-                headers=self.settings.inference_headers)
-            if response.status_code == 404:
-                value = 'reference_unavailable' if state.get('targetVersion') else 'available'
-            else:
-                response.raise_for_status()
-                value = ('available' if not state.get('targetVersion') or response.json()['target_version'] == state['targetVersion']
-                         else 'reference_unavailable')
+            people = state.get('people') or [{'id': 'active', 'version': state.get('targetVersion')}]
+            responses = await asyncio.gather(*(self.client.get(
+                self.settings.inference_url + '/v1/targets/' + person['id'], timeout=2,
+                headers=self.settings.inference_headers) for person in people))
+            value = 'available'
+            for person, response in zip(people, responses):
+                if response.status_code == 404:
+                    if person['version']:
+                        value = 'reference_unavailable'
+                else:
+                    response.raise_for_status()
+                    if person['version'] and response.json()['target_version'] != person['version']:
+                        value = 'reference_unavailable'
         except (httpx.HTTPError, ValueError, KeyError, TypeError):
-            pass
+            value = 'unavailable'
         # A slow probe belongs only to the search generation it started with.
         if self.state.get('searchRevision') == revision:
             await self.status(revision, value)
@@ -96,7 +102,7 @@ class Bridge:
                 response = await self.client.get(self.settings.hub_url + '/api/search', headers=self.headers)
                 response.raise_for_status()
                 state = response.json()
-                if state.get('searchRevision') != self.state.get('searchRevision') or not state.get('active'):
+                if state.get('searchRevision') != self.state.get('searchRevision') or not (state.get('active') or state.get('hazardsActive')):
                     self.clear()
                 self.state = state
                 await self.health()
@@ -106,7 +112,7 @@ class Bridge:
             await asyncio.sleep(1)
 
     async def receive(self) -> None:
-        url = self.settings.hub_url.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws/frames?fps=1'
+        url = self.settings.hub_url.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws/frames?fps=5'
         delay = 1
         while True:
             try:
@@ -122,6 +128,46 @@ class Bridge:
             self.clear()
             await asyncio.sleep(delay)
             delay = min(10, delay * 2)
+
+    async def process(self, header: dict, jpeg: bytes) -> None:
+        if self.state.get('hazardsActive'):
+            # Isolate hazard failures so person matching keeps its own health and retry behavior.
+            await asyncio.gather(self.process_person(header, jpeg), self.process_objects(header, jpeg))
+        else:
+            await self.process_person(header, jpeg)
+
+    async def process_objects(self, header: dict, jpeg: bytes) -> None:
+        now = now_ms()
+        self.objects_checked = {k: t for k, t in self.objects_checked.items() if now - t < 1000}
+        if header['phoneId'] in self.objects_checked:
+            return
+        self.objects_checked[header['phoneId']] = now
+        revision = self.state.get('searchRevision')
+        if header.get('searchRevision') != revision or not 0 <= now_ms() - header['t'] <= 1500:
+            return
+        try:
+            params = dict(phone_id=header['streamId'], frame_id=str(header['seq']),
+                          captured_at=captured_at_seconds(header['t']), labels=['chair', 'person'], confidence=.25)
+            response = await self.client.post(self.settings.inference_url + '/v1/detect', params=params,
+                content=jpeg, headers={**self.settings.inference_headers, 'Content-Type': 'image/jpeg'})
+            response.raise_for_status()
+            result = response.json()
+            if any(result.get(k) != params[k] for k in ('phone_id', 'frame_id', 'captured_at')):
+                raise ValueError('hazard frame identity mismatch')
+            if (result['width'], result['height']) != (header['width'], header['height']):
+                raise ValueError('hazard dimensions mismatch')
+            if (self.state.get('searchRevision') != revision or not self.state.get('hazardsActive')
+                    or now_ms() - header['t'] > 1500):
+                return
+            body = {k: header[k] for k in ('phoneId', 'streamId', 'seq', 't', 'width', 'height', 'searchRevision')}
+            body['detections'] = [d for d in result['detections']
+                                  if (d['label'] == 'chair' and d['score'] >= .6)
+                                  or d['label'] == 'person']
+            callback = await self.client.post(self.settings.hub_url + '/api/hazards', headers=self.headers, json=body)
+            if callback.status_code != 409:
+                callback.raise_for_status()
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+            log.warning('Object detection unavailable: %s', type(error).__name__)
 
     async def unavailable(self, revision: str) -> None:
         """A reference the worker no longer holds: stop offering frames until the hub re-registers."""
@@ -159,7 +205,7 @@ class Bridge:
                  for c in result['candidates']]
         return boxes, result
 
-    async def process(self, header: dict, jpeg: bytes) -> None:
+    async def process_person(self, header: dict, jpeg: bytes) -> None:
         """One frame, matched against everybody on the reference roster. The boxes come back
         tagged with the person they matched, so a frame holding two of them says so."""
         state = self.state.copy()

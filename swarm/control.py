@@ -109,6 +109,7 @@ def install_routes(app: FastAPI, hub: Hub, auth: Auth) -> None:
         return {'searchRevision': hub.search.revision, 'targetVersion': hub.search.target_version,
                 'threshold': hub.search.threshold, 'phase': hub.phase,
                 'active': auth.settings.enabled and hub.phase in SEARCHING and bool(hub.search.target_version),
+                'hazardsActive': auth.settings.enabled and hub.phase in SEARCHING,
                 'status': available, 'enabled': auth.settings.enabled,
                 'referenceAvailable': bool(hub.search.target_version),
                 **hub.search.visual_context(time.time() * 1000)}

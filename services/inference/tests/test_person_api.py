@@ -82,7 +82,7 @@ def test_auth_validation_and_disabled():
             client.post("/v1/match", params=params, headers=HEADERS, content=png()).status_code
             == 422
         )
-    with TestClient(create_app(Settings(api_key=KEY), Detector())) as client:
+    with TestClient(create_app(Settings(api_key=KEY, enable_reid=False), Detector())) as client:
         assert client.put("/v1/targets/alice", headers=HEADERS, content=png()).status_code == 503
 
 
@@ -273,7 +273,7 @@ def test_ambiguous_reference_requires_explicit_box():
 
 def test_reid_requires_yoloe():
     with pytest.raises(ValueError, match="yoloe"):
-        create_app(Settings(api_key=KEY, enable_reid=True), Detector(), embedder=Embedder())
+        create_app(Settings(api_key=KEY, backend="yolo-world", enable_reid=True), Detector(), embedder=Embedder())
 
 
 @pytest.mark.parametrize("threshold", [-1.1, 1.1, "NaN", "Infinity"])

@@ -8,7 +8,7 @@ import uvicorn
 
 
 def main() -> None:
-    os.environ["SWARM_API_KEY"] = Path("/secrets/beacon_worker_key").read_text().strip()
+    os.environ["SWARM_API_KEY"] = Path("/secrets/swarm_sight_worker_key").read_text().strip()
     # Ultralytics resolves its text encoder relative to the working directory.
     os.chdir("/app/data")
     import torch

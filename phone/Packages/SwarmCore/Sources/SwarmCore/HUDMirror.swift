@@ -244,7 +244,8 @@ public enum HUDMirror {
                             toast: overlay.toast.map { "📣 " + $0.text }, card: card, ar: ar,
                             screen: visibleFrame(captureWidth: captureWidth, captureHeight: captureHeight,
                                                  screenAspect: screenAspect),
-                            dets: overlay.detections?.boxes,
+                            dets: overlay.hazards == nil ? overlay.detections?.boxes
+                                : (overlay.detections?.boxes ?? []) + (overlay.hazards?.boxes ?? []),
                             soundEdge: edge)
     }
     /// A pixel in the landscape capture → 0…1 in the upright frame the hub has.

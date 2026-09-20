@@ -67,7 +67,8 @@ class YoloDetector:
     def predict(
         self, images: list[Image.Image], labels: tuple[str, ...], confidence: float
     ) -> list[list[Detection]]:
-        if labels != self.labels:
+        # Reusing a superset avoids rebuilding YOLOE prompts and its predictor each frame.
+        if not set(labels).issubset(self.labels):
             self.model.set_classes(list(labels))
             self.labels = labels
         try:
@@ -81,13 +82,13 @@ class YoloDetector:
                 max_det=100,
             )
             return [
-                normalize_detections(
+                [detection for detection in normalize_detections(
                     result.boxes.xyxy.cpu().tolist(),
                     result.boxes.conf.cpu().tolist(),
                     [result.names[int(index)] for index in result.boxes.cls.cpu().tolist()],
                     image.size,
                     confidence,
-                )
+                ) if detection.label in labels]
                 for image, result in zip(images, results, strict=True)
             ]
         finally:

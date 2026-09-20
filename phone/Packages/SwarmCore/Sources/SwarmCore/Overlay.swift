@@ -496,6 +496,7 @@ public struct OverlayState: Sendable, Equatable {
     public var elevation: ElevationCue?
     public var toast: ToastCue?
     public var detections: DetectionsCue?
+    public var hazards: DetectionsCue?
     public var pings: [PingCue] = []
     /// The hub's found candidate (`world.candidate`), located like a ping so it
     /// can sit on the compass and float in the camera view. `id` is −1.
@@ -549,6 +550,7 @@ public struct OverlayModel: Sendable {
     private var detectionStream: String?
     private var detectionRevision: String?
     private var detectionSeq: UInt64?
+    private var hazardSeq: UInt64?
     private var detectionCaptures: [UInt64: Double] = [:]
 
     public mutating func recordDetectionCapture(seq: UInt64, at time: Double) {
@@ -598,6 +600,8 @@ public struct OverlayModel: Sendable {
         detectionStream = welcome.streamId
         detectionRevision = nil
         detectionSeq = nil
+        hazardSeq = nil
+        state.hazards = nil
         detectionCaptures.removeAll()
         state.detections = nil
         state.index = welcome.index
@@ -676,6 +680,8 @@ public struct OverlayModel: Sendable {
                     detectionRevision = context.searchRevision
                     detectionSeq = nil
                     state.detections = nil
+                    state.hazards = nil
+                    hazardSeq = nil
                     return true
                 }
                 guard let stream = context.streamId, stream == detectionStream,
@@ -690,6 +696,15 @@ public struct OverlayModel: Sendable {
             state.detections = DetectionsCue(boxes: boxes, until: until)
             state.detections?.threshold = context?.threshold
             state.detections?.rehearsal = context?.rehearsal ?? false
+        case .hazards(let boxes, let ttlMs, let context):
+            guard let stream = context.streamId, stream == detectionStream,
+                  let seq = context.seq, hazardSeq.map({ seq > $0 }) ?? true,
+                  let revision = context.searchRevision,
+                  detectionRevision == nil || detectionRevision == revision,
+                  let captured = detectionCaptures[seq], now - captured < 1.5 else { return false }
+            detectionRevision = revision
+            hazardSeq = seq
+            state.hazards = DetectionsCue(boxes: boxes, until: min(now + ttlMs / 1000, captured + 1.5))
         case .rate, .hud, .unknown:
             return false
         }
@@ -736,6 +751,7 @@ public struct OverlayModel: Sendable {
 
         if let flash = state.flash, now > flash.until { state.flash = nil }
         if let toast = state.toast, now > toast.until { state.toast = nil }
+        if let hazards = state.hazards, now > hazards.until { state.hazards = nil }
         if let detections = state.detections, now > detections.until { state.detections = nil }
         if let sound = state.directionalSound, now > sound.until { state.directionalSound = nil }
         state.pings.removeAll { now > $0.until }

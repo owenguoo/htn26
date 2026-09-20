@@ -14,7 +14,7 @@ test('search map exposes a compact legend for its marker hierarchy', () => {
 
 test('legend keys mirror the marker border and person treatments', () => {
   const key = html.match(/\.map-key\s*\{([^}]+)\}/)?.[1] ?? '';
-  assert.match(html, /--map-marker-size:\s*22px; --map-marker-stroke:\s*2px/);
+  assert.match(html, /--map-marker-size:\s*20px; --map-marker-stroke:\s*2px/);
   assert.match(key, /border:\s*var\(--map-marker-stroke\) solid #fff/);
   assert.doesNotMatch(key, /0 0 0 3px/);
   assert.match(html, /\.map-key\.sighting, \.map-key\.rescued \{ background: #fff/);

@@ -36,6 +36,8 @@ from .planner import Planner
 from .sightings import FOUND_CONF, PERSON_HEIGHT_M, POSSIBLE_CONF, MockDetector, Sightings
 from .target import Target
 from .mapper import Mapper
+from .hazards import Hazards, HazardResult, ObjectDetection, floor_position
+from .detection import normalize_box
 from .protocol import now_ms, pack, unpack
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -203,6 +205,7 @@ class Hub:
         self.directives_cleared: list[str] = []
         self.mission_complete = False       # every responder reached the found candidate
         self.boosted: set[str] = set()      # phones told to capture faster (expanded in a console)
+        self.hazards = Hazards()
         self.evicted: dict[str, int] = {}   # phone id → when an operator removed it, refused until EVICT_MS
         self.mapper = None
         self.mission = None                 # Mission Control (LLM); created in main()
@@ -343,6 +346,8 @@ class Hub:
         phone.frame_pose = phone.pose(now)
         if phone.frame_pose is not None and header.get("heading") is not None:
             phone.frame_pose["heading"] = phone.heading
+        if phone.frame_pose is not None:
+            phone.frame_pose.update(pitch=phone.pitch, calibrated=phone.calibrated)
         phone.frame_width, phone.frame_height = width, height
         phone.frame = jpeg
         phone.frame_ori = header.get("orientation") if isinstance(header.get("orientation"), dict) else None
@@ -577,10 +582,22 @@ class Hub:
         """A real detection result as search evidence: people who look like the reference raise the
         probability where they stand and can become possible sightings; near misses nudge the heatmap
         (worth another look); everyone else is someone else. Placed from the pose the phone had when the
-        frame was taken. Evidence only: it never confirms a find or claims a position (the operator does)."""
+        frame was taken. Evidence only: floor estimates never confirm identity or dispatch responders."""
         pose = accepted.pose
         if self.search.mode != "real" or self.phase not in SEARCH_PHASES or not pose or pose.get("heading") is None:
             return 0
+        # Retain the newest projectable match independently of short-lived camera boxes.
+        result = accepted.result
+        if accepted.matching_boxes and (not self.search.map_sighting or result.t >= self.search.map_sighting['t']):
+            best = max(accepted.matching_boxes, key=lambda b: b.similarity)
+            detection = ObjectDetection(label='person', score=best.detectionScore,
+                box=(best.x * result.width, best.y * result.height,
+                     (best.x + best.w) * result.width, (best.y + best.h) * result.height))
+            point = floor_position(detection, pose, result.width, result.height, ROOM)
+            if point:
+                self.search.map_sighting = dict(x=point[0], y=point[1], t=result.t,
+                    phoneId=result.phoneId, streamId=result.streamId, seq=result.seq,
+                    confirmed=False, approximate=True, similarity=best.similarity)
         threshold = self.search.threshold
         names = {p["id"]: p["label"] for p in self.search.people}   # which reference person matched
         boxes = []
@@ -649,10 +666,12 @@ class Hub:
             return False
         self._phase_generation += 1
         generation = self._phase_generation
+        if restart:
+            self.hazards.reset()
         changed = phase != self.phase or restart
         if changed:
             # The audit keeps its original revision while live callbacks are invalidated.
-            self.search.reset(preserve_confirmation=confirmed_visual and phase == "found")
+            self.search.reset(preserve_confirmation=confirmed_visual and phase == "found", preserve_sighting=not restart)
             self.phase, self.phase_started = phase, now_ms()
             self.planner.note(f"Phase → {phase}")
             if self.mission:
@@ -886,6 +905,7 @@ class Hub:
     def state(self) -> dict:
         now = now_ms()
         self.search.expire(now)
+        objects = self.hazards.snapshot(now, self.search.revision)
         phones = sorted(self.phones.values(), key=lambda p: p.index)
         cell_m2 = self.coverage.cell ** 2
         return {"type": "state", "t": now,
@@ -899,6 +919,9 @@ class Hub:
                 "marker": self.marker,
                 "sightings": self.sightings.snapshot(), "likely": self.likely_sectors(),
                 "pings": [{k: pg[k] for k in ("id", "x", "y", "label", "t")} for pg in self.active_pings(now)],
+                "hazards": [o for o in objects if o["label"] == "chair"],
+                "detectedPeople": [o for o in objects if o["label"] == "person"],
+                "targetSighting": dict(self.search.map_sighting) if self.search.map_sighting else None,
                 "scan": self.mapper.status() if self.mapper else None,
                 "mission": self.mission.status() if self.mission else {"ready": False, "why": "not started"}}
 
@@ -1170,16 +1193,46 @@ def post_pose(body: dict, request: Request) -> dict:
     return {"ok": hub.set_external_pose(body)}
 
 
+@app.post("/api/hazards")
+async def post_hazards(body: HazardResult, request: Request) -> dict:
+    auth.require_bridge(request)
+    if hub.phase not in SEARCH_PHASES or not hub.hazards.accept(body, hub.search, ROOM, now_ms()):
+        raise HTTPException(409, 'obsolete hazard observation')
+    boxes = []
+    for detection in body.detections:
+        if detection.label == 'person' and hub.search.target_version:
+            continue
+        try:
+            boxes.append(normalize_box(detection.box, body.width, body.height) |
+                         {'label': 'Hazard' if detection.label == 'chair' else 'Person',
+                          'detectionScore': detection.score})
+        except ValueError:
+            continue
+    phone = hub.phones.get(body.phoneId)
+    if phone:
+        async with phone.send_lock:
+            if (hub.phase not in SEARCH_PHASES or body.searchRevision != hub.search.revision
+                    or hub.search.streams.get(body.phoneId) != body.streamId
+                    or hub.hazards.sequences.get(body.phoneId) != (body.streamId, body.seq)
+                    or now_ms() - body.t > 1500):
+                raise HTTPException(409, 'hazard observation changed')
+            if phone.ws:
+                await phone.ws.send_json({'type': 'command', 'cmd': 'hazard_detections',
+                    'streamId': body.streamId, 'seq': body.seq, 'searchRevision': body.searchRevision,
+                    'boxes': boxes, 'ttlMs': 1500})
+    return {'ok': True}
+
+
 @app.post("/api/detections")
 async def post_detections(body: dict, request: Request) -> dict:
     auth.require_bridge(request)
-    if hub.phase != 'search' or not hub.search.accept_result(body, now_ms=now_ms()):
+    if hub.phase not in SEARCH_PHASES or not hub.search.accept_result(body, now_ms=now_ms()):
         raise HTTPException(409, 'obsolete or invalid detection')
     result = DetectionResult.model_validate(body)
     phone = hub.phones.get(result.phoneId)
     if phone:
         async with phone.send_lock:
-            if (result.searchRevision != hub.search.revision or hub.phase != 'search'
+            if (result.searchRevision != hub.search.revision or hub.phase not in SEARCH_PHASES
                     or hub.search.streams.get(result.phoneId) != result.streamId
                     or now_ms() - result.t > 1500
                     or hub.search.latest.get(result.phoneId) is None

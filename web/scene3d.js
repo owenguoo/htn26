@@ -562,19 +562,28 @@ export function createScene3D(host, { room, getState, getThumb, onPick }) {
   let markerKey = '';
   function updateMarkers(st) {
     const t = st.target;
+    const hazards = [...(st.hazards || []), ...(st.detectedPeople || [])];
     const sightings = t?.foundBy ? [] : (st.sightings || []).filter((s) => s.confidence >= 0.2);
-    const key = JSON.stringify([t?.fix, t?.foundBy, sightings.map((s) => [s.x, s.y, s.confidence]),
-      (st.pings || []).map((p) => p.id)]);
+    const key = JSON.stringify([st.targetSighting, t?.fix, t?.foundBy, sightings.map((s) => [s.x, s.y, s.confidence]),
+      (st.pings || []).map((p) => p.id), hazards.map(h => [h.id, h.x, h.y, Date.now() - h.t > 15000])]);
     if (key === markerKey) return;
     markerKey = key;
     for (const m of [...markers.children]) {
       m.traverse((o) => { if (o.element) o.element.remove(); o.material?.dispose(); });
       markers.remove(m);
     }
-    if (t?.foundBy && t.fix) beam(t.fix[0], t.fix[1], 0xff4d5e, 6, 0.85, `FOUND · ${Math.round((t.confidence || 0) * 100)}%`, true);
+    if (t?.foundBy && t.fix) beam(t.fix[0], t.fix[1], 0xff4d5e, 6, 0.85, `${Math.round((t.confidence || 0) * 100)}%`, true);
+    const targetSighting = st.targetSighting;
+    if (targetSighting) beam(targetSighting.x, targetSighting.y, targetSighting.confirmed ? 0xb72f36 : 0xd97706,
+      4, .85, Number.isFinite(targetSighting.similarity) ? `${Math.round(Math.max(0, targetSighting.similarity) * 100)}%` : null, true);
     for (const s of sightings) {
       beam(s.x, s.y, 0xff4d5e, 1 + 3 * s.confidence, 0.25 + 0.5 * s.confidence,
-        s.confidence >= 0.4 ? `possible · ${Math.round(s.confidence * 100)}%` : null, s.confidence >= 0.4);
+        s.confidence >= 0.4 ? `${Math.round(s.confidence * 100)}%` : null, s.confidence >= 0.4);
+    }
+    for (const h of hazards) {
+      const stale = Date.now() - h.t > 15000;
+      beam(h.x, h.y, stale ? 0x78716c : h.label === 'person' ? 0x2563eb : 0xd97706,
+        1, stale ? .4 : .75, null, false);
     }
     for (const pg of st.pings || []) beam(pg.x, pg.y, 0xffb703, 3, 0.7, pg.label, true);
   }

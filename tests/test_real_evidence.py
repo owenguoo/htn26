@@ -37,6 +37,7 @@ def ahead(hub):
 
 def test_match_raises_probability_and_makes_a_possible_sighting_but_never_a_find():
     hub = Hub()
+    hub.phase = 'search'
     before = ahead(hub)
     entry, _ = result(hub, .92)
     assert hub.real_evidence(entry) == 1
@@ -51,6 +52,7 @@ def test_match_raises_probability_and_makes_a_possible_sighting_but_never_a_find
 
 def test_near_miss_only_nudges_the_heatmap():
     hub = Hub()
+    hub.phase = 'search'
     before = ahead(hub)
     entry, _ = result(hub, hub.search.threshold - .05)
     assert hub.real_evidence(entry) == 1
@@ -60,6 +62,7 @@ def test_near_miss_only_nudges_the_heatmap():
 
 def test_someone_else_changes_nothing():
     hub = Hub()
+    hub.phase = 'search'
     entry, _ = result(hub, .2)
     prob = hub.coverage.prob.copy()
     assert hub.real_evidence(entry) == 0
@@ -68,6 +71,7 @@ def test_someone_else_changes_nothing():
 
 def test_no_pose_or_not_searching_means_no_evidence():
     hub = Hub()
+    hub.phase = 'search'
     entry, _ = result(hub, .95, pose={'x': 1, 'y': 2})  # no heading: can't tell where the box points
     assert hub.real_evidence(entry) == 0
     asyncio.run(hub.set_phase('lobby'))
@@ -78,6 +82,7 @@ def test_no_pose_or_not_searching_means_no_evidence():
 def test_posting_a_detection_reports_the_evidence_it_added(monkeypatch):
     from swarm import hub as module
     hub = Hub()
+    hub.phase = 'search'
     monkeypatch.setattr(module, 'hub', hub)
     monkeypatch.setattr(module, 'auth', Auth(Settings(bridge_key='bridge')))
     _, body = result(hub, .9)
@@ -88,3 +93,39 @@ def test_posting_a_detection_reports_the_evidence_it_added(monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json()['evidence'] == 1
     assert hub.sightings.best()
+
+
+def test_target_map_sighting_persists_and_resets_with_reference():
+    hub = Hub()
+    hub.phase = 'search'
+    pose = POSE | {'pitch': -20., 'calibrated': True, 'source': 'slam'}
+    entry, body = result(hub, .95, pose=pose)
+    hub.real_evidence(entry)
+    marker = hub.state()['targetSighting']
+    assert marker and marker['y'] < pose['y'] and not marker['confirmed']
+    assert hub.search.confirm('p', 's', 1, hub.search.revision, now_ms=body['t'])
+    assert hub.state()['targetSighting']['confirmed']
+    hub.search.expire(body['t'] + 10000)
+    hub.search.disconnect('p', 's')
+    asyncio.run(hub.set_phase('end'))
+    assert hub.state()['targetSighting']['confirmed']
+    assert hub.state()['targetSighting']['y'] == marker['y']
+    hub.search.set_reference('another-person')
+    assert hub.state()['targetSighting'] is None
+
+
+def test_target_map_sighting_requires_a_match_and_usable_floor_position():
+    hub = Hub()
+    hub.phase = 'search'
+    entry, _ = result(hub, .95)
+    hub.real_evidence(entry)
+    assert hub.state()['targetSighting'] is None
+    pose = POSE | {'pitch': -20., 'calibrated': True, 'source': 'slam'}
+    entry, _ = result(hub, .2, pose=pose, seq=2)
+    hub.real_evidence(entry)
+    assert hub.state()['targetSighting'] is None
+    entry, _ = result(hub, .95, pose=pose, seq=3)
+    hub.real_evidence(entry)
+    assert hub.state()['targetSighting']
+    asyncio.run(hub.set_phase('calibrate', restart=True))
+    assert hub.state()['targetSighting'] is None

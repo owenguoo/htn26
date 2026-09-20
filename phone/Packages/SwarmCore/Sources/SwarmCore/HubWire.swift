@@ -516,6 +516,14 @@ public struct HubDetectionBox: Sendable, Equatable, Codable {
 
     /// The confidence to show, whichever spelling arrived.
     public var confidence: Double? { detectionScore ?? score }
+
+    public var displayLabel: String {
+        if label?.lowercased() == "person", let similarity, similarity.isFinite {
+            let percent = Int((max(0, min(1, similarity)) * 100).rounded())
+            return "Person · \(percent)% match"
+        }
+        return label ?? ""
+    }
 }
 
 public struct HubDetectionContext: Sendable, Equatable {
@@ -543,6 +551,7 @@ public enum HubCommand: Sendable, Equatable {
     case rate(fps: Double?)
     case ping(id: Int, x: Double, y: Double, label: String, ttlMs: Double)
     case message(text: String, ttlMs: Double)
+    case hazards(boxes: [HubDetectionBox], ttlMs: Double, context: HubDetectionContext)
     case detections(boxes: [HubDetectionBox], ttlMs: Double, context: HubDetectionContext? = nil)
     case hud(on: Bool)
     case unknown(cmd: String)
@@ -555,6 +564,7 @@ public enum HubCommand: Sendable, Equatable {
         case .rate: "rate"
         case .ping: "ping"
         case .message: "message"
+        case .hazards: "hazard_detections"
         case .detections(_, _, let context): context?.rehearsal == true ? "rehearsal_detections" : "detections"
         case .hud: "hud"
         case .unknown(let cmd): cmd
@@ -676,6 +686,11 @@ public enum HubInbound: Sendable, Equatable {
                     context: HubDetectionContext(streamId: streamId, seq: seq,
                         searchRevision: searchRevision, threshold: threshold,
                         clear: clear ?? false, rehearsal: cmd == "rehearsal_detections"))
+            case "hazard_detections":
+                return .hazards(boxes: boxes ?? [], ttlMs: ttlMs ?? 1500,
+                    context: HubDetectionContext(streamId: streamId, seq: seq,
+                        searchRevision: searchRevision, threshold: nil,
+                        clear: clear ?? false, rehearsal: false))
             case "hud":
                 return .hud(on: on ?? false)
             default:

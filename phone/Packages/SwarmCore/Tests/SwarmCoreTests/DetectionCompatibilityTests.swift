@@ -4,6 +4,17 @@ import Testing
 
 @Suite("Current hub detection protocol")
 struct DetectionCompatibilityTests {
+    @Test func labelsUseAppearanceSimilarityRatherThanDetectionConfidence() {
+        var box = HubDetectionBox(x: 0, y: 0, w: 1, h: 1, label: "person", detectionScore: 0.99, similarity: 0.726)
+        #expect(box.displayLabel == "Person · 73% match")
+        box.similarity = -0.2
+        #expect(box.displayLabel == "Person · 0% match")
+        box.similarity = nil
+        #expect(box.displayLabel == "person")
+        box.label = "Hazard"
+        #expect(box.displayLabel == "Hazard")
+    }
+
     private func welcome(_ stream: String) throws -> HubWelcome {
         try JSONDecoder().decode(HubWelcome.self, from: Data("""
         {"phoneId":"phone","index":1,"color":"#ffffff","streamId":"\(stream)"}
@@ -11,9 +22,9 @@ struct DetectionCompatibilityTests {
     }
 
     private func command(seq: Int = 1, stream: String = "stream", revision: String = "revision",
-                         rehearsal: Bool = false, clear: Bool = false) throws -> HubCommand {
+                         rehearsal: Bool = false, clear: Bool = false, hazard: Bool = false) throws -> HubCommand {
         let data = Data("""
-        {"type":"command","cmd":"\(rehearsal ? "rehearsal_detections" : "detections")",
+        {"type":"command","cmd":"\(hazard ? "hazard_detections" : rehearsal ? "rehearsal_detections" : "detections")",
         "streamId":"\(stream)","seq":\(seq),"searchRevision":"\(revision)","threshold":0.7,
         "clear":\(clear),"boxes":[{"x":0.1,"y":0.2,"w":0.3,"h":0.4,"label":"person",
         "detectionScore":0.92,"similarity":0.8}],"ttlMs":1500}
@@ -76,5 +87,21 @@ struct DetectionCompatibilityTests {
         #expect(model.state.detections == nil)
         let missingCapture = model.apply(try command(stream: "stream2"), heading: nil, now: 1)
         #expect(!missingCapture)
+    }
+    @Test func hazardsCoexistWithPeopleAndKeepFrameGuards() throws {
+        var model = OverlayModel()
+        model.apply(try welcome("stream"))
+        model.recordDetectionCapture(seq: 1, at: 1)
+        #expect(model.apply(try command(), heading: nil, now: 1.1))
+        #expect(model.apply(try command(hazard: true), heading: nil, now: 1.1))
+        #expect(model.state.detections?.boxes.count == 1)
+        #expect(model.state.hazards?.boxes.count == 1)
+        #expect(!model.apply(try command(hazard: true), heading: nil, now: 1.2))
+        #expect(!model.apply(try command(stream: "old", hazard: true), heading: nil, now: 1.2))
+        model.recordDetectionCapture(seq: 2, at: 1)
+        #expect(!model.apply(try command(seq: 2, hazard: true), heading: nil, now: 2.5))
+        model.apply(try command(revision: "next", clear: true), heading: nil, now: 1.2)
+        #expect(model.state.hazards == nil)
+        #expect(!model.apply(try command(seq: 2, hazard: true), heading: nil, now: 1.2))
     }
 }

@@ -27,6 +27,7 @@ def sighting(hub):
 
 def test_real_similarity_cannot_create_mock_find_or_dispatch():
     hub = Hub()
+    hub.phase = 'search'
     hub.target.place(0, 0)
     sighting(hub)
     viewers = {'p': (0, 0, 0, None), 'other': (1, 1, 0, None)}
@@ -42,6 +43,7 @@ def test_real_similarity_cannot_create_mock_find_or_dispatch():
 
 def test_confirmation_auth_exact_identity_unknown_position_and_phase():
     hub = Hub()
+    hub.phase = 'search'
     app = FastAPI()
     install_routes(app, hub, Auth(Settings()))
     with TestClient(app) as client:
@@ -69,6 +71,7 @@ def test_confirmation_auth_exact_identity_unknown_position_and_phase():
 def test_stale_reconnect_reset_and_threshold_invalidate_confirmation():
     for change in ('expire', 'reconnect', 'reset', 'threshold', 'clear'):
         hub = Hub()
+        hub.phase = 'search'
         body = sighting(hub)
         if change == 'expire':
             hub.search.expire(now_ms() + 2000)
@@ -85,6 +88,7 @@ def test_stale_reconnect_reset_and_threshold_invalidate_confirmation():
 
 def test_real_mode_stays_after_clear_and_explicit_rehearsal_restores_mock():
     hub = Hub()
+    hub.phase = 'search'
     app = FastAPI()
     install_routes(app, hub, Auth(Settings()))
     with TestClient(app) as client:
@@ -113,6 +117,7 @@ def test_enter_real_clears_active_mock_guidance_and_mission_context(monkeypatch)
     from swarm.hub import ROOM
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     hub = Hub()
+    hub.phase = 'search'
     sent = []
 
     class Phone:
@@ -141,6 +146,7 @@ def test_enter_real_clears_active_mock_guidance_and_mission_context(monkeypatch)
 def test_confirmed_audit_invalidated_by_reference_threshold_reset_and_reconnect():
     for change in ('replace', 'clear', 'threshold', 'reset', 'reconnect', 'disconnect'):
         hub = Hub()
+        hub.phase = 'search'
         body = sighting(hub)
         assert hub.search.confirm('p', 's', 1, body['searchRevision'])
         if change == 'replace':
@@ -160,6 +166,7 @@ def test_confirmed_audit_invalidated_by_reference_threshold_reset_and_reconnect(
 
 def test_confirmation_rejects_nonmatch_and_superseded_result():
     hub = Hub()
+    hub.phase = 'search'
     body = sighting(hub)
     old = hub.search.latest['p'].result.model_dump()
     hub.search.record_frame(FrameSnapshot('p', 's', 2, old['t'], 10, 10, None))
@@ -171,6 +178,7 @@ def test_confirmation_rejects_nonmatch_and_superseded_result():
 def test_real_mode_preserves_planner_scanning_and_coverage(monkeypatch):
     from swarm.hub import Phone
     hub = Hub()
+    hub.phase = 'search'
     sighting(hub)
     phone = Phone('p', 1)
     phone.connected = True
@@ -200,6 +208,7 @@ def test_invalidated_confirmation_keeps_authoritative_phase_without_success(monk
 
     async def run():
         hub = Hub()
+        hub.phase = 'search'
         body = sighting(hub)
         phone = Phone('p', 1)
         phases = []
@@ -254,6 +263,7 @@ def test_phase_send_rechecks_transition_after_phone_lock(monkeypatch):
 
     async def run():
         hub = Hub()
+        hub.phase = 'search'
         phone = Phone('p', 1)
         phases = []
         waiting, release, newer_committed = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -297,6 +307,7 @@ def test_ordinary_phase_publication_survives_search_edit(monkeypatch, edit):
 
     async def run():
         hub = Hub()
+        hub.phase = 'search'
         phone = Phone('p', 1)
         phases = []
         paused, resume = asyncio.Event(), asyncio.Event()
@@ -352,6 +363,7 @@ def test_waiting_mock_overlay_cannot_cross_into_real_search():
 
     async def run():
         hub = Hub()
+        hub.phase = 'search'
         phone = Phone('p', 1, seat={'x': 0, 'y': 2}, heading=0)
         sent = []
 
@@ -375,6 +387,7 @@ def test_waiting_mock_overlay_cannot_cross_into_real_search():
 def test_rehearsal_overlay_carries_stream_and_search_identity():
     from swarm.hub import Phone
     hub = Hub()
+    hub.phase = 'search'
     sent = []
 
     class Socket:

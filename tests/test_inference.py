@@ -45,10 +45,12 @@ def test_latest_pending_fairness_and_bound():
 
 
 def test_console_needs_no_login_but_keeps_origin_and_service_checks(monkeypatch):
+    monkeypatch.setattr(module.hub, "phase", "search")
     from swarm.control import Auth, Settings, install_routes
     from fastapi import FastAPI
     phase = module.hub.phase
     hub = module.Hub()
+    hub.phase = "search"
     settings = Settings(bridge_key='bridge')
     auth = Auth(settings)
     app = FastAPI()
@@ -145,6 +147,7 @@ def test_reference_clear_wins_slow_upload(monkeypatch):
         transport = httpx.MockTransport(worker)
         monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=transport, **kwargs))
         hub = module.Hub()
+        hub.phase = "search"
         auth = Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge'))
         app = FastAPI()
         install_routes(app, hub, auth)
@@ -201,6 +204,7 @@ def test_generation_status_cannot_restore_cleared_reference():
     from swarm.control import Auth, Settings, install_routes
     from fastapi import FastAPI
     hub = module.Hub()
+    hub.phase = "search"
     hub.search.set_reference('version')
     revision = hub.search.revision
     app = FastAPI()
@@ -273,7 +277,7 @@ def test_bridge_normalizes_valid_response_and_rejects_wrong_identity():
             bridge.state = dict(active=True, searchRevision='r', targetVersion='v', threshold=.7, people=[dict(id='person-1', label='Person 1', version='v')])
             header = dict(phoneId='p', streamId='s', seq=1, t=timestamp, width=100, height=100, searchRevision='r')
             await bridge.process(header, b'jpg')
-            assert posted[0]['boxes'][0] == dict(x=.1, y=.2, w=.4, h=.6, label='person', detectionScore=.9, similarity=.8)
+            assert posted[0]['boxes'][0] == dict(x=.1, y=.2, w=.4, h=.6, label='person', detectionScore=.9, similarity=.8, targetId='person-1')
             assert posted[0]['t'] == timestamp
             wrong = True
             with pytest.raises(ValueError, match='identity'):
@@ -298,6 +302,7 @@ def test_reference_clear_wins_while_request_body_streams(monkeypatch):
         real_client = httpx.AsyncClient
         monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(worker), **kwargs))
         hub = module.Hub()
+        hub.phase = "search"
         auth = Auth(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge'))
         app = FastAPI()
         install_routes(app, hub, auth)
@@ -330,6 +335,7 @@ def test_reference_delete_holds_gate_while_clearing_overlays(monkeypatch):
         real_client = httpx.AsyncClient
         monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(worker), **kwargs))
         hub = module.Hub()
+        hub.phase = "search"
         async def clear_overlays():
             if not clearing.is_set():
                 clearing.set()
@@ -418,6 +424,7 @@ def test_disabled_reference_failure_preserves_disabled():
     from swarm.control import Auth, Settings, install_routes
     from fastapi import FastAPI
     hub = module.Hub()
+    hub.phase = "search"
     app = FastAPI()
     install_routes(app, hub, Auth(Settings(inference_url='')))
     with TestClient(app) as client:
@@ -521,3 +528,24 @@ def test_baseten_headers_keep_gateway_and_worker_credentials_separate():
         'X-Swarm-Content-Type': 'image/jpeg',
     }
     assert 'gateway' not in repr(cloud)
+
+
+def test_health_checks_each_roster_reference_instead_of_legacy_active():
+    from swarm.inference import Bridge
+    from swarm.control import Settings
+    async def run():
+        statuses, checked = [], []
+        async def boundary(request):
+            if request.method == 'GET':
+                checked.append(request.url.path)
+                return httpx.Response(200, json={'target_version': request.url.path.rsplit('/', 1)[1] + '-v'})
+            statuses.append(__import__('json').loads(request.content)['status'])
+            return httpx.Response(200)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(boundary)) as client:
+            bridge = Bridge(Settings(inference_url='http://127.0.0.1:8001', inference_key='key', bridge_key='bridge'), client)
+            bridge.state = dict(enabled=True, searchRevision='r', targetVersion='roster-hash',
+                people=[dict(id='person-1', version='person-1-v'), dict(id='person-2', version='person-2-v')])
+            await bridge.health()
+            assert checked == ['/v1/targets/person-1', '/v1/targets/person-2']
+            assert statuses == ['available']
+    asyncio.run(run())

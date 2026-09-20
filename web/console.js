@@ -521,9 +521,10 @@ function drawHud() {
 
   // detection boxes and AR markers live in frame coordinates
   for (const d of hud.dets || []) {
-    ctx.strokeStyle = '#ff5d73';
+    ctx.strokeStyle = d.label === 'Hazard' ? '#f59e0b' : '#ff5d73';
     ctx.lineWidth = 2;
     ctx.strokeRect(d.x * W, d.y * H, d.w * W, d.h * H);
+    if (d.label === 'Hazard') pill(ctx, (d.x + d.w / 2) * W, d.y * H - 12, 'Hazard', '#b45309', '#fff', 11, true);
   }
   for (const m of hud.ar || []) {
     const x = m.x * W, y = m.y * H, r = Math.max(6, m.r * sh);
@@ -1072,6 +1073,8 @@ function draw() {
   mapLabelRects.length = 0;
   drawMarker();
   drawSightings();
+  drawHazards();
+  drawDetectedPeople();
   drawCandidate();
   drawPings();
   drawExplain();
@@ -1208,6 +1211,30 @@ function alreadyFound(x, y, radius = 2) {
   return (st.target?.victims || []).some(v => Math.hypot(v.x - x, v.y - y) <= radius);
 }
 
+function drawHazards() {
+  for (const hazard of st.hazards || []) {
+    const stale = Date.now() - hazard.t > 15000;
+    const [x, y] = view.toPx(hazard.x, hazard.y);
+    ctx.save();
+    ctx.globalAlpha = stale ? .5 : 1;
+    ctx.fillStyle = '#fef3c7'; ctx.strokeStyle = '#b45309'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, y - 11); ctx.lineTo(x + 11, y + 9);
+    ctx.lineTo(x - 11, y + 9); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#92400e'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('!', x, y + 5);
+    ctx.restore();
+  }
+}
+
+function drawDetectedPeople() {
+  for (const person of st.detectedPeople || []) {
+    const [x, y] = view.toPx(person.x, person.y);
+    const stale = Date.now() - person.t > 15000;
+    const color = stale ? '#78716c' : '#2563eb';
+    drawPersonGlyph(x, y, color);
+  }
+}
+
 function drawSightings() {
   for (const sg of st.sightings || []) {
     if (sg.confidence < 0.4 || alreadyFound(sg.x, sg.y)) continue;
@@ -1232,6 +1259,13 @@ function hiddenCandidates() {
 }
 
 function drawCandidate() {
+  const sighting = st.targetSighting;
+  if (sighting) {
+    const [x, y] = view.toPx(sighting.x, sighting.y);
+    const color = sighting.confirmed ? '#b72f36' : '#d97706';
+    drawPersonGlyph(x, y, color);
+    if (Number.isFinite(sighting.similarity)) drawMapLabel(`${Math.round(Math.max(0, sighting.similarity) * 100)}%`, x, personLabelY(y), color);
+  }
   const t = st.target;
   if (!t) return;
   const hidden = hiddenCandidates();

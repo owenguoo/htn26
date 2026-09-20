@@ -98,6 +98,7 @@ class SearchState:
         # A real search can turn up more than one person: the operator confirms each sighting
         # separately and every confirmation is kept. `confirmation` is the most recent one.
         self.confirmations: list[dict] = []
+        self.map_sighting: dict | None = None
         self.revision = str(uuid.uuid4())
         # The reference roster: everybody we're looking for, one entry per uploaded photo.
         # Every frame is matched against each of them, so a search can look for several people.
@@ -126,9 +127,11 @@ class SearchState:
         """The most recent operator-confirmed sighting."""
         return self.confirmations[-1] if self.confirmations else None
 
-    def reset(self, *, preserve_confirmation: bool = False) -> None:
+    def reset(self, *, preserve_confirmation: bool = False, preserve_sighting: bool = False) -> None:
         """Invalidate callbacks and visible results while preserving the active reference."""
         self.revision = str(uuid.uuid4())
+        if not preserve_sighting:
+            self.map_sighting = None
         if not preserve_confirmation:
             self.confirmations.clear()
         self.latest.clear()
@@ -254,6 +257,9 @@ class SearchState:
                 or entry.result.targetVersion != self.target_version
                 or not 0 <= now_ms - entry.result.t <= MAX_RESULT_AGE_MS):
             return False
+        if self.map_sighting and all(self.map_sighting[k] == v for k, v in
+                [('phoneId', phone_id), ('streamId', stream_id), ('seq', seq)]):
+            self.map_sighting['confirmed'] = True
         self.confirmations = [c for c in self.confirmations
                               if (c["phoneId"], c["streamId"], c["seq"]) != (phone_id, stream_id, seq)]
         self.confirmations.append(entry.result.model_dump() | {

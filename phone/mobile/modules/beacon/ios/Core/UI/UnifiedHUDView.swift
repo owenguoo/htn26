@@ -276,18 +276,20 @@ struct HUDFrameLayerView: View {
             let k = geometry.size.width / 390
             Canvas { context, size in
                 for box in hud.dets ?? [] {
+                    let color: Color = box.label == "Hazard" ? .orange : HUDStyle.detection
                     let rect = transform.rect(uprightFractionX: box.x, y: box.y, width: box.w, height: box.h)
                     // 2, not 3: `web/console.js:367` strokes detections at 2 and
                     // the two renderers have to draw the same box.
-                    context.stroke(Path(rect), with: .color(HUDStyle.detection), lineWidth: 2)
-                    let label = [box.label, box.score.map { "\(Int(($0 * 100).rounded()))%" }]
-                        .compactMap { $0 }.joined(separator: " ")
+                    context.stroke(Path(rect), with: .color(color), lineWidth: 2)
+                    let label = box.displayLabel
                     guard !label.isEmpty else { continue }
                     let text = context.resolve(Text(label).font(.system(size: 13 * k, weight: .bold))
                         .foregroundStyle(.white))
                     let width = text.measure(in: CGSize(width: CGFloat.infinity, height: .infinity)).width + 10
-                    let tag = CGRect(x: rect.minX, y: rect.minY - 20 * k, width: width, height: 20 * k)
-                    context.fill(Path(tag), with: .color(HUDStyle.detection))
+                    let tag = CGRect(x: max(0, min(rect.minX, size.width - width)),
+                                     y: max(0, min(rect.minY - 20 * k, size.height - 20 * k)),
+                                     width: width, height: 20 * k)
+                    context.fill(Path(tag), with: .color(color))
                     context.draw(text, at: CGPoint(x: tag.midX, y: tag.midY))
                 }
                 guard showAR else { return }
