@@ -57,7 +57,7 @@ def load(checkpoint: Path) -> None:
     print(f"model loaded in {stats['loadedSeconds']}s", flush=True)
 
 
-def reconstruct(jpegs: list[bytes], ids: list[str], max_points: int, ups: list | None = None, voxel_resolution: int = 128) -> tuple[dict, bytes]:
+def reconstruct(jpegs: list[bytes], ids: list[str], max_points: int, ups: list | None = None, voxel_resolution: int = 128, global_map: bool = False) -> tuple[dict, bytes]:
     started = time.monotonic()
     with tempfile.TemporaryDirectory() as tmp:
         paths = []
@@ -65,7 +65,7 @@ def reconstruct(jpegs: list[bytes], ids: list[str], max_points: int, ups: list |
             p = Path(tmp) / f"{i:04d}.jpg"
             p.write_bytes(data)
             paths.append(str(p))
-        images = load_and_preprocess_images(paths, image_resolution=512).to("cuda")
+        images = load_and_preprocess_images(paths, image_resolution=384 if global_map else 512).to("cuda")
     torch.cuda.reset_peak_memory_stats()
     torch.cuda.synchronize()
     t_fwd = time.monotonic()
@@ -88,10 +88,12 @@ def reconstruct(jpegs: list[bytes], ids: list[str], max_points: int, ups: list |
     if representation == 'surface':
         from surface import build_surface
         meta, glb = build_surface(depth, confidence, rgb, extrinsic, intrinsic, ids, ups, voxel_resolution=voxel_resolution,
-                                  max_faces=max(20000, min(300000, max_points * 2)))
+                                  max_faces=max(20000, min(300000, max_points * 2)),
+                                  support_stride=2 if global_map else 1)
         meta.update(source="VGGT-Omega-1B-512", inferenceSeconds=round(inference_s, 3),
                     totalSeconds=round(time.monotonic() - started, 3), peakAllocatedGB=round(peak_gb, 2),
-                    units="unregistered scene units; Y up; floor estimate in floorBy")
+                    units="unregistered scene units; Y up; floor estimate in floorBy",
+                    mode="global" if global_map else "batch", imageResolution=384 if global_map else 512)
         return meta, glb
     n, h, w = depth.shape
     yy, xx = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")
@@ -180,7 +182,10 @@ class Handler(BaseHTTPRequestHandler):
             raw = self.rfile.read(int(self.headers["Content-Length"]))
             (n,) = struct.unpack(">I", raw[:4])
             header = json.loads(raw[4:4 + n])
-            frames, off, jpegs, ids, ups = header["frames"][:MAX_FRAMES], 4 + n, [], [], []
+            frames, off, jpegs, ids, ups = header["frames"], 4 + n, [], [], []
+            limit = 96 if header.get('mode') == 'global' else MAX_FRAMES
+            if len(frames) > limit:
+                raise ValueError(f'Too many frames: maximum {limit}; input was not truncated')
             for f in frames:
                 jpegs.append(raw[off:off + f["size"]])
                 ids.append(str(f["id"]))
@@ -192,7 +197,8 @@ class Handler(BaseHTTPRequestHandler):
                 stats["busy"] = True
                 try:
                     meta, glb = reconstruct(jpegs, ids, int(header.get("maxPoints", 150000)), ups,
-                                            max(64, min(128, int(header.get("voxelResolution", 128)))))
+                                            max(64, min(128, int(header.get("voxelResolution", 128)))),
+                                            global_map=header.get("mode") == "global")
                 finally:
                     stats["busy"] = False
             stats["runs"] += 1

@@ -135,11 +135,24 @@ def level_scene(vertices, extrinsic, ups, unit):
     return level, center, method, 'plane' if floor_point is not None else 'lower-bound-estimate'
 
 
-def build_surface(depth, confidence, rgb, extrinsic, intrinsic, ids, ups=None, max_faces=300000, voxel_resolution=128):
+def build_surface(depth, confidence, rgb, extrinsic, intrinsic, ids, ups=None, max_faces=300000, voxel_resolution=128, support_stride=1):
     t0 = time.monotonic()
     depth = np.asarray(depth, dtype=np.float32)
     unit = float(np.median(depth[np.isfinite(depth) & (depth > 0)]))
-    filtered, quality = supported_depth(depth, confidence, intrinsic, extrinsic)
+    if support_stride == 2:
+        # Test agreement on a half-resolution grid; retain original depths/colors
+        # for fusion. This reduces the expensive multi-view projection work 4x.
+        small_k = intrinsic.copy()
+        small_k[:, :2] /= 2
+        small, quality = supported_depth(depth[:, ::2, ::2], confidence.reshape(depth.shape)[:, ::2, ::2], small_k, extrinsic)
+        mask = np.repeat(np.repeat(small > 0, 2, 1), 2, 2)[:, :depth.shape[1], :depth.shape[2]]
+        filtered = np.where(mask & np.isfinite(depth) & (depth > 0), depth, 0).astype(np.float32)
+        for i,d in enumerate(depth):
+            span = cv2.dilate(d, np.ones((3,3),np.uint8))-cv2.erode(d, np.ones((3,3),np.uint8))
+            filtered[i][span > np.maximum(d,1e-6)*.08] = 0
+        quality = {'inputPixels':int(depth.size), 'supportedPixels':int(np.count_nonzero(filtered)), 'supportStride':2}
+    else:
+        filtered, quality = supported_depth(depth, confidence, intrinsic, extrinsic)
     t_filter = time.monotonic()
     if np.count_nonzero(filtered) < 1000:
         raise ValueError('too little overlapping geometry: capture sharper views with more overlap')

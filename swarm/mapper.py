@@ -1,8 +1,8 @@
 """Live 3D scan: visually select overlapping keyframes without requiring phone poses.
 
 A short per-phone candidate window feeds a bounded archive of clear connected views.
-Each reconstruction uses a connected subset with old coverage and shared references.
-VGGT still runs a fresh reconstruction for every batch; this is not persistent fusion.
+Global mode reconstructs the entire bounded archive as one coherent room.
+Legacy joint/section modes retain their original registration experiments.
 
 Configure in .env (off until the operator turns it on in the console):
     MAP_WORKER_SSH=root@154.54.102.55     # pod's direct SSH (RUNPOD_PUBLIC_IP)
@@ -45,7 +45,7 @@ class Mapper:
         self.room = room
         self.out_dir = out_dir
         self.enabled = False
-        self.mode = os.environ.get("MAP_MODE", "joint")
+        self.mode = os.environ.get("MAP_MODE", "global")
         self.joint_frames = max(12, min(32, int(os.environ.get("MAP_JOINT_FRAMES", "24"))))
         self.native_only = os.environ.get("MAP_NATIVE_ONLY") == "1"
         self.include_sims = os.environ.get("MAP_INCLUDE_SIMS") == "1"  # sim frames are drawings: off
@@ -204,7 +204,7 @@ class Mapper:
     def status(self) -> dict:
         return {"enabled": self.enabled, "configured": bool(self.url), "workerOk": self.worker_ok,
                 "running": self.running, "keyframes": len(self.keyframes), "maxKeyframes": MAX_ARCHIVE,
-                "batchSize": self.batch_size, "maxBatch": self.joint_frames if self.mode == "joint" else SECTION_FRAMES,
+                "batchSize": self.batch_size, "maxBatch": MAX_ARCHIVE if self.mode == "global" else (self.joint_frames if self.mode == "joint" else SECTION_FRAMES),
                 "mode": self.mode, "sections": len(self.sections),
                 "selectionMs": self.selection_ms,
                 "selection": self.selector.status(),
@@ -224,7 +224,7 @@ class Mapper:
             if self.native_only and not p.native:
                 self.selection_hints[p.id] = 'Use the native iPhone app for this scan'
                 continue
-            if self.native_only and not self.keyframes and p.pose(now) is None:
+            if self.mode != "global" and self.native_only and not self.keyframes and p.pose(now) is None:
                 self.selection_hints[p.id] = 'Align the iPhone to the room before starting the map'
                 continue
             if now - self.sample_times.get(p.id, 0) < 450:
@@ -267,11 +267,14 @@ class Mapper:
         if added and not self.pending:
             self.pending_since = now_ms()
         self.pending = (self.pending | {k["id"] for k in added}) & retained
+        if added and self.mode == "global":
+            # Preserve accepted views even when inference fails or the hub restarts.
+            self._save()
 
     def ready_to_rebuild(self, now):
         if self.running or len(self.keyframes) < MIN_FRAMES or not self.pending:
             return False
-        if now - self.last_attempt < MAX_WAIT_MS:
+        if now - self.last_attempt < (5000 if self.mode == "global" else MAX_WAIT_MS):
             return False
         return len(self.pending) >= RUN_AFTER_NEW or now - self.pending_since >= MAX_WAIT_MS
 
@@ -307,9 +310,9 @@ class Mapper:
             self.running = False
 
     async def _rebuild(self) -> None:
-        frames = (working_batch(self.keyframes, self.previous_batch, self.pending, self.joint_frames, stable=True)
+        frames = list(self.keyframes) if self.mode == "global" else (working_batch(self.keyframes, self.previous_batch, self.pending, self.joint_frames, stable=True)
                   if self.mode == "joint" else section_batch(self.keyframes, self.placed, self.pending))
-        if self.mode != "joint" and len(self.sections) >= MAX_SECTIONS:
+        if self.mode not in ("joint", "global") and len(self.sections) >= MAX_SECTIONS:
             self.error = "Section limit reached; current coverage preserved. Start a new scan for another area."
             return
         self.batch_size = len(frames)
@@ -328,8 +331,8 @@ class Mapper:
         t0 = time.time()
         try:
             await self._ensure_tunnel()
-            head = json.dumps({"frames": [{"id": k["id"], "size": len(k["jpeg"]), "up": k.get("up")} for k in frames],
-                               "maxPoints": 150000, "voxelResolution": 80 if self.mode == "joint" else 128}).encode()
+            head = json.dumps({"mode": self.mode, "frames": [{"id": k["id"], "size": len(k["jpeg"]), "up": None if self.mode == "global" else k.get("up")} for k in frames],
+                               "maxPoints": 150000, "voxelResolution": 64 if self.mode == "global" else (80 if self.mode == "joint" else 128)}).encode()
             body = struct.pack(">I", len(head)) + head + b"".join(k["jpeg"] for k in frames)
             raw = await asyncio.to_thread(_post, f"{self.url}/reconstruct", body)
             (n,) = struct.unpack(">I", raw[:4])
@@ -344,7 +347,16 @@ class Mapper:
         if gen != self.generation:  # reset while this was running
             self.running = False
             return
-        if self.sections:
+        if self.mode == "global":
+            if meta.get('mode') != 'global' or meta['frames'] != len(frames) or glb[:4] != b'glTF':
+                raise ValueError('Worker must reconstruct every selected view in global mode')
+            # Early inferred cameras are provisional, not immutable map anchors.
+            # Only display placement uses a captured room pose, never mesh shape.
+            first = next((k for k in frames if k.get('x') is not None and k.get('heading') is not None), None)
+            transform, alignment = align(meta['cameras'], {first['id']:first} if first else {}, meta.get('medianDepth'))
+            alignment['method'] = 'whole-room VGGT; display placement and scale estimated'
+            self.consolidated = None
+        elif self.sections:
             try:
                 references = ({k: v for k, v in self.placed.items() if k in self.previous_batch}
                               if self.mode == "joint" else self.placed)
@@ -363,11 +375,11 @@ class Mapper:
             alignment["method"] = "initial visual anchor; camera-height scale estimate"
         alignment["leveledBy"] = meta.get("leveledBy")
         alignment["floorBy"] = meta.get("floorBy")
-        if self.mode == "joint":
+        if self.mode in ("joint", "global"):
             # The next update registers to this coherent reconstruction, not stale
             # camera estimates accumulated across independent sections.
             self.placed = place(transform, meta["cameras"])
-            alignment["method"] = "joint room reconstruction"
+            if self.mode == "joint": alignment["method"] = "joint room reconstruction"
         else:
             for key, value in place(transform, meta["cameras"]).items():
                 self.placed.setdefault(key, value)
@@ -381,7 +393,7 @@ class Mapper:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         path = self.out_dir / f"scan-{self.version}.glb"
         path.write_bytes(glb)
-        if self.mode == "joint":
+        if self.mode in ("joint", "global"):
             self.sections = []
             self.consolidated = None
         self.sections.append({"url": f"/web/models/live/{path.name}",
